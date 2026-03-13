@@ -25,6 +25,7 @@ DEFAULT_STATE = {
     "last_error": None,
     "report_id": None,
     "active_module": "Building Regulations Review",
+    "planning_statement_type": "Planning Statement",
 }
 for key, value in DEFAULT_STATE.items():
     if key not in st.session_state:
@@ -171,6 +172,9 @@ PROPERTY_TYPE_OPTIONS = [
     "Maisonette",
     "Other",
 ]
+
+
+PLANNING_STATEMENT_TYPES = ["Planning Statement", "Design & Access Statement", "Prior Approval Statement"]
 
 
 def inject_custom_css():
@@ -1148,9 +1152,8 @@ with upload_tab:
                             progress_callback=update_analysis_progress,
                         )
                     else:
-                        smooth_progress(progress_bar, status_text, 25, 40,
-                                        "Reading drawings and extracting planning data...", 0.8)
-
+                        progress_bar.progress(40)
+                        status_text.text("Step 3 of 4 — Analyzing planning route and risks... 40%")
                         report = pdf_summary.analyze_planning_pdf(
                             temp_pdf_path,
                             client_project_types=project_types,
@@ -1160,8 +1163,8 @@ with upload_tab:
                             local_authority=local_authority,
                             review_mode=review_mode,
                         )
-
-                        smooth_progress(progress_bar, status_text, 40, 85, "Analyzing planning route and risks...", 0.8)
+                        progress_bar.progress(85)
+                        status_text.text("Step 3 of 4 — Planning analysis complete... 85%")
                 except Exception as e:
                     msg = str(e).lower()
                     if "insufficient_quota" in msg or "quota" in msg:
@@ -1278,7 +1281,15 @@ with report_tab:
         if review_module == "Planning Review":
             st.markdown("")
             st.markdown('<div class="sy-card"><h3 style="margin-top:0;">Automatic Planning Statement</h3><div class="sy-muted">Generate a draft planning statement from the ArchLens review and download it as Word.</div></div>', unsafe_allow_html=True)
-            if st.button("Generate Planning Statement", key="generate_planning_statement_btn", use_container_width=True):
+            statement_type = st.selectbox(
+                "Statement Type",
+                PLANNING_STATEMENT_TYPES,
+                index=PLANNING_STATEMENT_TYPES.index(st.session_state.get("planning_statement_type", "Planning Statement")),
+                key="planning_statement_type_select",
+            )
+            st.session_state["planning_statement_type"] = statement_type
+
+            if st.button(f"Generate {statement_type}", key="generate_planning_statement_btn", use_container_width=True):
                 statement_text = pdf_summary.generate_planning_statement(
                     report_text=report,
                     sections=sections,
@@ -1286,17 +1297,19 @@ with report_tab:
                     client_name=client_name or "Not provided",
                     local_authority=local_authority or "",
                     review_mode=review_mode,
+                    statement_type=statement_type,
                 )
                 st.session_state["planning_statement_text"] = statement_text
-                st.session_state["planning_statement_file"] = build_simple_word_doc("Draft Planning Statement", statement_text)
+                st.session_state["planning_statement_file"] = build_simple_word_doc(f"Draft {statement_type}", statement_text)
 
             if st.session_state.get("planning_statement_text"):
-                with st.expander("Show planning statement draft", expanded=False):
+                with st.expander(f"Show {statement_type.lower()} draft", expanded=False):
                     st.text(st.session_state["planning_statement_text"])
+                safe_statement_name = statement_type.replace(" & ", "_").replace(" ", "_")
                 st.download_button(
-                    label="Download Planning Statement (.docx)",
+                    label=f"Download {statement_type} (.docx)",
                     data=st.session_state["planning_statement_file"],
-                    file_name=f"{base_filename}_Planning_Statement.docx",
+                    file_name=f"{base_filename}_{safe_statement_name}.docx",
                     mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                     key="download_planning_statement_docx",
                     use_container_width=True,

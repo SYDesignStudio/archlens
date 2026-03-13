@@ -2,7 +2,7 @@ import base64
 import os
 import re
 import time
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 
 import fitz
 import pdfplumber
@@ -176,11 +176,11 @@ def extract_text_by_page(pdf_path: str) -> List[Dict[str, str]]:
     return pages
 
 
-def render_all_pdf_pages_to_images(pdf_path: str, scale: float = 1.5) -> List[str]:
+def render_all_pdf_pages_to_images(pdf_path: str, scale: float = 1.0, max_pages: int = 12) -> List[str]:
     doc = fitz.open(pdf_path)
     image_paths = []
     try:
-        for i in range(len(doc)):
+        for i in range(min(len(doc), max_pages)):
             page = doc.load_page(i)
             pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale))
             image_path = f"temp_page_{i + 1}.png"
@@ -410,7 +410,7 @@ BUILDING CONTROL SUBMISSION READINESS
     image_paths = render_all_pdf_pages_to_images(pdf_path)
     try:
         batch_summaries = []
-        batches = list(chunk_list(image_paths, 2))
+        batches = list(chunk_list(image_paths, 4))
         total_batches = len(batches)
 
         for idx, batch in enumerate(batches, start=1):
@@ -547,6 +547,160 @@ Report to repair:
     return output_text
 
 
+
+HOUNSLOW_POLICY_LIBRARY = {
+    "local_plan": [
+        "CC1 Context and Character",
+        "CC2 Urban Design and Architecture",
+        "SC7 Residential Extensions and Alterations",
+    ],
+    "spd": [
+        "Hounslow Character, Sustainability and Design Codes SPD",
+        "Part A5 Residential Extension Guidelines",
+        "Section 10 Roof extensions, roof lights & solar panels",
+    ],
+    "london_plan": [
+        "Policy D12 Fire Safety",
+    ],
+}
+
+HEXHAM_GARDENS_CASE_LEARNING = """
+Approved Hounslow case learning:
+- 9 Hexham Gardens, Isleworth, TW7 5JR was assessed as an upper floor maisonette flat above No.11.
+- Proposal: rear roof extension with two front roof windows and one side roof window.
+- Officer accepted full planning route for a maisonette loft conversion.
+- Officer assessed neighbour impact first, then character/appearance, then fire safety.
+- Approval reasoning relied on: dormer subservient to rear roof slope, flush rooflights, no harmful loss of light, no privacy harm, and compliance with CC1, CC2, SC7 and the SPD.
+- Fire Statement submitted under London Plan Policy D12 supported acceptability.
+- The delegated report used concise headings, factual site details, proposal dimensions, policy list, then a short assessment concluding compliance.
+"""
+
+HOUNSLOW_DELEGATED_REPORT_PATTERN = """
+Write in the style of a Hounslow householder delegated report:
+1. Relevant facts - site and context
+2. Details of proposal
+3. Consultations (only if known)
+4. Policy
+5. Assessment:
+   - neighbours/living conditions
+   - character and appearance
+   - fire safety where relevant
+6. Recommendation / readiness
+Use short factual paragraphs. Avoid exaggerated sales language.
+Use wording patterns such as:
+- The proposed development would...
+- Due to its size and location...
+- Therefore, the proposal would not harm...
+- The proposal would comply with...
+- On balance...
+- By reason of...
+"""
+
+def build_hounslow_officer_prompt(
+    property_type_text: str,
+    authority_value: str,
+    project_types_text: str,
+    proposal_summary_text: str,
+) -> str:
+    return f"""
+Authority-specific reasoning:
+- Local authority to assess against: {authority_value}
+- Client-stated property type: {property_type_text}
+- Client-stated project types: {project_types_text}
+- Client proposal summary: {proposal_summary_text}
+
+Use this Hounslow policy library where relevant:
+Local Plan: {", ".join(HOUNSLOW_POLICY_LIBRARY["local_plan"])}
+SPD: {", ".join(HOUNSLOW_POLICY_LIBRARY["spd"])}
+London Plan: {", ".join(HOUNSLOW_POLICY_LIBRARY["london_plan"])}
+
+Apply the approved Hexham Gardens case learning and delegated report style below when the scheme is similar:
+{HEXHAM_GARDENS_CASE_LEARNING}
+
+{HOUNSLOW_DELEGATED_REPORT_PATTERN}
+"""
+
+def extract_plan_metrics(text: str) -> Dict[str, str]:
+    patterns = {
+        "roof_depth": r"roof depth[:\s]+([0-9.]+m)",
+        "width": r"width[:\s]+([0-9.]+m)",
+        "height": r"height[:\s]+([0-9.]+m)",
+        "volume": r"(?:additional roof volume|roof volume)[:\s]+([0-9.]+m3)",
+        "floor_area": r"net increase in floor area[:\s]+([0-9.]+\s*sqm)",
+    }
+    results = {}
+    lower = text.lower()
+    for key, pattern in patterns.items():
+        m = re.search(pattern, lower)
+        if m:
+            results[key] = m.group(1)
+    return results
+
+def infer_supporting_documents(text: str, page_summary: str) -> Dict[str, bool]:
+    combined = f"{text}\n{page_summary}".lower()
+    return {
+        "fire_statement": "fire statement" in combined or "fire plan" in combined,
+        "planning_statement": "planning statement" in combined,
+        "proposed_plans": "proposed plan" in combined,
+        "sections_or_elevations": "proposed section" in combined or "proposed elevation" in combined,
+        "roof_plan": "roof plan" in combined,
+    }
+
+def calculate_planning_approval_probability(
+    property_type_text: str,
+    authority_value: str,
+    project_types_text: str,
+    plan_metrics: Dict[str, str],
+    supporting_docs: Dict[str, bool],
+) -> Tuple[str, str]:
+    score = 55
+    if "hounslow" in authority_value.lower():
+        score += 5
+    if "maisonette" in property_type_text.lower() and "loft" in project_types_text.lower():
+        score += 8
+    if plan_metrics.get("width") and plan_metrics.get("roof_depth"):
+        score += 6
+    if supporting_docs.get("fire_statement"):
+        score += 6
+    if supporting_docs.get("proposed_plans"):
+        score += 5
+    if supporting_docs.get("sections_or_elevations"):
+        score += 5
+    if supporting_docs.get("roof_plan"):
+        score += 3
+
+    score = max(35, min(90, score))
+    risk = "LOW" if score >= 75 else "MEDIUM" if score >= 55 else "HIGH"
+    return f"{score}%", risk
+
+def determine_submission_readiness(
+    property_type_text: str,
+    project_types_text: str,
+    supporting_docs: Dict[str, bool],
+    authority_value: str,
+) -> Tuple[str, str]:
+    if "maisonette" in property_type_text.lower() and "loft" in project_types_text.lower():
+        if supporting_docs.get("fire_statement") and supporting_docs.get("proposed_plans") and supporting_docs.get("sections_or_elevations"):
+            return (
+                "READY SUBJECT TO MINOR UPDATES",
+                "The scheme is capable of proceeding by full planning subject to clear dimensioning, final materials notes, and any ownership/notice requirements being confirmed.",
+            )
+        return (
+            "NOT READY TO SUBMIT",
+            "A full planning route is likely appropriate, but further supporting drawings or fire/planning information are needed before submission.",
+        )
+
+    if supporting_docs.get("proposed_plans") and supporting_docs.get("sections_or_elevations"):
+        return (
+            "READY SUBJECT TO MINOR UPDATES",
+            "The drawing pack is broadly sufficient for an initial planning submission subject to final route confirmation and minor supporting details.",
+        )
+
+    return (
+        "NOT READY TO SUBMIT",
+        "Further supporting information is required before a reliable planning submission can be made.",
+    )
+
 def analyze_planning_pdf(
     pdf_path: str,
     client_project_types: Optional[List[str]] = None,
@@ -566,6 +720,17 @@ def analyze_planning_pdf(
     authority_value = local_authority.strip() or inferred_authority
     page_summary = "\n".join(
         f"Page {page['page_number']}: {page['sheet_type']} | {page['sheet_title']}" for page in page_data
+    )
+    plan_metrics = extract_plan_metrics(text)
+    supporting_docs = infer_supporting_documents(text, page_summary)
+    approval_probability, inferred_risk = calculate_planning_approval_probability(
+        property_type_text, authority_value, project_types_text, plan_metrics, supporting_docs
+    )
+    readiness_status, readiness_reason = determine_submission_readiness(
+        property_type_text, project_types_text, supporting_docs, authority_value
+    )
+    officer_prompt = build_hounslow_officer_prompt(
+        property_type_text, authority_value, project_types_text, proposal_summary_text
     )
     audience_hint = (
         "Write like a concise UK planning consultant and delegated officer note."
@@ -592,6 +757,18 @@ Client proposal summary:
 
 Local authority input:
 {authority_value}
+
+Officer prompt and case learning:
+{officer_prompt}
+
+Known supporting documents / metrics:
+- Fire statement submitted: {supporting_docs.get("fire_statement")}
+- Proposed plans present: {supporting_docs.get("proposed_plans")}
+- Sections / elevations present: {supporting_docs.get("sections_or_elevations")}
+- Roof plan present: {supporting_docs.get("roof_plan")}
+- Extracted metrics: {plan_metrics or "No reliable dimensions extracted"}
+- Indicative planning approval probability: {approval_probability}
+- Indicative readiness: {readiness_status} | {readiness_reason}
 
 Planning reasoning requirements:
 - If review mode is Homeowner Summary, the report should work as a preliminary planning feasibility review based on a simple sketch, basic PDF, or drawing pack.
@@ -638,9 +815,10 @@ SITE AND PROPOSAL OVERVIEW
 - Reflect the client proposal summary where it aligns with the drawings or notes.
 
 TOP SUMMARY
-- Overall Planning Risk Rating: LOW / MEDIUM / HIGH
+- Overall Planning Risk Rating: use the indicative risk unless the drawings strongly justify otherwise.
 - Likely Route: PD / PRIOR APPROVAL / FULL PLANNING / MIXED OR UNCLEAR
 - Local Authority Used: {authority_value}
+- Planning Approval Probability: {approval_probability}
 - Main Constraints / Uncertainties
 - If this is a homeowner sketch-based review, keep the summary feasibility-focused and identify what still needs confirming.
 
@@ -657,7 +835,8 @@ PD / PRIOR APPROVAL / PLANNING ROUTE
 - State clearly if a larger home extension prior approval route may be relevant.
 
 PLANNING OFFICER STYLE REASONING
-- 5 to 8 concise bullets in a delegated report tone.
+- 6 to 10 concise bullets in a delegated report tone closely following Hounslow householder reports.
+- Start with factual site/proposal observations, then neighbours, then character/appearance, then fire safety where relevant, then overall conclusion.
 - Include assessment of scale, design, subservience, impact on neighbours, rear extension risk, bungalow logic where relevant, and whether the drawings show enough detail to rely on PD or prior approval.
 
 DRAWING-PACK INCONSISTENCIES
@@ -673,8 +852,8 @@ RECOMMENDED ACTIONS
 - Start each bullet with Provide / Confirm / Revise / Check / Submit.
 
 SUBMISSION READINESS
-- Status: READY TO SUBMIT / READY SUBJECT TO MINOR UPDATES / NOT READY TO SUBMIT
-- Reason: short plain-English reason.
+- Status: use this indicative position unless the drawings strongly justify otherwise: {readiness_status}
+- Reason: use this indicative reason unless the drawings strongly justify otherwise: {readiness_reason}
 - In homeowner mode, this should reflect preliminary feasibility readiness rather than formal submission certainty.
 
 Full PDF text:
@@ -703,16 +882,56 @@ def generate_planning_statement(
     client_name: str = "",
     local_authority: str = "",
     review_mode: str = "Architect / Professional",
+    statement_type: str = "Planning Statement",
 ) -> str:
     sections = sections or {}
     audience_hint = (
-        "Write a concise professional planning statement suitable for a householder planning or prior approval submission."
+        "Write a concise professional planning document suitable for submission to a UK local authority."
         if review_mode == "Architect / Professional"
-        else "Write a plain-English homeowner-friendly planning statement draft."
+        else "Write a plain-English homeowner-friendly planning document draft."
     )
 
+    type_guidance = {
+        "Planning Statement": """Use these headings:
+1. Introduction
+2. Site and Surroundings
+3. Proposed Development
+4. Planning Policy Context
+5. Design and Character
+6. Impact on Residential Amenity
+7. Fire Safety
+8. Conclusion""",
+        "Design & Access Statement": """Use these headings:
+1. Development Context
+2. Amount and Use
+3. Layout
+4. Scale
+5. Appearance
+6. Access
+7. Fire Safety
+8. Conclusion""",
+        "Prior Approval Statement": """Use these headings:
+1. Site and Proposal
+2. Relevant Prior Approval Route
+3. Dimensional Compliance
+4. Design and External Appearance
+5. Neighbour Considerations
+6. Fire Safety
+7. Conclusion""",
+    }[statement_type]
+
+    hounslow_style_note = """
+Where the local authority is Hounslow or the report refers to a maisonette loft conversion, mirror the tone of a Hounslow delegated report and approved Hexham Gardens statement:
+- concise factual sentences
+- clear policy references
+- subservience of dormer / roof form
+- neighbour amenity first
+- character and appearance second
+- fire safety section where relevant
+"""
+
     prompt = f"""
-You are drafting a UK planning statement using an ArchLens AI planning review.
+You are drafting a UK {statement_type} using an ArchLens AI planning review.
 
 {audience_hint}
 
@@ -720,45 +939,96 @@ Project Address: {project_address or 'Not provided'}
 Client: {client_name or 'Not provided'}
 Local Authority: {local_authority or 'Not provided'}
 
-Use the report findings below to draft a practical planning statement.
-Keep it factual, clean, and application-ready.
+Use the report findings below to draft a practical application-ready document.
+Keep it factual, clean, and submission-ready.
 Do not invent measurements or policy references that are not supported by the report.
-Where the route is PD / prior approval, explain that clearly.
-Where planning permission is likely required, explain that clearly.
+Where the route is full planning because the property is a flat or maisonette, say that clearly.
+Use Hounslow-style officer reasoning where relevant.
 
-Use these headings:
-1. Site and Surroundings
-2. Proposed Development
-3. Relevant Planning Route
-4. Design and Appearance
-5. Impact on Residential Amenity
-6. Conclusion
+{hounslow_style_note}
+
+{type_guidance}
 
 Report text:
 {report_text[:18000]}
 """
-
     try:
         response = _call_responses_api("gpt-5", prompt)
         return response.output_text
     except Exception:
-        fallback_parts = [
-            "1. Site and Surroundings",
-            f"The application site is {project_address or 'the subject property'}. This draft statement is based on the ArchLens AI review and uploaded drawings.",
-            "",
-            "2. Proposed Development",
-            sections.get("SITE AND PROPOSAL OVERVIEW", "The proposal should be read alongside the submitted drawings."),
-            "",
-            "3. Relevant Planning Route",
-            sections.get("PD / PRIOR APPROVAL / PLANNING ROUTE", "The likely statutory route should be confirmed before submission."),
-            "",
-            "4. Design and Appearance",
-            "The proposal should be assessed in the context of the host dwelling and surrounding built form, with particular regard to scale, subservience, materials, and visual integration.",
-            "",
-            "5. Impact on Residential Amenity",
-            "Residential amenity should be considered with regard to outlook, enclosure, daylight, privacy, and the relationship to adjoining occupiers.",
-            "",
-            "6. Conclusion",
-            sections.get("SUBMISSION READINESS", "Further confirmation of route and supporting information may be required prior to submission."),
-        ]
+        if statement_type == "Design & Access Statement":
+            fallback_parts = [
+                "1. Development Context",
+                f"The application site is {project_address or 'the subject property'}. This draft statement is based on the ArchLens AI review and uploaded drawings.",
+                "",
+                "2. Amount and Use",
+                sections.get("SITE AND PROPOSAL OVERVIEW", "The proposal should be read alongside the submitted drawings."),
+                "",
+                "3. Layout",
+                "The proposal is arranged within the existing building envelope and should be read with the proposed plans and sections.",
+                "",
+                "4. Scale",
+                "The design should remain subordinate to the host building and respond appropriately to the established roof form and surrounding context.",
+                "",
+                "5. Appearance",
+                "External materials and detailing should match or closely align with the host building unless otherwise shown on the approved drawings.",
+                "",
+                "6. Access",
+                "Existing access arrangements are intended to remain in place unless otherwise stated on the submitted drawings.",
+                "",
+                "7. Fire Safety",
+                "Where loft accommodation or roof alterations are proposed, fire safety information should be considered alongside London Plan Policy D12 and the submitted fire documentation where applicable.",
+                "",
+                "8. Conclusion",
+                sections.get("SUBMISSION READINESS", "Further confirmation of route and supporting information may be required prior to submission."),
+            ]
+        elif statement_type == "Prior Approval Statement":
+            fallback_parts = [
+                "1. Site and Proposal",
+                sections.get("SITE AND PROPOSAL OVERVIEW", "The proposal should be read alongside the submitted drawings."),
+                "",
+                "2. Relevant Prior Approval Route",
+                sections.get("PD / PRIOR APPROVAL / PLANNING ROUTE", "The likely statutory route should be confirmed before submission."),
+                "",
+                "3. Dimensional Compliance",
+                "All dimensions and statutory tolerances should be confirmed against the submitted drawings before reliance is placed on a prior approval route.",
+                "",
+                "4. Design and External Appearance",
+                "The external appearance should remain proportionate and in keeping with the host building.",
+                "",
+                "5. Neighbour Considerations",
+                "Neighbouring amenity should be considered with regard to outlook, enclosure, daylight, and privacy.",
+                "",
+                "6. Fire Safety",
+                "Fire safety considerations should be addressed where relevant to the proposed form of development.",
+                "",
+                "7. Conclusion",
+                sections.get("SUBMISSION READINESS", "Further confirmation of route and supporting information may be required prior to submission."),
+            ]
+        else:
+            fallback_parts = [
+                "1. Introduction",
+                f"The application site is {project_address or 'the subject property'}. This draft statement is based on the ArchLens AI review and uploaded drawings.",
+                "",
+                "2. Site and Surroundings",
+                sections.get("SITE AND PROPOSAL OVERVIEW", "The proposal should be read alongside the submitted drawings."),
+                "",
+                "3. Proposed Development",
+                sections.get("PROJECT CLASSIFICATION", "The submitted scheme should be read with the proposed plans and elevations."),
+                "",
+                "4. Planning Policy Context",
+                sections.get("PD / PRIOR APPROVAL / PLANNING ROUTE", "The likely statutory route should be confirmed before submission."),
+                "",
+                "5. Design and Character",
+                "The proposal should be assessed in the context of the host dwelling and surrounding built form, with particular regard to scale, subservience, materials, and visual integration.",
+                "",
+                "6. Impact on Residential Amenity",
+                "Residential amenity should be considered with regard to outlook, enclosure, daylight, privacy, and the relationship to adjoining occupiers.",
+                "",
+                "7. Fire Safety",
+                "Where relevant, fire safety information should be considered alongside any submitted fire statement and applicable policy requirements.",
+                "",
+                "8. Conclusion",
+                sections.get("SUBMISSION READINESS", "Further confirmation of route and supporting information may be required prior to submission."),
+            ]
         return "\n".join(fallback_parts)
