@@ -1,5 +1,6 @@
 
 import os
+import re
 import time
 import uuid
 import tempfile
@@ -81,7 +82,7 @@ PLANNING_SECTION_ORDER = [
     ("TOP SUMMARY", "Top Summary"),
     ("LOCAL AUTHORITY CONTEXT", "Local Authority Context"),
     ("PD / PRIOR APPROVAL / PLANNING ROUTE", "PD / Prior Approval / Planning Route"),
-    ("PLANNING ASSESSMENT", "Planning Assessment"),
+    ("PLANNING ASSESSMENT", "Planning Officer Style Reasoning"),
     ("DRAWING-PACK INCONSISTENCIES", "Drawing-Pack Inconsistencies"),
     ("KEY RISKS", "Key Risks"),
     ("MISSING INFORMATION", "Missing Information"),
