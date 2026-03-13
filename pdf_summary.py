@@ -410,7 +410,7 @@ BUILDING CONTROL SUBMISSION READINESS
     image_paths = render_all_pdf_pages_to_images(pdf_path)
     try:
         batch_summaries = []
-        batches = list(chunk_list(image_paths, 4))
+        batches = list(chunk_list(image_paths, 2))
         total_batches = len(batches)
 
         for idx, batch in enumerate(batches, start=1):
