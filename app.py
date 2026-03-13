@@ -1148,8 +1148,9 @@ with upload_tab:
                             progress_callback=update_analysis_progress,
                         )
                     else:
-                        progress_bar.progress(40)
-                        status_text.text("Step 3 of 4 — Analyzing planning route and risks... 40%")
+                        smooth_progress(progress_bar, status_text, 25, 40,
+                                        "Reading drawings and extracting planning data...", 0.8)
+
                         report = pdf_summary.analyze_planning_pdf(
                             temp_pdf_path,
                             client_project_types=project_types,
@@ -1159,8 +1160,8 @@ with upload_tab:
                             local_authority=local_authority,
                             review_mode=review_mode,
                         )
-                        progress_bar.progress(85)
-                        status_text.text("Step 3 of 4 — Planning analysis complete... 85%")
+
+                        smooth_progress(progress_bar, status_text, 40, 85, "Analyzing planning route and risks...", 0.8)
                 except Exception as e:
                     msg = str(e).lower()
                     if "insufficient_quota" in msg or "quota" in msg:
