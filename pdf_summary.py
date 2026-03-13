@@ -616,6 +616,11 @@ def analyze_planning_pdf(
     page_summary = "\n".join(
         f"Page {page['page_number']}: {page['sheet_type']} | {page['sheet_title']}" for page in page_data
     )
+    # Default AI estimation placeholders used in the planning prompt
+    readiness_status = "LIKELY READY WITH MINOR AMENDMENTS"
+    readiness_reason = "Initial AI assessment based on drawing pack completeness and clarity."
+    approval_probability = "Medium"
+
     audience_hint = (
         "Write like a concise UK planning consultant and delegated officer note."
         if review_mode == "Architect / Professional"

@@ -81,7 +81,7 @@ PLANNING_SECTION_ORDER = [
     ("TOP SUMMARY", "Top Summary"),
     ("LOCAL AUTHORITY CONTEXT", "Local Authority Context"),
     ("PD / PRIOR APPROVAL / PLANNING ROUTE", "PD / Prior Approval / Planning Route"),
-    ("PLANNING ASSESSMENT", "Planning Officer Style Reasoning"),
+    ("PLANNING ASSESSMENT", "Planning Assessment"),
     ("DRAWING-PACK INCONSISTENCIES", "Drawing-Pack Inconsistencies"),
     ("KEY RISKS", "Key Risks"),
     ("MISSING INFORMATION", "Missing Information"),
