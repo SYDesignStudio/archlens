@@ -25,7 +25,6 @@ DEFAULT_STATE = {
     "last_error": None,
     "report_id": None,
     "active_module": "Building Regulations Review",
-    "planning_statement_type": "Planning Statement",
 }
 for key, value in DEFAULT_STATE.items():
     if key not in st.session_state:
@@ -54,7 +53,7 @@ PLANNING_REQUIRED_HEADINGS = [
     "TOP SUMMARY",
     "LOCAL AUTHORITY CONTEXT",
     "PD / PRIOR APPROVAL / PLANNING ROUTE",
-    "PLANNING OFFICER STYLE REASONING",
+    "PLANNING ASSESSMENT",
     "DRAWING-PACK INCONSISTENCIES",
     "KEY RISKS",
     "MISSING INFORMATION",
@@ -82,7 +81,7 @@ PLANNING_SECTION_ORDER = [
     ("TOP SUMMARY", "Top Summary"),
     ("LOCAL AUTHORITY CONTEXT", "Local Authority Context"),
     ("PD / PRIOR APPROVAL / PLANNING ROUTE", "PD / Prior Approval / Planning Route"),
-    ("PLANNING OFFICER STYLE REASONING", "Planning Officer Style Reasoning"),
+    ("PLANNING ASSESSMENT", "Planning Officer Style Reasoning"),
     ("DRAWING-PACK INCONSISTENCIES", "Drawing-Pack Inconsistencies"),
     ("KEY RISKS", "Key Risks"),
     ("MISSING INFORMATION", "Missing Information"),
@@ -111,9 +110,8 @@ BUILDING_DISCLAIMER_TEXT = (
 )
 
 PLANNING_DISCLAIMER_TEXT = (
-    "Beta: This report is an AI-assisted preliminary planning review. "
-    "It does not replace a formal planning appraisal, lawful development advice, "
-    "or the decision of the Local Planning Authority."
+    "This report provides an initial planning review based on the submitted drawings and information. "
+    "It does not replace a formal planning appraisal or the decision of the Local Planning Authority."
 )
 
 MODULE_CONFIG = {
@@ -159,22 +157,6 @@ PROPERTY_TYPE_OPTIONS = [
     "Maisonette",
     "Other",
 ]
-
-PROPERTY_TYPE_OPTIONS = [
-    "Not stated",
-    "Detached House",
-    "Semi-Detached House",
-    "Terraced House",
-    "End of Terrace House",
-    "Bungalow",
-    "Chalet Bungalow",
-    "Flat",
-    "Maisonette",
-    "Other",
-]
-
-
-PLANNING_STATEMENT_TYPES = ["Planning Statement", "Design & Access Statement", "Prior Approval Statement"]
 
 
 def inject_custom_css():
@@ -260,6 +242,21 @@ def clean_input_value(value, fallback):
         return fallback
     return cleaned
 
+
+
+
+def extract_address_from_report(report_text: str, fallback: str = "Not provided") -> str:
+    if not report_text:
+        return fallback
+    m = re.search(r"Project Address:\s*(.+)", report_text, re.IGNORECASE)
+    if m:
+        value = m.group(1).strip()
+        if value and value.lower() != "not provided":
+            return value
+    m2 = re.search(r"\b\d+[A-Za-z]?\s+[^\n,]+(?:,\s*[^\n,]+){0,3},?\s*[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}\b", report_text)
+    if m2:
+        return m2.group(0).strip()
+    return fallback
 
 def parse_key_value_lines(section_text: str) -> List[Tuple[str, str]]:
     rows = []
@@ -411,6 +408,7 @@ def add_word_footer(section, practice_name="ArchLens AI", report_title="AI Revie
     add_page_number(para)
 
 
+
 def build_pdf_report(file_name, address, client, date, practice_name, report_id, sections, module_name):
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4
@@ -425,49 +423,51 @@ def build_pdf_report(file_name, address, client, date, practice_name, report_id,
 
     buffer = BytesIO()
     c = canvas.Canvas(buffer, pagesize=A4)
-
     width, height = A4
-    left_margin = 40
-    right_margin = 40
-    top_margin = 50
-    bottom_margin = 40
+    left_margin = 46
+    right_margin = 46
+    top_margin = 56
+    bottom_margin = 42
     usable_width = width - left_margin - right_margin
     y = height - top_margin
 
-    def wrap_text(text, font_name="Helvetica", font_size=10, max_width=None):
+    def wrap_text(text, font_name="Helvetica", font_size=10.5, max_width=None):
         max_width = max_width or usable_width
-        words = text.split()
+        words = str(text).split()
         lines = []
-        current_line = ""
+        current = ""
         for word in words:
-            test_line = word if not current_line else current_line + " " + word
-            if stringWidth(test_line, font_name, font_size) <= max_width:
-                current_line = test_line
+            test = word if not current else current + " " + word
+            if stringWidth(test, font_name, font_size) <= max_width:
+                current = test
             else:
-                if current_line:
-                    lines.append(current_line)
-                current_line = word
-        if current_line:
-            lines.append(current_line)
-        return lines
+                if current:
+                    lines.append(current)
+                current = word
+        if current:
+            lines.append(current)
+        return lines or [""]
 
     def draw_page_header():
-        c.setStrokeColor(colors.HexColor("#D9E2F3"))
+        c.setStrokeColor(colors.HexColor("#D8E0EE"))
         c.line(left_margin, height - 28, width - right_margin, height - 28)
         c.setFillColor(colors.HexColor("#1F3B73"))
-        c.setFont("Helvetica-Bold", 9)
-        c.drawString(left_margin, height - 20, practice_name or "ArchLens AI")
-        c.setFont("Helvetica", 8)
-        c.drawRightString(width - right_margin, height - 20, f"{report_title} | {report_id}")
+        c.setFont("Helvetica-Bold", 10)
+        c.drawString(left_margin, height - 18, practice_name or "ArchLens AI")
+        c.setFont("Helvetica", 8.5)
+        c.drawRightString(width - right_margin, height - 18, f"{report_title} | {report_id}")
         c.setFillColor(colors.black)
 
     def draw_page_footer():
-        c.setStrokeColor(colors.HexColor("#D9E2F3"))
-        c.line(left_margin, 22, width - right_margin, 22)
+        c.setStrokeColor(colors.HexColor("#D8E0EE"))
+        c.line(left_margin, 24, width - right_margin, 24)
         c.setFillColor(colors.grey)
-        c.setFont("Helvetica", 8)
-        c.drawString(left_margin, 10, "Beta: AI-assisted preliminary review")
-        c.drawRightString(width - right_margin, 10, f"Page {c.getPageNumber()}")
+        c.setFont("Helvetica-Oblique", 8.2)
+        footer_lines = wrap_text(disclaimer_text, "Helvetica-Oblique", 8.2, usable_width - 30)[:2]
+        yy = 14
+        for line in footer_lines:
+            c.drawCentredString(width / 2, yy, line)
+            yy -= 9
         c.setFillColor(colors.black)
 
     def new_page():
@@ -477,73 +477,129 @@ def build_pdf_report(file_name, address, client, date, practice_name, report_id,
         draw_page_header()
         draw_page_footer()
 
+    def ensure_space(required_height):
+        nonlocal y
+        if y - required_height < bottom_margin:
+            new_page()
+
+    def draw_cover():
+        c.setFillColor(colors.HexColor("#1F3B73"))
+        c.setFont("Helvetica-Bold", 24)
+        c.drawCentredString(width / 2, height - 145, practice_name or "ArchLens AI")
+        c.setFillColor(colors.black)
+        c.setFont("Helvetica-Bold", 19)
+        c.drawCentredString(width / 2, height - 175, report_title)
+        c.setFont("Helvetica", 11)
+        c.setFillColor(colors.HexColor("#404040"))
+        meta_lines = [
+            f"Project Address: {address}",
+            f"Client: {client}",
+            f"Drawing Pack Reviewed: {file_name}",
+            f"Date: {date}",
+            f"Report ID: {report_id}",
+            f"Prepared by: {practice_name or 'ArchLens AI'}",
+        ]
+        yy = height - 255
+        for line in meta_lines:
+            c.drawCentredString(width / 2, yy, line)
+            yy -= 18
+        summary = parse_key_value_lines(sections.get("TOP SUMMARY", ""))
+        c.setFillColor(colors.HexColor("#1F3B73"))
+        c.setFont("Helvetica-Bold", 13)
+        c.drawCentredString(width / 2, yy - 8, "Executive Summary")
+        c.setFillColor(colors.black)
+        c.setFont("Helvetica", 11)
+        yy -= 30
+        for label, value in summary[:4]:
+            c.drawCentredString(width / 2, yy, f"{label}: {value}" if label else value)
+            yy -= 18
+        c.showPage()
+
     def draw_section_banner(title):
         nonlocal y
-        banner_height = 24
-        if y < bottom_margin + banner_height + 10:
-            new_page()
-        top = y
-        bottom = top - banner_height
+        ensure_space(58)
+        banner_h = 26
+        bottom = y - banner_h
         c.setFillColor(colors.HexColor("#E9EEF5"))
-        c.roundRect(left_margin, bottom, usable_width, banner_height, 4, fill=1, stroke=0)
+        c.roundRect(left_margin, bottom, usable_width, banner_h, 6, fill=1, stroke=0)
         c.setFillColor(colors.HexColor("#1F3B73"))
-        c.setFont("Helvetica-Bold", 11)
-        c.drawString(left_margin + 10, bottom + 7, title)
+        c.setFont("Helvetica-Bold", 12)
+        c.drawString(left_margin + 12, bottom + 8, title)
         c.setFillColor(colors.black)
-        y = bottom - 8
+        y = bottom - 18
 
-    def get_status_color(status):
-        upper = status.upper()
-        if "PASS" in upper and "PARTLY" not in upper:
-            return colors.green
-        if "FAIL" in upper:
-            return colors.red
-        if "PARTLY" in upper or "REVIEW REQUIRED" in upper:
-            return colors.orange
-        return colors.grey
+    def draw_key_value_section(content):
+        nonlocal y
+        rows = parse_key_value_lines(content)
+        for label, value in rows:
+            if label:
+                ensure_space(40)
+                c.setFont("Helvetica-Bold", 10.5)
+                for line in wrap_text(f"{label}:"):
+                    c.drawString(left_margin, y, line)
+                    y -= 15
+                y -= 3
+                c.setFont("Helvetica", 10.5)
+                for line in wrap_text(value, "Helvetica", 10.5, usable_width - 14):
+                    ensure_space(20)
+                    c.drawString(left_margin + 12, y, line)
+                    y -= 15
+            else:
+                c.setFont("Helvetica", 10.5)
+                for line in wrap_text(value):
+                    ensure_space(20)
+                    c.drawString(left_margin, y, line)
+                    y -= 15
+            y -= 14
 
-    def draw_status_badge(x, y_top, status):
-        badge_height = 14
-        padding_x = 6
-        text_width = stringWidth(status, "Helvetica-Bold", 8)
-        badge_width = text_width + padding_x * 2
-        c.setFillColor(get_status_color(status))
-        c.roundRect(x, y_top - badge_height + 2, badge_width, badge_height, 3, fill=1, stroke=0)
-        c.setFillColor(colors.white)
-        c.setFont("Helvetica-Bold", 8)
-        c.drawString(x + padding_x, y_top - 9, status)
-        c.setFillColor(colors.black)
-
-    def draw_part_badge(x, y_top, part_code):
-        radius = 8
-        c.setFillColor(colors.HexColor("#1F3B73"))
-        c.circle(x + radius, y_top - 6, radius, fill=1, stroke=0)
-        c.setFillColor(colors.white)
-        c.setFont("Helvetica-Bold", 8)
-        c.drawCentredString(x + radius, y_top - 9, part_code)
-        c.setFillColor(colors.black)
+    def draw_bullet_section(content):
+        nonlocal y
+        for raw in content.splitlines():
+            line = raw.strip()
+            if not line:
+                y -= 8
+                continue
+            bullet = False
+            if line.startswith("- "):
+                line = line[2:].strip()
+                bullet = True
+            elif line.startswith("• "):
+                line = line[2:].strip()
+                bullet = True
+            wrapped = wrap_text(line, "Helvetica", 10.5, usable_width - (18 if bullet else 0))
+            ensure_space((len(wrapped) * 15) + 10)
+            c.setFont("Helvetica", 10.5)
+            if bullet:
+                c.drawString(left_margin, y, "•")
+                for part in wrapped:
+                    c.drawString(left_margin + 14, y, part)
+                    y -= 15
+                y -= 10
+            else:
+                for part in wrapped:
+                    c.drawString(left_margin, y, part)
+                    y -= 15
+                y -= 10
 
     def draw_compliance_table(content):
         nonlocal y
         rows = parse_compliance_rows(content)
         if not rows:
-            c.setFont("Helvetica", 10)
-            for wrapped in wrap_text("No compliance status detected."):
-                if y < bottom_margin:
-                    new_page()
-                c.drawString(left_margin, y, wrapped)
-                y -= 14
+            c.setFont("Helvetica", 10.5)
+            c.drawString(left_margin, y, "No compliance status detected.")
+            y -= 15
             return
 
         col_part = left_margin
-        col_doc = left_margin + 40
-        col_status = left_margin + 250
-        col_why = left_margin + 390
-        doc_width = 185
-        why_width = usable_width - (col_why - left_margin) - 10
+        col_doc = left_margin + 42
+        col_status = left_margin + 258
+        col_why = left_margin + 392
+        doc_w = 195
+        why_w = usable_width - (col_why - left_margin) - 8
 
-        def draw_table_header():
+        def header():
             nonlocal y
+            ensure_space(34)
             c.setFillColor(colors.HexColor("#EAEFF7"))
             c.rect(left_margin, y - 18, usable_width, 20, fill=1, stroke=0)
             c.setFillColor(colors.black)
@@ -552,134 +608,77 @@ def build_pdf_report(file_name, address, client, date, practice_name, report_id,
             c.drawString(col_doc, y - 5, "Approved Document")
             c.drawString(col_status, y - 5, "Status")
             c.drawString(col_why, y - 5, "Why")
-            y -= 28
+            y -= 30
 
-        if y < bottom_margin + 60:
-            new_page()
-        draw_table_header()
+        def status_fill(status):
+            up = status.upper()
+            if "PASS" in up and "PARTLY" not in up:
+                return colors.HexColor("#2E7D32")
+            if "FAIL" in up:
+                return colors.HexColor("#C62828")
+            return colors.HexColor("#EF6C00")
 
+        header()
         for row in rows:
-            doc_lines = wrap_text(row["title"], "Helvetica-Bold", 9, doc_width)
-            why_lines = wrap_text(row["why"], "Helvetica", 8, why_width)
-            row_height = max(38, 16 + max(len(doc_lines), max(2, len(why_lines))) * 10)
-
-            if y < bottom_margin + row_height + 20:
-                new_page()
-                draw_table_header()
-
-            row_top = y
+            doc_lines = wrap_text(row["title"], "Helvetica-Bold", 9, doc_w)
+            why_lines = wrap_text(row["why"], "Helvetica", 8.5, why_w)
+            row_h = max(40, 18 + max(len(doc_lines), len(why_lines), 1) * 10)
+            ensure_space(row_h + 12)
+            top = y
             c.setFillColor(colors.whitesmoke)
-            c.rect(left_margin, y - row_height + 6, usable_width, row_height, fill=1, stroke=0)
+            c.rect(left_margin, y - row_h + 5, usable_width, row_h, fill=1, stroke=0)
+            c.setFillColor(colors.HexColor("#1F3B73"))
+            c.circle(col_part + 8, top - 6, 8, fill=1, stroke=0)
+            c.setFillColor(colors.white)
+            c.setFont("Helvetica-Bold", 8)
+            c.drawCentredString(col_part + 8, top - 9, row["part"])
             c.setFillColor(colors.black)
 
-            draw_part_badge(col_part, row_top, row["part"])
-
             c.setFont("Helvetica-Bold", 9)
-            doc_y = row_top - 5
-            for wrapped in doc_lines:
-                c.drawString(col_doc, doc_y, wrapped)
-                doc_y -= 10
+            yy = top - 5
+            for line in doc_lines:
+                c.drawString(col_doc, yy, line)
+                yy -= 10
 
-            status_text = row["status"]
-            status_upper = status_text.upper()
-            if "PARTLY DEMONSTRATED" in status_upper:
-                status_text = "REVIEW REQUIRED"
-            elif "PASS" in status_upper and "PARTLY" not in status_upper:
-                status_text = "PASS"
-            elif "FAIL" in status_upper:
-                status_text = "FAIL"
+            badge = row["status"].upper()
+            if "PARTLY" in badge:
+                badge = "REVIEW REQUIRED"
+            elif "PASS" in badge and "PARTLY" not in badge:
+                badge = "PASS"
+            elif "FAIL" in badge:
+                badge = "FAIL"
+            bw = stringWidth(badge, "Helvetica-Bold", 8) + 12
+            c.setFillColor(status_fill(badge))
+            c.roundRect(col_status, top - 14, bw, 14, 3, fill=1, stroke=0)
+            c.setFillColor(colors.white)
+            c.setFont("Helvetica-Bold", 8)
+            c.drawString(col_status + 6, top - 9, badge)
+            c.setFillColor(colors.black)
 
-            draw_status_badge(col_status, row_top, status_text)
+            c.setFont("Helvetica", 8.5)
+            yy = top - 5
+            for line in why_lines:
+                c.drawString(col_why, yy, line)
+                yy -= 10
 
-            c.setFont("Helvetica", 8)
-            why_y = row_top - 5
-            for wrapped in why_lines:
-                c.drawString(col_why, why_y, wrapped)
-                why_y -= 10
+            y -= row_h + 10
 
-            y -= row_height + 8
-
-    c.setFillColor(colors.HexColor("#1F3B73"))
-    c.setFont("Helvetica-Bold", 24)
-    c.drawCentredString(width / 2, height - 180, practice_name or "ArchLens AI")
-    c.setFont("Helvetica-Bold", 18)
-    c.drawCentredString(width / 2, height - 215, report_title)
-    c.setFillColor(colors.black)
-    c.setFont("Helvetica", 11)
-    cover_lines = [
-        f"Project Address: {address}",
-        f"Client: {client}",
-        f"Drawing Pack Reviewed: {file_name}",
-        f"Date: {date}",
-        f"Report ID: {report_id}",
-        f"Prepared by: {practice_name or 'ArchLens AI'}",
-    ]
-    for i, line in enumerate(cover_lines):
-        c.drawCentredString(width / 2, height - 300 - (i * 18), line)
-    top_summary_rows = parse_key_value_lines(sections.get("TOP SUMMARY", ""))
-    c.setFont("Helvetica-Bold", 12)
-    c.drawCentredString(width / 2, height - 430, "Client Summary")
-    c.setFont("Helvetica", 10)
-    for i, (label, value) in enumerate(top_summary_rows[:4]):
-        c.drawCentredString(width / 2, height - 452 - (i * 16), f"{label}: {value}" if label else value)
-    c.setFillColor(colors.grey)
-    c.setFont("Helvetica-Oblique", 9)
-    c.drawCentredString(width / 2, 80, disclaimer_text)
-    c.showPage()
+    draw_cover()
     y = height - top_margin
     draw_page_header()
     draw_page_footer()
 
     for key, title in section_order:
-        if y < bottom_margin:
-            new_page()
-        draw_section_banner(title)
         content = sections.get(key, "Not detected")
-
+        ensure_space(64)
+        draw_section_banner(title)
         if module_name == "Building Regulations Review" and key == "COMPLIANCE STATUS BY APPROVED DOCUMENT":
             draw_compliance_table(content)
-            y -= 10
-            continue
-
-        if key in special_key_value_sections:
-            rows = parse_key_value_lines(content)
-            for label, value in rows:
-                if label:
-                    c.setFont("Helvetica-Bold", 10)
-                    for wrapped in wrap_text(f"{label}:"):
-                        if y < bottom_margin:
-                            new_page()
-                        c.drawString(left_margin, y, wrapped)
-                        y -= 14
-                    c.setFont("Helvetica", 10)
-                    for wrapped in wrap_text(value):
-                        if y < bottom_margin:
-                            new_page()
-                        c.drawString(left_margin + 12, y, wrapped)
-                        y -= 14
-                else:
-                    c.setFont("Helvetica", 10)
-                    for wrapped in wrap_text(value):
-                        if y < bottom_margin:
-                            new_page()
-                        c.drawString(left_margin, y, wrapped)
-                        y -= 14
-                y -= 4
+        elif key in special_key_value_sections:
+            draw_key_value_section(content)
         else:
-            c.setFont("Helvetica", 10)
-            for raw_line in content.splitlines():
-                line = raw_line.strip()
-                if not line:
-                    y -= 6
-                    continue
-                if line.startswith("- "):
-                    line = "• " + line[2:]
-                for wrapped in wrap_text(line):
-                    if y < bottom_margin:
-                        new_page()
-                    c.drawString(left_margin, y, wrapped)
-                    y -= 14
-        y -= 10
+            draw_bullet_section(content)
+        y -= 8
 
     c.save()
     buffer.seek(0)
@@ -714,7 +713,8 @@ def build_word_report(file_name, address, client, date, practice_name, report_id
     disclaimer = doc.add_paragraph()
     disclaimer.alignment = WD_ALIGN_PARAGRAPH.CENTER
     run = disclaimer.add_run(disclaimer_text)
-    run.font.size = Pt(10)
+    run.font.size = Pt(9)
+    run.italic = True
 
     doc.add_paragraph("")
     info = doc.add_paragraph()
@@ -771,6 +771,7 @@ def build_word_report(file_name, address, client, date, practice_name, report_id
     doc.add_paragraph("")
 
     for key, title in section_order:
+        doc.add_paragraph("")
         doc.add_paragraph("")
         heading = doc.add_paragraph()
         heading_run = heading.add_run(title)
@@ -995,8 +996,8 @@ def build_simple_word_doc(title: str, body_text: str) -> BytesIO:
     return buffer
 
 
-inject_custom_css()
 st.set_page_config(page_title="ArchLens AI", layout="wide")
+inject_custom_css()
 st.markdown(
     """
     <div class="sy-hero">
@@ -1152,8 +1153,9 @@ with upload_tab:
                             progress_callback=update_analysis_progress,
                         )
                     else:
-                        progress_bar.progress(40)
-                        status_text.text("Step 3 of 4 — Analyzing planning route and risks... 40%")
+                        smooth_progress(progress_bar, status_text, 25, 40,
+                                        "Reading drawings and extracting planning data...", 0.8)
+
                         report = pdf_summary.analyze_planning_pdf(
                             temp_pdf_path,
                             client_project_types=project_types,
@@ -1163,8 +1165,8 @@ with upload_tab:
                             local_authority=local_authority,
                             review_mode=review_mode,
                         )
-                        progress_bar.progress(85)
-                        status_text.text("Step 3 of 4 — Planning analysis complete... 85%")
+
+                        smooth_progress(progress_bar, status_text, 40, 85, "Analyzing planning route and risks...", 0.8)
                 except Exception as e:
                     msg = str(e).lower()
                     if "insufficient_quota" in msg or "quota" in msg:
@@ -1182,7 +1184,8 @@ with upload_tab:
 
                 sections = parse_report_sections(report, config["required_headings"])
 
-                clean_project_address = clean_input_value(project_address, "Not provided")
+                extracted_report_address = extract_address_from_report(report, "Not provided")
+                clean_project_address = clean_input_value(project_address, extracted_report_address)
                 clean_client_name = clean_input_value(client_name, "Not provided")
                 clean_practice_name = clean_input_value(practice_name, "ArchLens AI")
                 report_id = str(uuid.uuid4())[:8].upper()
@@ -1281,15 +1284,7 @@ with report_tab:
         if review_module == "Planning Review":
             st.markdown("")
             st.markdown('<div class="sy-card"><h3 style="margin-top:0;">Automatic Planning Statement</h3><div class="sy-muted">Generate a draft planning statement from the ArchLens review and download it as Word.</div></div>', unsafe_allow_html=True)
-            statement_type = st.selectbox(
-                "Statement Type",
-                PLANNING_STATEMENT_TYPES,
-                index=PLANNING_STATEMENT_TYPES.index(st.session_state.get("planning_statement_type", "Planning Statement")),
-                key="planning_statement_type_select",
-            )
-            st.session_state["planning_statement_type"] = statement_type
-
-            if st.button(f"Generate {statement_type}", key="generate_planning_statement_btn", use_container_width=True):
+            if st.button("Generate Planning Statement", key="generate_planning_statement_btn", use_container_width=True):
                 statement_text = pdf_summary.generate_planning_statement(
                     report_text=report,
                     sections=sections,
@@ -1297,19 +1292,17 @@ with report_tab:
                     client_name=client_name or "Not provided",
                     local_authority=local_authority or "",
                     review_mode=review_mode,
-                    statement_type=statement_type,
                 )
                 st.session_state["planning_statement_text"] = statement_text
-                st.session_state["planning_statement_file"] = build_simple_word_doc(f"Draft {statement_type}", statement_text)
+                st.session_state["planning_statement_file"] = build_simple_word_doc("Draft Planning Statement", statement_text)
 
             if st.session_state.get("planning_statement_text"):
-                with st.expander(f"Show {statement_type.lower()} draft", expanded=False):
+                with st.expander("Show planning statement draft", expanded=False):
                     st.text(st.session_state["planning_statement_text"])
-                safe_statement_name = statement_type.replace(" & ", "_").replace(" ", "_")
                 st.download_button(
-                    label=f"Download {statement_type} (.docx)",
+                    label="Download Planning Statement (.docx)",
                     data=st.session_state["planning_statement_file"],
-                    file_name=f"{base_filename}_{safe_statement_name}.docx",
+                    file_name=f"{base_filename}_Planning_Statement.docx",
                     mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                     key="download_planning_statement_docx",
                     use_container_width=True,
