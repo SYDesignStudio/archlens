@@ -33,7 +33,7 @@ for key, value in DEFAULT_STATE.items():
         st.session_state[key] = value
 
 MAX_FILE_SIZE_MB = 20
-MAX_PAGE_COUNT = 120
+MAX_PAGE_COUNT = 30
 
 BUILDING_REQUIRED_HEADINGS = [
     "PROJECT CLASSIFICATION",
@@ -83,7 +83,7 @@ PLANNING_SECTION_ORDER = [
     ("TOP SUMMARY", "Top Summary"),
     ("LOCAL AUTHORITY CONTEXT", "Local Authority Context"),
     ("PD / PRIOR APPROVAL / PLANNING ROUTE", "PD / Prior Approval / Planning Route"),
-    ("PLANNING ASSESSMENT", "Planning Officer Style Reasoning"),
+    ("PLANNING ASSESSMENT", "Planning Assessment"),
     ("DRAWING-PACK INCONSISTENCIES", "Drawing-Pack Inconsistencies"),
     ("KEY RISKS", "Key Risks"),
     ("MISSING INFORMATION", "Missing Information"),
@@ -838,10 +838,16 @@ def build_word_report(file_name, address, client, date, practice_name, report_id
 def extract_summary_value(sections: Dict[str, str], module_name: str):
     top_summary_rows = {k.upper(): v for k, v in parse_key_value_lines(sections.get("TOP SUMMARY", "")) if k}
     if module_name == "Planning Review":
+        authority_value = "Unknown"
+        for line in sections.get("TOP SUMMARY", "").splitlines():
+            stripped = line.strip()
+            if stripped and ":" not in stripped:
+                authority_value = stripped
+                break
         return (
-            top_summary_rows.get("OVERALL PLANNING RISK RATING", "Unknown"),
-            top_summary_rows.get("LIKELY ROUTE", "Unknown"),
-            top_summary_rows.get("LOCAL AUTHORITY USED", "Unknown"),
+            "Not shown",
+            top_summary_rows.get("APPLICATION TYPE", top_summary_rows.get("LIKELY ROUTE", "Unknown")),
+            authority_value,
         )
     return (
         top_summary_rows.get("OVERALL RISK RATING", "Unknown"),
@@ -1035,7 +1041,7 @@ step1, step2, step3 = st.columns(3)
 with step1:
     st.markdown('<div class="sy-step"><strong>Step 1 — Project setup</strong><br><span class="sy-muted">Choose the review type, select the project type, confirm the property type, and describe the proposal clearly. For rear extensions, enter depth and height from the original rear wall where requested.</span></div>', unsafe_allow_html=True)
 with step2:
-    st.markdown('<div class="sy-step"><strong>Step 2 — Upload drawing pack</strong><br><span class="sy-muted">Upload plans, elevations, sections, location/block plans, or a simple homeowner sketch. The more complete the pack, the stronger the route and readiness assessment.</span></div>', unsafe_allow_html=True)
+    st.markdown('<div class="sy-step"><strong>Step 2 — Upload drawing pack</strong><br><span class="sy-muted">Upload plans, elevations, sections, location/block plans, or a simple homeowner sketch. The more complete the pack, the stronger the route and readiness assessment. For live stability, the app analyses the first 12 pages of larger packs.</span></div>', unsafe_allow_html=True)
 with step3:
     st.markdown('<div class="sy-step"><strong>Step 3 — Generate outputs</strong><br><span class="sy-muted">Review the project summary, planning route or compliance findings, recommended actions, download the report, and generate a draft planning statement where needed.</span></div>', unsafe_allow_html=True)
 
@@ -1183,6 +1189,8 @@ with upload_tab:
                     st.error(f"PDF has {page_count} pages. Maximum allowed is {MAX_PAGE_COUNT} pages.")
                     os.remove(temp_pdf_path)
                     st.stop()
+                if page_count > 12:
+                    st.warning("Large drawing pack detected. The live app will analyse the first 12 pages only to keep processing stable.")
 
                 smooth_progress(progress_bar, status_text, 10, 25, "Preparing drawing analysis...", 0.6)
 

@@ -12,6 +12,10 @@ from openai import OpenAI
 
 load_dotenv()
 
+LIVE_ANALYSIS_MAX_PAGES = 12
+IMAGE_BATCH_SIZE = 2
+IMAGE_RENDER_SCALE = 1.0
+
 REQUIRED_HEADINGS = [
     "PROJECT CLASSIFICATION",
     "PROJECT DETAILS",
@@ -178,14 +182,14 @@ def extract_text_by_page(pdf_path: str) -> List[Dict[str, str]]:
 
 
 
-def render_pdf_page_batch_to_images(pdf_path: str, start_index: int, end_index: int, scale: float = 1.2) -> List[str]:
+def render_pdf_page_batch_to_images(pdf_path: str, start_index: int, end_index: int, scale: float = IMAGE_RENDER_SCALE) -> List[str]:
     doc = fitz.open(pdf_path)
     image_paths: List[str] = []
     try:
         for i in range(start_index, min(end_index, len(doc))):
             page = doc.load_page(i)
             pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
-            image_path = f"temp_page_{i + 1}.png"
+            image_path = f"temp_page_{os.getpid()}_{i + 1}.png"
             pix.save(image_path)
             image_paths.append(image_path)
             del pix
@@ -254,10 +258,16 @@ def build_project_summary_from_inputs(project_types_text: str, proposal_summary_
     text = (base or "").strip()
     if not text or text.lower() == "not stated":
         return "Residential development works to the host property as shown on the submitted drawings."
-    text = text[0].upper() + text[1:]
-    if not text.endswith("."):
-        text += "."
-    return text
+    text = re.sub(r"\|", ", ", text)
+    text = re.sub(r"\s{2,}", " ", text).strip(" ,")
+    lowered = text.lower()
+    if lowered.startswith("proposed "):
+        sentence = text[0].upper() + text[1:]
+    else:
+        sentence = "Proposed " + text[0].lower() + text[1:]
+    if not sentence.endswith("."):
+        sentence += "."
+    return sentence
 
 def infer_application_type(project_types_text: str, proposal_summary_text: str, property_type_text: str) -> str:
     combined = f"{project_types_text} {proposal_summary_text} {property_type_text}".lower()
@@ -417,10 +427,9 @@ def analyze_pdf(
 ) -> str:
     text = extract_text_from_pdf(pdf_path)
     page_data = extract_text_by_page(pdf_path)
-    max_pages_for_analysis = 12
-    if len(page_data) > max_pages_for_analysis:
-        page_data = page_data[:max_pages_for_analysis]
-    max_pages_for_analysis = 12
+    if len(page_data) > LIVE_ANALYSIS_MAX_PAGES:
+        page_data = page_data[:LIVE_ANALYSIS_MAX_PAGES]
+    max_pages_for_analysis = LIVE_ANALYSIS_MAX_PAGES
     if len(page_data) > max_pages_for_analysis:
         page_data = page_data[:max_pages_for_analysis]
 
@@ -493,11 +502,11 @@ BUILDING CONTROL SUBMISSION READINESS
     checks = build_checks(text)
     batch_summaries = []
     total_pages = len(page_data)
-    batch_size = 2
+    batch_size = IMAGE_BATCH_SIZE
     total_batches = max(1, (total_pages + batch_size - 1) // batch_size)
 
     for idx, start in enumerate(range(0, total_pages, batch_size), start=1):
-        batch_paths = render_pdf_page_batch_to_images(pdf_path, start, start + batch_size, scale=1.2)
+        batch_paths = render_pdf_page_batch_to_images(pdf_path, start, start + batch_size, scale=IMAGE_RENDER_SCALE)
         try:
             if progress_callback:
                 progress_callback(idx, total_batches)
@@ -898,6 +907,10 @@ Use this approved-style structure and keep it concise:
 4. Compliance with Prior Approval Requirements
 5. Design Considerations
 6. Conclusion
+
+Where relevant, use concise planning officer style reasoning such as:
+- The proposed extension is located to the rear of the property and would not be visible from the public highway. The development would therefore not impact the character or appearance of the street scene.
+- Given the single-storey scale of the development, the proposal is unlikely to result in unacceptable loss of light, outlook or overbearing impact to neighbouring occupiers.
 
 Report text:
 {report_text[:18000]}
