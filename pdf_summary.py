@@ -240,7 +240,59 @@ def extract_project_address(text: str) -> str:
 
 def infer_fire_statement_status(text: str, page_summary: str) -> str:
     combined = f"{text}\n{page_summary}".lower()
-    return "submitted" if ("fire statement" in combined or "fire plan" in combined) else "not evident in the drawing pack"
+    # A fire plan is not the same as a formal fire statement.
+    return "submitted" if "fire statement" in combined else "not evident in the drawing pack"
+
+
+
+def build_project_summary_from_inputs(project_types_text: str, proposal_summary_text: str, property_type_text: str) -> str:
+    base = proposal_summary_text if proposal_summary_text and proposal_summary_text.lower() != "not stated" else project_types_text
+    text = (base or "").strip()
+    if not text or text.lower() == "not stated":
+        return "Residential development works to the host property as shown on the submitted drawings."
+    text = text[0].upper() + text[1:]
+    if not text.endswith("."):
+        text += "."
+    return text
+
+def infer_application_type(project_types_text: str, proposal_summary_text: str, property_type_text: str) -> str:
+    combined = f"{project_types_text} {proposal_summary_text} {property_type_text}".lower()
+    if "ground floor rear extension" in combined and property_type_text.lower() not in {"flat", "maisonette"}:
+        return "PRIOR APPROVAL"
+    if property_type_text.lower() in {"flat", "maisonette"}:
+        return "FULL PLANNING"
+    if "loft" in combined or "first floor" in combined or "conversion" in combined:
+        return "FULL PLANNING"
+    return "FULL PLANNING"
+
+def infer_submission_readiness_from_context(
+    application_type: str,
+    project_types_text: str,
+    proposal_summary_text: str,
+    text: str,
+    page_summary: str,
+) -> tuple[str, str]:
+    combined = f"{project_types_text} {proposal_summary_text} {text} {page_summary}".lower()
+    if "superseded" in combined:
+        return (
+            "FURTHER INFORMATION REQUIRED",
+            "A current drawing / site plan set should be confirmed before submission because superseded information appears within the pack.",
+        )
+    if application_type == "PRIOR APPROVAL" and "ground floor rear extension" in combined:
+        if ("6m" in combined or "6000" in combined) and ("3m" in combined or "3000" in combined or "4m" in combined or "4000" in combined):
+            return (
+                "READY TO SUBMIT",
+                "The pack appears to provide the key prior approval information typically required for a larger home extension submission, subject to final dimensional confirmation on the submitted drawings.",
+            )
+        return (
+            "LIKELY READY WITH MINOR AMENDMENTS",
+            "The proposal appears capable of proceeding by prior approval, but key depth / height information should be confirmed clearly from the original rear wall before submission.",
+        )
+    return (
+        "LIKELY READY WITH MINOR AMENDMENTS",
+        "Initial AI assessment based on drawing pack completeness and clarity.",
+    )
+
 
 def analyze_image_batch(image_paths: List[str], text: str, checks: List[str], review_mode: str) -> str:
     audience_hint = (
@@ -611,8 +663,8 @@ def analyze_planning_pdf(
     proposal_summary_text = proposal_summary.strip() or "Not stated"
     extracted_address = extract_project_address(text)
     address_text = project_address.strip() or extracted_address or "Not stated"
-    inferred_authority = detect_local_authority(local_authority or project_address, f"{text}\n{proposal_summary}")
-    authority_value = local_authority.strip() or inferred_authority
+    inferred_authority = detect_local_authority(project_address, f"{text}\n{proposal_summary}")
+    authority_value = inferred_authority
     page_summary = "\n".join(
         f"Page {page['page_number']}: {page['sheet_type']} | {page['sheet_title']}" for page in page_data
     )
@@ -621,11 +673,6 @@ def analyze_planning_pdf(
         if review_mode == "Architect / Professional"
         else "Write in plain English suitable for a homeowner, keep the officer-style reasoning structure, and frame the output as a preliminary planning feasibility report rather than a formal planning decision."
     )
-
-    # Default AI estimation placeholders used inside the planning prompt
-    readiness_status = "LIKELY READY WITH MINOR AMENDMENTS"
-    readiness_reason = "Initial AI assessment based on drawing pack completeness and clarity."
-    approval_probability = "Medium"
 
     prompt = f"""
 You are reviewing a UK residential planning drawing pack.
@@ -691,15 +738,15 @@ PROJECT CLASSIFICATION
 SITE AND PROPOSAL OVERVIEW
 - Summarise the apparent proposal and affected parts of the property in 2 to 4 clean bullets.
 - If a Fire Statement is not evident in the pack, do not say one has been submitted.
-- Where fire safety documentation is likely to be needed, say "A fire statement may be required where applicable."
+- Only mention a fire statement where it is genuinely relevant.
 
 TOP SUMMARY
-- Overall Planning Risk Rating: use the indicative risk unless the drawings strongly justify otherwise.
-- Likely Route: PD / PRIOR APPROVAL / FULL PLANNING / MIXED OR UNCLEAR
-- Local Authority Used: {authority_value}
-- Planning Approval Probability: {approval_probability}
-- Replace "Main Constraints / Uncertainties" with "Key Planning Considerations"
-- Present 3 to 6 concise bullets only.
+- Do not include "Overall Planning Risk Rating" or "Planning Approval Probability".
+- Include only:
+  - Project Summary: {project_summary_value}
+  - Application Type: {application_type_value}
+  - {authority_value}
+- Present 3 to 6 concise "Key Planning Considerations" bullets only.
 - Do not add informal caveat wording here.
 
 LOCAL AUTHORITY CONTEXT
@@ -742,6 +789,7 @@ RECOMMENDED ACTIONS
 SUBMISSION READINESS
 - Status: use this indicative position unless the drawings strongly justify otherwise: {readiness_status}
 - Reason: use this indicative reason unless the drawings strongly justify otherwise: {readiness_reason}
+- If a similar rear extension / prior approval scheme shows the typical dimensional and policy information clearly and no major contradictions are evident, "READY TO SUBMIT" can be used.
 - In homeowner mode, this should reflect preliminary feasibility readiness rather than formal submission certainty.
 
 Full PDF text:
@@ -755,6 +803,18 @@ Detected pages:
     output_text = response.output_text
     fire_status = infer_fire_statement_status(text, page_summary)
     output_text = polish_planning_report_text(output_text, address_text, fire_status, authority_value)
+
+    top_summary_pattern = r"TOP SUMMARY\n([\s\S]*?)(?=\n[A-Z][A-Z /\-]+\n)"
+    top_summary_replacement = (
+        "TOP SUMMARY\n"
+        f"Project Summary: {project_summary_value}\n"
+        f"Application Type: {application_type_value}\n"
+        f"{authority_value}\n"
+    )
+    output_text = re.sub(top_summary_pattern, top_summary_replacement, output_text, count=1)
+    output_text = re.sub(r"^.*Overall Planning Risk Rating:.*$\n?", "", output_text, flags=re.MULTILINE)
+    output_text = re.sub(r"^.*Planning Approval Probability:.*$\n?", "", output_text, flags=re.MULTILINE)
+
     missing = [h for h in PLANNING_REQUIRED_HEADINGS if h not in output_text.upper()]
     if missing:
         repaired = _call_responses_api(
@@ -762,6 +822,17 @@ Detected pages:
             f"Rewrite the report so it uses these exact headings in this exact order only:\n{chr(10).join(PLANNING_REQUIRED_HEADINGS)}\n\nReport:\n{output_text}",
         )
         output_text = repaired.output_text
+        output_text = polish_planning_report_text(output_text, address_text, fire_status, authority_value)
+        top_summary_pattern = r"TOP SUMMARY\n([\s\S]*?)(?=\n[A-Z][A-Z /\-]+\n)"
+        top_summary_replacement = (
+            "TOP SUMMARY\n"
+            f"Project Summary: {project_summary_value}\n"
+            f"Application Type: {application_type_value}\n"
+            f"{authority_value}\n"
+        )
+        output_text = re.sub(top_summary_pattern, top_summary_replacement, output_text, count=1)
+        output_text = re.sub(r"^.*Overall Planning Risk Rating:.*$\n?", "", output_text, flags=re.MULTILINE)
+        output_text = re.sub(r"^.*Planning Approval Probability:.*$\n?", "", output_text, flags=re.MULTILINE)
     return output_text
 
 
@@ -792,15 +863,19 @@ Local Authority: {local_authority or 'Not provided'}
 Use the report findings below to draft a practical planning statement.
 Keep it factual, clean, and application-ready.
 Do not invent measurements or policy references that are not supported by the report.
+Write like an approved planning statement prepared by a UK architectural practice.
+Keep the wording factual, concise, confident and submission-ready.
 Where the route is PD / prior approval, explain that clearly.
 Where planning permission is likely required, explain that clearly.
+Do not mention fire statements unless they are genuinely relevant to the scheme.
 
-Use these headings:
-1. Site and Surroundings
-2. Proposed Development
-3. Relevant Planning Route
-4. Design and Appearance
-5. Impact on Residential Amenity
+Use this approved-style structure and keep it concise:
+
+1. Introduction
+2. Site Context and Surroundings
+3. Proposal Details
+4. Compliance with Prior Approval Requirements
+5. Design Considerations
 6. Conclusion
 
 Report text:

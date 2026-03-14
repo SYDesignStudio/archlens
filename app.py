@@ -82,7 +82,7 @@ PLANNING_SECTION_ORDER = [
     ("TOP SUMMARY", "Top Summary"),
     ("LOCAL AUTHORITY CONTEXT", "Local Authority Context"),
     ("PD / PRIOR APPROVAL / PLANNING ROUTE", "PD / Prior Approval / Planning Route"),
-    ("PLANNING ASSESSMENT", "Planning Assessment"),
+    ("PLANNING ASSESSMENT", "Planning Officer Style Reasoning"),
     ("DRAWING-PACK INCONSISTENCIES", "Drawing-Pack Inconsistencies"),
     ("KEY RISKS", "Key Risks"),
     ("MISSING INFORMATION", "Missing Information"),
@@ -504,15 +504,15 @@ def build_pdf_report(file_name, address, client, date, practice_name, report_id,
         for line in meta_lines:
             c.drawCentredString(width / 2, yy, line)
             yy -= 18
-        summary = parse_key_value_lines(sections.get("TOP SUMMARY", ""))
+        summary_lines = [ln.strip() for ln in sections.get("TOP SUMMARY", "").splitlines() if ln.strip()]
         c.setFillColor(colors.HexColor("#1F3B73"))
         c.setFont("Helvetica-Bold", 13)
         c.drawCentredString(width / 2, yy - 8, "Executive Summary")
         c.setFillColor(colors.black)
         c.setFont("Helvetica", 11)
         yy -= 30
-        for label, value in summary[:4]:
-            c.drawCentredString(width / 2, yy, f"{label}: {value}" if label else value)
+        for line in summary_lines[:4]:
+            c.drawCentredString(width / 2, yy, line)
             yy -= 18
         c.showPage()
 
@@ -527,7 +527,7 @@ def build_pdf_report(file_name, address, client, date, practice_name, report_id,
         c.setFont("Helvetica-Bold", 12)
         c.drawString(left_margin + 12, bottom + 8, title)
         c.setFillColor(colors.black)
-        y = bottom - 18
+        y = bottom - 12
 
     def draw_key_value_section(content):
         nonlocal y
@@ -551,7 +551,7 @@ def build_pdf_report(file_name, address, client, date, practice_name, report_id,
                     ensure_space(20)
                     c.drawString(left_margin, y, line)
                     y -= 15
-            y -= 14
+            y -= 8
 
     def draw_bullet_section(content):
         nonlocal y
@@ -671,7 +671,9 @@ def build_pdf_report(file_name, address, client, date, practice_name, report_id,
 
     for key, title in section_order:
         content = sections.get(key, "Not detected")
-        ensure_space(64)
+        estimated_lines = max(4, len([ln for ln in str(content).splitlines() if ln.strip()]))
+        estimated_height = 52 + min(estimated_lines, 18) * 16
+        ensure_space(estimated_height)
         draw_section_banner(title)
         if module_name == "Building Regulations Review" and key == "COMPLIANCE STATUS BY APPROVED DOCUMENT":
             draw_compliance_table(content)
@@ -773,7 +775,6 @@ def build_word_report(file_name, address, client, date, practice_name, report_id
 
     for key, title in section_order:
         doc.add_paragraph("")
-        doc.add_paragraph("")
         heading = doc.add_paragraph()
         heading_run = heading.add_run(title)
         heading_run.bold = True
@@ -863,11 +864,17 @@ def render_kpi_cards(sections: Dict[str, str], report_id: str, module_name: str)
 def extract_summary_values(sections: Dict[str, str], module_name: str):
     top_summary_rows = {k.upper(): v for k, v in parse_key_value_lines(sections.get("TOP SUMMARY", "")) if k}
     if module_name == "Planning Review":
+        authority_value = "Unknown"
+        for line in sections.get("TOP SUMMARY", "").splitlines():
+            stripped = line.strip()
+            if stripped and ":" not in stripped:
+                authority_value = stripped
+                break
         return {
-            "risk": top_summary_rows.get("OVERALL PLANNING RISK RATING", "Unknown"),
-            "route": top_summary_rows.get("LIKELY ROUTE", "Unknown"),
-            "authority": top_summary_rows.get("LOCAL AUTHORITY USED", "Unknown"),
-            "probability": top_summary_rows.get("PLANNING APPROVAL PROBABILITY", "Unknown"),
+            "risk": "Not shown",
+            "route": top_summary_rows.get("APPLICATION TYPE", top_summary_rows.get("LIKELY ROUTE", "Unknown")),
+            "authority": authority_value,
+            "probability": "Not shown",
         }
     return {
         "risk": top_summary_rows.get("OVERALL RISK RATING", "Unknown"),
@@ -916,9 +923,14 @@ def render_kpi_cards(sections: Dict[str, str], report_id: str, module_name: str)
     values = extract_summary_values(sections, module_name)
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Report ID", report_id)
-    c2.metric("Risk Rating", values["risk"])
-    c3.metric("Likely Route" if module_name == "Planning Review" else "Submission Status", values["route"])
-    c4.metric("Approval Probability" if module_name == "Planning Review" else "Review Confidence", values["probability"] if module_name == "Planning Review" else values["authority"])
+    if module_name == "Planning Review":
+        c2.metric("Application Type", values["route"])
+        c3.metric("Local Authority", values["authority"])
+        c4.metric("Status", "Ready to submit" if "READY TO SUBMIT" in sections.get("SUBMISSION READINESS", "").upper() else "Review required")
+    else:
+        c2.metric("Risk Rating", values["risk"])
+        c3.metric("Submission Status", values["route"])
+        c4.metric("Review Confidence", values["authority"])
 
 
 def render_at_a_glance(sections: Dict[str, str], report_id: str, module_name: str):
@@ -942,15 +954,24 @@ def render_at_a_glance(sections: Dict[str, str], report_id: str, module_name: st
         st.markdown(sections.get(readiness_key, "Not detected"))
 
     st.markdown("")
-    top_summary_rows = {k.upper(): v for k, v in parse_key_value_lines(sections.get("TOP SUMMARY", "")) if k}
-    risk_summary = top_summary_rows.get("OVERALL RISK RATING") or top_summary_rows.get("OVERALL PLANNING RISK RATING") or sections.get("TOP SUMMARY", "")
-    summary_hint = top_summary_rows.get("PLANNING APPROVAL PROBABILITY") or top_summary_rows.get("LIKELY ROUTE", "Unknown")
-    if "HIGH" in str(risk_summary).upper():
-        st.error(f"High risk detected | Summary: {summary_hint}")
-    elif "MEDIUM" in str(risk_summary).upper():
-        st.warning(f"Moderate risk detected | Summary: {summary_hint}")
+    if module_name == "Planning Review":
+        readiness_text = sections.get("SUBMISSION READINESS", "")
+        if "READY TO SUBMIT" in readiness_text.upper():
+            st.success("Submission position: Ready to submit")
+        elif "LIKELY READY" in readiness_text.upper():
+            st.warning("Submission position: Likely ready with minor amendments")
+        else:
+            st.info("Submission position: Further information required")
     else:
-        st.success(f"Lower risk indicated | Summary: {summary_hint}")
+        top_summary_rows = {k.upper(): v for k, v in parse_key_value_lines(sections.get("TOP SUMMARY", "")) if k}
+        risk_summary = top_summary_rows.get("OVERALL RISK RATING") or sections.get("TOP SUMMARY", "")
+        summary_hint = top_summary_rows.get("REVIEW CONFIDENCE", "Unknown")
+        if "HIGH" in str(risk_summary).upper():
+            st.error(f"High risk detected | Summary: {summary_hint}")
+        elif "MEDIUM" in str(risk_summary).upper():
+            st.warning(f"Moderate risk detected | Summary: {summary_hint}")
+        else:
+            st.success(f"Lower risk indicated | Summary: {summary_hint}")
 
 
 def render_section_content(content: str, is_key_value: bool):
@@ -1011,11 +1032,11 @@ st.markdown(
 
 step1, step2, step3 = st.columns(3)
 with step1:
-    st.markdown('<div class="sy-step"><strong>Step 1 — Project setup</strong><br><span class="sy-muted">Choose the review module, project type, and report mode.</span></div>', unsafe_allow_html=True)
+    st.markdown('<div class="sy-step"><strong>Step 1 — Project setup</strong><br><span class="sy-muted">Choose the review type, select the project type, confirm the property type, and describe the proposal clearly. For rear extensions, enter depth and height from the original rear wall where requested.</span></div>', unsafe_allow_html=True)
 with step2:
-    st.markdown('<div class="sy-step"><strong>Step 2 — Upload drawing pack</strong><br><span class="sy-muted">Upload one or more PDFs such as plans, elevations, sections, or homeowner sketches.</span></div>', unsafe_allow_html=True)
+    st.markdown('<div class="sy-step"><strong>Step 2 — Upload drawing pack</strong><br><span class="sy-muted">Upload plans, elevations, sections, location/block plans, or a simple homeowner sketch. The more complete the pack, the stronger the route and readiness assessment.</span></div>', unsafe_allow_html=True)
 with step3:
-    st.markdown('<div class="sy-step"><strong>Step 3 — Generate outputs</strong><br><span class="sy-muted">Review the report cards, expand sections, download reports, and draft a planning statement.</span></div>', unsafe_allow_html=True)
+    st.markdown('<div class="sy-step"><strong>Step 3 — Generate outputs</strong><br><span class="sy-muted">Review the project summary, planning route or compliance findings, recommended actions, download the report, and generate a draft planning statement where needed.</span></div>', unsafe_allow_html=True)
 
 with st.sidebar:
     st.header("Project Setup")
@@ -1037,9 +1058,30 @@ with st.sidebar:
         placeholder="Briefly describe the proposal and what the client wants.",
     )
 
+
+    rear_extension_depth_m = None
+    rear_extension_height_m = None
+    if review_module == "Planning Review" and "Ground Floor Rear Extension" in project_types:
+        rear_extension_depth_m = st.number_input(
+            "Rear extension depth from original rear wall (m)",
+            min_value=0.0,
+            max_value=12.0,
+            value=6.0,
+            step=0.1,
+            help="Enter the proposed rear projection measured from the original rear house wall.",
+        )
+        rear_extension_height_m = st.number_input(
+            "Rear extension overall height (m)",
+            min_value=0.0,
+            max_value=6.0,
+            value=4.0,
+            step=0.1,
+            help="Enter the proposed overall height of the rear extension.",
+        )
+
     review_mode = st.selectbox("Report Mode", ["Architect / Professional", "Homeowner Summary"])
     project_address = st.text_input("Project Address")
-    local_authority = st.text_input("Local Authority (optional)") if review_module == "Planning Review" else ""
+    local_authority = ""
 
     if review_mode != "Homeowner Summary":
         practice_name = st.text_input("Practice / Company Name (optional)")
@@ -1071,7 +1113,7 @@ with setup_tab:
         st.write(f"Project type: {', '.join(project_types) if project_types else 'Not stated'}")
         if review_module == "Planning Review":
             st.write(f"Property type: {property_type or 'Not stated'}")
-            st.write(f"Local authority: {local_authority or 'Auto-detect from drawing/address/client input'}")
+            st.write("Local authority: Auto-detected from the address and drawing pack")
         st.write(f"Project address: {project_address or 'Not provided'}")
         st.write(f"Proposal description: {proposal_summary or 'Not provided'}")
         st.write(f"Client: {client_name or 'Not provided'}")
@@ -1157,11 +1199,19 @@ with upload_tab:
                         smooth_progress(progress_bar, status_text, 25, 40,
                                         "Reading drawings and extracting planning data...", 0.8)
 
+                        proposal_summary_for_ai = proposal_summary
+                        if "Ground Floor Rear Extension" in project_types:
+                            depth_txt = f"{rear_extension_depth_m:.1f}m depth from original rear wall" if rear_extension_depth_m is not None else ""
+                            height_txt = f"{rear_extension_height_m:.1f}m overall height" if rear_extension_height_m is not None else ""
+                            extra_bits = ", ".join([x for x in [depth_txt, height_txt] if x])
+                            if extra_bits:
+                                proposal_summary_for_ai = (proposal_summary_for_ai.strip() + " | " + extra_bits).strip(" |")
+
                         report = pdf_summary.analyze_planning_pdf(
                             temp_pdf_path,
                             client_project_types=project_types,
                             property_type=property_type,
-                            proposal_summary=proposal_summary,
+                            proposal_summary=proposal_summary_for_ai,
                             project_address=project_address,
                             local_authority=local_authority,
                             review_mode=review_mode,
