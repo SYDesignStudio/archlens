@@ -28,6 +28,7 @@ DEFAULT_STATE = {
     "last_error": None,
     "report_id": None,
     "active_module": "Building Regulations Review",
+    "ui_theme_mode": "Dark",
 }
 for key, value in DEFAULT_STATE.items():
     if key not in st.session_state:
@@ -162,101 +163,87 @@ PROPERTY_TYPE_OPTIONS = [
 ]
 
 
-def inject_custom_css():
+def inject_custom_css(theme_mode: str = "Dark"):
+    is_light = str(theme_mode).lower().startswith("light")
+    bg_main = "#F5F7FB" if is_light else "#0B0F18"
+    sidebar_bg_1 = "rgba(248,250,253,0.98)" if is_light else "rgba(15,19,29,0.98)"
+    sidebar_bg_2 = "rgba(240,244,249,0.98)" if is_light else "rgba(11,15,24,0.98)"
+    text_color = "#152033" if is_light else "#E8EDF7"
+    muted = "rgba(21,32,51,0.72)" if is_light else "rgba(232,237,247,0.78)"
+    border = "rgba(16,24,40,0.10)" if is_light else "rgba(255,255,255,0.08)"
+    surface = "rgba(255,255,255,0.92)" if is_light else "rgba(255,255,255,0.03)"
+    surface_soft = "rgba(255,255,255,0.70)" if is_light else "rgba(255,255,255,0.04)"
+    topbar = "rgba(255,255,255,0.88)" if is_light else "rgba(255,255,255,0.03)"
+    shadow = "0 10px 24px rgba(15,23,42,0.08)" if is_light else "0 8px 24px rgba(0,0,0,0.12)"
+    workspace_bg = "linear-gradient(180deg, rgba(255,255,255,0.98), rgba(247,249,252,0.98))" if is_light else "linear-gradient(180deg, rgba(255,255,255,0.025), rgba(255,255,255,0.015))"
+    hero_bg = (
+        "radial-gradient(circle at 10% 20%, rgba(64,123,255,0.12), transparent 32%),"
+        "radial-gradient(circle at 90% 10%, rgba(17,191,255,0.10), transparent 30%),"
+        "linear-gradient(135deg, rgba(233,240,255,0.98), rgba(247,250,255,0.98))"
+        if is_light else
+        "radial-gradient(circle at 10% 20%, rgba(64,123,255,0.18), transparent 30%),"
+        "radial-gradient(circle at 90% 10%, rgba(17,191,255,0.14), transparent 28%),"
+        "linear-gradient(135deg, rgba(20,31,62,0.90), rgba(8,12,20,0.96))"
+    )
+    preview_bg = "#FFFFFF" if is_light else "#0C1018"
+    badge_bg = "rgba(79,131,255,0.12)" if is_light else "rgba(79,131,255,0.18)"
+    badge_color = "#1F3B73" if is_light else "#DCE7FF"
     st.markdown(
-        """
+        f"""
         <style>
-        .block-container {padding-top: 1rem; padding-bottom: 2rem; max-width: 1600px;}
-        [data-testid="stSidebar"] {
-            background: linear-gradient(180deg, rgba(15,19,29,0.98), rgba(11,15,24,0.98));
-            border-right: 1px solid rgba(255,255,255,0.06);
-        }
-        .sy-topbar {
+        .stApp {{ background: {bg_main}; color: {text_color}; }}
+        .block-container {{padding-top: 1rem; padding-bottom: 2rem; max-width: 1600px;}}
+        [data-testid="stSidebar"] {{
+            background: linear-gradient(180deg, {sidebar_bg_1}, {sidebar_bg_2});
+            border-right: 1px solid {border};
+        }}
+        [data-testid="stSidebar"] * {{ color: {text_color}; }}
+        .sy-topbar {{
             display:flex; justify-content:space-between; align-items:center;
-            padding: 0.9rem 1rem; border:1px solid rgba(255,255,255,0.08);
-            border-radius:18px; background:rgba(255,255,255,0.03); margin-bottom:0.9rem;
-        }
-        .sy-topbar-title {font-size:0.9rem; text-transform:uppercase; letter-spacing:0.12em; opacity:0.72;}
-        .sy-topbar-meta {font-size:0.9rem; opacity:0.82;}
-        .sy-hero {
-            padding: 1.35rem 1.35rem; border: 1px solid rgba(255,255,255,0.08);
-            border-radius: 22px;
-            background:
-                radial-gradient(circle at 10% 20%, rgba(64,123,255,0.18), transparent 30%),
-                radial-gradient(circle at 90% 10%, rgba(17,191,255,0.14), transparent 28%),
-                linear-gradient(135deg, rgba(20,31,62,0.90), rgba(8,12,20,0.96));
-            margin-bottom: 1rem;
-            box-shadow: 0 12px 40px rgba(0,0,0,0.28);
-        }
-        .sy-hero-grid {display:grid; grid-template-columns: 1.4fr 0.9fr; gap:1rem; align-items:stretch;}
-        .sy-hero-stat {
-            border:1px solid rgba(255,255,255,0.08); border-radius:16px; padding:0.9rem 1rem;
-            background:rgba(255,255,255,0.04); min-height:78px;
-        }
-        .sy-step, .sy-card, .sy-mini-card, .sy-upload-item, .sy-sidepanel {
-            border: 1px solid rgba(255,255,255,0.08);
-            background: rgba(255,255,255,0.03);
-            box-shadow: 0 8px 24px rgba(0,0,0,0.12);
-        }
-        .sy-step { border-radius: 18px; padding: 0.95rem 1rem; min-height: 106px; }
-        .sy-card { border-radius: 20px; padding: 1rem 1rem 0.95rem 1rem; margin-bottom: 0.9rem; }
-        .sy-mini-card { border-radius: 18px; padding: 0.95rem 1rem; min-height: 158px; }
-        .sy-sidepanel {border-radius:20px; padding:1rem 1rem; position:sticky; top:1rem;}
-        .sy-panel-title {font-size:0.86rem; text-transform:uppercase; letter-spacing:0.1em; opacity:0.70; margin-bottom:0.4rem;}
-        .sy-workspace {
-            border:1px solid rgba(255,255,255,0.08); border-radius:22px;
-            background: linear-gradient(180deg, rgba(255,255,255,0.025), rgba(255,255,255,0.015));
-            padding:1rem; box-shadow:0 10px 26px rgba(0,0,0,0.18);
-        }
-        .sy-workspace-header {display:flex; justify-content:space-between; align-items:center; margin-bottom:0.8rem;}
-        .sy-workspace-title {font-size:1.05rem; font-weight:700;}
-        .sy-workspace-meta {font-size:0.88rem; opacity:0.74;}
-        .sy-preview-shell {border:1px solid rgba(255,255,255,0.08); border-radius:18px; overflow:hidden; background:#0C1018;}
-        .sy-preview-topbar {
-            display:flex; justify-content:space-between; align-items:center;
-            padding:0.8rem 0.95rem; border-bottom:1px solid rgba(255,255,255,0.08);
-            background:rgba(255,255,255,0.03);
-        }
-        .sy-preview-title {font-weight:700; font-size:0.98rem;}
-        .sy-preview-meta {font-size:0.84rem; opacity:0.72; margin-top:0.1rem;}
-        .sy-preview-badge {
-            padding:0.28rem 0.55rem; border-radius:999px; font-size:0.76rem; font-weight:700;
-            background:rgba(79,131,255,0.18); color:#DCE7FF; border:1px solid rgba(79,131,255,0.35);
-        }
-        .sy-preview-frame {border:0; background:white;}
-        .sy-empty-preview {
-            min-height:280px; display:flex; align-items:center; justify-content:center; text-align:center;
-            border:1px dashed rgba(255,255,255,0.12); border-radius:18px; opacity:0.78;
-            background:rgba(255,255,255,0.02); padding:1rem;
-        }
-        .sy-kpi { font-size: 0.76rem; text-transform: uppercase; letter-spacing: 0.08em; opacity: 0.72; margin-bottom: 0.35rem; }
-        .sy-upload-item { border-radius: 14px; padding: 0.75rem 0.9rem; margin-bottom: 0.55rem; }
-        .sy-muted { opacity: 0.78; font-size: 0.93rem; }
-        .sy-data-row {display:flex; justify-content:space-between; gap:0.8rem; padding:0.48rem 0; border-bottom:1px solid rgba(255,255,255,0.06);}
-        .sy-data-row:last-child {border-bottom:0;}
-        .sy-data-row span:first-child {opacity:0.72;}
-        .sy-quicktag {
-            display:inline-flex; align-items:center; gap:0.4rem; padding:0.35rem 0.6rem;
-            border-radius:999px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.06);
-            font-size:0.82rem; margin:0.12rem 0.18rem 0.12rem 0;
-        }
-        div[data-testid="stMetric"] {
-            background: rgba(255,255,255,0.03);
-            border: 1px solid rgba(255,255,255,0.08);
-            padding: 0.75rem 0.9rem;
-            border-radius: 16px;
-        }
-        .stDownloadButton button, .stButton button { border-radius: 14px; }
-        .stTabs [data-baseweb="tab-list"] {gap:0.4rem;}
-        .stTabs [data-baseweb="tab"] {
-            border-radius:12px; padding:0.5rem 0.9rem; background:rgba(255,255,255,0.03);
-            border:1px solid rgba(255,255,255,0.06);
-        }
+            padding: 0.9rem 1rem; border:1px solid {border};
+            border-radius:18px; background:{topbar}; margin-bottom:0.9rem; box-shadow:{shadow};
+        }}
+        .sy-topbar-title {{font-size:0.9rem; text-transform:uppercase; letter-spacing:0.12em; opacity:0.72;}}
+        .sy-topbar-meta {{font-size:0.9rem; opacity:0.82;}}
+        .sy-hero {{
+            padding: 1.35rem 1.35rem; border: 1px solid {border}; border-radius: 22px;
+            background:{hero_bg}; margin-bottom: 1rem; box-shadow: {shadow};
+        }}
+        .sy-hero-grid {{display:grid; grid-template-columns: 1.4fr 0.9fr; gap:1rem; align-items:stretch;}}
+        .sy-hero-stat {{border:1px solid {border}; border-radius:16px; padding:0.9rem 1rem; background:{surface_soft}; min-height:78px;}}
+        .sy-step, .sy-card, .sy-mini-card, .sy-upload-item, .sy-sidepanel {{border: 1px solid {border}; background: {surface}; box-shadow: {shadow};}}
+        .sy-step {{ border-radius: 18px; padding: 0.95rem 1rem; min-height: 106px; }}
+        .sy-card {{ border-radius: 20px; padding: 1rem 1rem 0.95rem 1rem; margin-bottom: 0.9rem; }}
+        .sy-mini-card {{ border-radius: 18px; padding: 0.95rem 1rem; min-height: 158px; }}
+        .sy-sidepanel {{border-radius:20px; padding:1rem 1rem; position:sticky; top:1rem;}}
+        .sy-panel-title {{font-size:0.86rem; text-transform:uppercase; letter-spacing:0.1em; opacity:0.70; margin-bottom:0.4rem;}}
+        .sy-workspace {{border:1px solid {border}; border-radius:22px; background:{workspace_bg}; padding:1rem; box-shadow:{shadow};}}
+        .sy-workspace-header {{display:flex; justify-content:space-between; align-items:center; margin-bottom:0.8rem;}}
+        .sy-workspace-title {{font-size:1.05rem; font-weight:700;}}
+        .sy-workspace-meta {{font-size:0.88rem; opacity:0.74;}}
+        .sy-preview-shell {{border:1px solid {border}; border-radius:18px; overflow:hidden; background:{preview_bg};}}
+        .sy-preview-topbar {{display:flex; justify-content:space-between; align-items:center; padding:0.8rem 0.95rem; border-bottom:1px solid {border}; background:{surface};}}
+        .sy-preview-title {{font-weight:700; font-size:0.98rem; color:{text_color};}}
+        .sy-preview-meta {{font-size:0.84rem; opacity:0.72; margin-top:0.1rem; color:{text_color};}}
+        .sy-preview-badge {{padding:0.28rem 0.55rem; border-radius:999px; font-size:0.76rem; font-weight:700; background:{badge_bg}; color:{badge_color}; border:1px solid {border};}}
+        .sy-preview-frame {{border:0; background:white;}}
+        .sy-empty-preview {{min-height:280px; display:flex; align-items:center; justify-content:center; text-align:center; border:1px dashed {border}; border-radius:18px; opacity:0.78; background:{surface}; padding:1rem; color:{text_color};}}
+        .sy-kpi {{ font-size: 0.76rem; text-transform: uppercase; letter-spacing: 0.08em; opacity: 0.72; margin-bottom: 0.35rem; }}
+        .sy-upload-item {{ border-radius: 14px; padding: 0.75rem 0.9rem; margin-bottom: 0.55rem; }}
+        .sy-muted {{ color: {muted}; font-size: 0.93rem; }}
+        .sy-data-row {{display:flex; justify-content:space-between; gap:0.8rem; padding:0.48rem 0; border-bottom:1px solid {border};}}
+        .sy-data-row:last-child {{border-bottom:0;}}
+        .sy-data-row span:first-child {{opacity:0.72;}}
+        .sy-quicktag {{display:inline-flex; align-items:center; gap:0.4rem; padding:0.35rem 0.6rem; border-radius:999px; background:{surface_soft}; border:1px solid {border}; font-size:0.82rem; margin:0.12rem 0.18rem 0.12rem 0;}}
+        div[data-testid="stMetric"] {{background: {surface}; border: 1px solid {border}; padding: 0.75rem 0.9rem; border-radius: 16px;}}
+        .stDownloadButton button, .stButton button {{ border-radius: 14px; }}
+        .stTabs [data-baseweb="tab-list"] {{gap:0.4rem;}}
+        .stTabs [data-baseweb="tab"] {{border-radius:12px; padding:0.5rem 0.9rem; background:{surface}; border:1px solid {border};}}
+        .stSelectbox label, .stTextInput label, .stTextArea label, .stNumberInput label, .stDateInput label {{ color: {text_color} !important; }}
         </style>
         """,
         unsafe_allow_html=True,
     )
-
 
 def smooth_progress(progress_bar, status_text, start, end, message, duration=0.8):
     steps = max(1, end - start)
@@ -938,7 +925,7 @@ def extract_summary_values(sections: Dict[str, str], module_name: str):
             "risk": "Not shown",
             "route": top_summary_rows.get("APPLICATION TYPE", top_summary_rows.get("LIKELY ROUTE", "Unknown")),
             "authority": authority_value,
-            "probability": "Not shown",
+            "probability": top_summary_rows.get("PLANNING ROUTE CONFIDENCE SCORE", "Not shown"),
         }
     return {
         "risk": top_summary_rows.get("OVERALL RISK RATING", "Unknown"),
@@ -948,115 +935,12 @@ def extract_summary_values(sections: Dict[str, str], module_name: str):
     }
 
 
-def inject_custom_css():
-    st.markdown(
-        """
-        <style>
-        .block-container {padding-top: 1rem; padding-bottom: 2rem; max-width: 1600px;}
-        [data-testid="stSidebar"] {
-            background: linear-gradient(180deg, rgba(15,19,29,0.98), rgba(11,15,24,0.98));
-            border-right: 1px solid rgba(255,255,255,0.06);
-        }
-        .sy-topbar {
-            display:flex; justify-content:space-between; align-items:center;
-            padding: 0.9rem 1rem; border:1px solid rgba(255,255,255,0.08);
-            border-radius:18px; background:rgba(255,255,255,0.03); margin-bottom:0.9rem;
-        }
-        .sy-topbar-title {font-size:0.9rem; text-transform:uppercase; letter-spacing:0.12em; opacity:0.72;}
-        .sy-topbar-meta {font-size:0.9rem; opacity:0.82;}
-        .sy-hero {
-            padding: 1.35rem 1.35rem; border: 1px solid rgba(255,255,255,0.08);
-            border-radius: 22px;
-            background:
-                radial-gradient(circle at 10% 20%, rgba(64,123,255,0.18), transparent 30%),
-                radial-gradient(circle at 90% 10%, rgba(17,191,255,0.14), transparent 28%),
-                linear-gradient(135deg, rgba(20,31,62,0.90), rgba(8,12,20,0.96));
-            margin-bottom: 1rem;
-            box-shadow: 0 12px 40px rgba(0,0,0,0.28);
-        }
-        .sy-hero-grid {display:grid; grid-template-columns: 1.4fr 0.9fr; gap:1rem; align-items:stretch;}
-        .sy-hero-stat {
-            border:1px solid rgba(255,255,255,0.08); border-radius:16px; padding:0.9rem 1rem;
-            background:rgba(255,255,255,0.04); min-height:78px;
-        }
-        .sy-step, .sy-card, .sy-mini-card, .sy-upload-item, .sy-sidepanel {
-            border: 1px solid rgba(255,255,255,0.08);
-            background: rgba(255,255,255,0.03);
-            box-shadow: 0 8px 24px rgba(0,0,0,0.12);
-        }
-        .sy-step { border-radius: 18px; padding: 0.95rem 1rem; min-height: 106px; }
-        .sy-card { border-radius: 20px; padding: 1rem 1rem 0.95rem 1rem; margin-bottom: 0.9rem; }
-        .sy-mini-card { border-radius: 18px; padding: 0.95rem 1rem; min-height: 158px; }
-        .sy-sidepanel {border-radius:20px; padding:1rem 1rem; position:sticky; top:1rem;}
-        .sy-panel-title {font-size:0.86rem; text-transform:uppercase; letter-spacing:0.1em; opacity:0.70; margin-bottom:0.4rem;}
-        .sy-workspace {
-            border:1px solid rgba(255,255,255,0.08); border-radius:22px;
-            background: linear-gradient(180deg, rgba(255,255,255,0.025), rgba(255,255,255,0.015));
-            padding:1rem; box-shadow:0 10px 26px rgba(0,0,0,0.18);
-        }
-        .sy-workspace-header {display:flex; justify-content:space-between; align-items:center; margin-bottom:0.8rem;}
-        .sy-workspace-title {font-size:1.05rem; font-weight:700;}
-        .sy-workspace-meta {font-size:0.88rem; opacity:0.74;}
-        .sy-preview-shell {border:1px solid rgba(255,255,255,0.08); border-radius:18px; overflow:hidden; background:#0C1018;}
-        .sy-preview-topbar {
-            display:flex; justify-content:space-between; align-items:center;
-            padding:0.8rem 0.95rem; border-bottom:1px solid rgba(255,255,255,0.08);
-            background:rgba(255,255,255,0.03);
-        }
-        .sy-preview-title {font-weight:700; font-size:0.98rem;}
-        .sy-preview-meta {font-size:0.84rem; opacity:0.72; margin-top:0.1rem;}
-        .sy-preview-badge {
-            padding:0.28rem 0.55rem; border-radius:999px; font-size:0.76rem; font-weight:700;
-            background:rgba(79,131,255,0.18); color:#DCE7FF; border:1px solid rgba(79,131,255,0.35);
-        }
-        .sy-preview-frame {border:0; background:white;}
-        .sy-empty-preview {
-            min-height:280px; display:flex; align-items:center; justify-content:center; text-align:center;
-            border:1px dashed rgba(255,255,255,0.12); border-radius:18px; opacity:0.78;
-            background:rgba(255,255,255,0.02); padding:1rem;
-        }
-        .sy-kpi { font-size: 0.76rem; text-transform: uppercase; letter-spacing: 0.08em; opacity: 0.72; margin-bottom: 0.35rem; }
-        .sy-upload-item { border-radius: 14px; padding: 0.75rem 0.9rem; margin-bottom: 0.55rem; }
-        .sy-muted { opacity: 0.78; font-size: 0.93rem; }
-        .sy-data-row {display:flex; justify-content:space-between; gap:0.8rem; padding:0.48rem 0; border-bottom:1px solid rgba(255,255,255,0.06);}
-        .sy-data-row:last-child {border-bottom:0;}
-        .sy-data-row span:first-child {opacity:0.72;}
-        .sy-quicktag {
-            display:inline-flex; align-items:center; gap:0.4rem; padding:0.35rem 0.6rem;
-            border-radius:999px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.06);
-            font-size:0.82rem; margin:0.12rem 0.18rem 0.12rem 0;
-        }
-        div[data-testid="stMetric"] {
-            background: rgba(255,255,255,0.03);
-            border: 1px solid rgba(255,255,255,0.08);
-            padding: 0.75rem 0.9rem;
-            border-radius: 16px;
-        }
-        .stDownloadButton button, .stButton button { border-radius: 14px; }
-        .stTabs [data-baseweb="tab-list"] {gap:0.4rem;}
-        .stTabs [data-baseweb="tab"] {
-            border-radius:12px; padding:0.5rem 0.9rem; background:rgba(255,255,255,0.03);
-            border:1px solid rgba(255,255,255,0.06);
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
-def render_kpi_cards(sections: Dict[str, str], report_id: str, module_name: str):
-    values = extract_summary_values(sections, module_name)
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Report ID", report_id)
-    if module_name == "Planning Review":
-        c2.metric("Application Type", values["route"])
-        c3.metric("Local Authority", values["authority"])
-        c4.metric("Status", "Ready to submit" if "READY TO SUBMIT" in sections.get("SUBMISSION READINESS", "").upper() else "Review required")
-    else:
-        c2.metric("Risk Rating", values["risk"])
-        c3.metric("Submission Status", values["route"])
-        c4.metric("Review Confidence", values["authority"])
-
+def detect_local_authority_for_display(project_address: str, proposal_summary: str, uploaded_files=None) -> str:
+    combined_text = proposal_summary or ""
+    if uploaded_files:
+        names = " ".join(f.name for f in uploaded_files if getattr(f, "name", None))
+        combined_text = f"{combined_text}\n{names}"
+    return pdf_summary.detect_local_authority(project_address or "", combined_text or "")
 
 def render_at_a_glance(sections: Dict[str, str], report_id: str, module_name: str):
     config = MODULE_CONFIG[module_name]
@@ -1144,7 +1028,7 @@ def build_simple_word_doc(title: str, body_text: str) -> BytesIO:
 
 
 st.set_page_config(page_title="ArchLens AI", layout="wide")
-inject_custom_css()
+inject_custom_css(st.session_state.get("ui_theme_mode", "Dark"))
 
 st.markdown(
     f"""
@@ -1186,6 +1070,8 @@ with step3:
 
 with st.sidebar:
     st.header("Project Setup")
+    theme_mode = st.selectbox("UI Theme", ["Dark", "Light"], index=0 if st.session_state.get("ui_theme_mode", "Dark") == "Dark" else 1)
+    st.session_state["ui_theme_mode"] = theme_mode
     review_module = st.selectbox(
         "Review Module",
         ["Building Regulations Review", "Planning Review"],
@@ -1227,7 +1113,7 @@ with st.sidebar:
 
     review_mode = st.selectbox("Report Mode", ["Architect / Professional", "Homeowner Summary"])
     project_address = st.text_input("Project Address")
-    local_authority = ""
+    local_authority = detect_local_authority_for_display(project_address, proposal_summary)
 
     if review_mode != "Homeowner Summary":
         practice_name = st.text_input("Practice / Company Name (optional)")
@@ -1259,7 +1145,7 @@ with setup_tab:
         st.write(f"Project type: {', '.join(project_types) if project_types else 'Not stated'}")
         if review_module == "Planning Review":
             st.write(f"Property type: {property_type or 'Not stated'}")
-            st.write("Local authority: Auto-detected from the address and drawing pack")
+            st.write(f"Local authority: {local_authority}")
         st.write(f"Project address: {project_address or 'Not provided'}")
         st.write(f"Proposal description: {proposal_summary or 'Not provided'}")
         st.write(f"Client: {client_name or 'Not provided'}")
@@ -1267,12 +1153,12 @@ with setup_tab:
             st.write(f"Practice / Company: {practice_name or 'Not provided'}")
     with c2:
         if review_module == "Planning Review":
-            st.info("Use this module for PD checks, prior approval, full planning fallback risk, planning approval probability, and planning statement drafting.")
+            st.info("Use this module for officer-style reasoning, street precedent review, proposal recognition, PD / prior approval / full planning route review, route confidence scoring, and planning statement drafting.")
         else:
             st.info("Use this module for technical Building Regulations review including plans, sections, details, specifications, and structural sheets.")
 
 with upload_tab:
-    st.markdown('<div class="sy-card"><h3 style="margin-top:0;">Drawing Workspace</h3><div class="sy-muted">Review the uploaded drawing pack inside a more visual architect-style workspace. The centre panel focuses on the drawing set, while the side panel keeps the project context and live review controls visible.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="sy-card"><h3 style="margin-top:0;">Drawing Workspace</h3><div class="sy-muted">Review the uploaded drawing pack inside a more visual architect-style workspace. The centre panel focuses on the drawing set, while the side panel keeps the project context and live review controls visible. Switch between dark and light mode from the sidebar.</div></div>', unsafe_allow_html=True)
 
     uploaded_file = st.file_uploader(
         "Upload Drawing PDF",
@@ -1314,6 +1200,7 @@ with upload_tab:
         st.markdown(f'<div class="sy-data-row"><span>Project type</span><strong>{", ".join(project_types) if project_types else "Not stated"}</strong></div>', unsafe_allow_html=True)
         if review_module == "Planning Review":
             st.markdown(f'<div class="sy-data-row"><span>Property type</span><strong>{property_type or "Not stated"}</strong></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="sy-data-row"><span>Local authority</span><strong>{local_authority or "Not clearly identified"}</strong></div>', unsafe_allow_html=True)
         st.markdown(f'<div class="sy-data-row"><span>Project address</span><strong>{project_address or "Not provided"}</strong></div>', unsafe_allow_html=True)
         st.markdown(f'<div class="sy-data-row"><span>Client</span><strong>{client_name or "Not provided"}</strong></div>', unsafe_allow_html=True)
         st.markdown("")
@@ -1497,7 +1384,11 @@ with report_tab:
             st.markdown(f'<div class="sy-data-row"><span>Report ID</span><strong>{report_id}</strong></div>', unsafe_allow_html=True)
             st.markdown(f'<div class="sy-data-row"><span>Review module</span><strong>{review_module}</strong></div>', unsafe_allow_html=True)
             st.markdown(f'<div class="sy-data-row"><span>Application / status</span><strong>{values["route"]}</strong></div>', unsafe_allow_html=True)
-            st.markdown(f'<div class="sy-data-row"><span>Authority / confidence</span><strong>{values["authority"]}</strong></div>', unsafe_allow_html=True)
+            if review_module == "Planning Review":
+                st.markdown(f'<div class="sy-data-row"><span>Local authority</span><strong>{values["authority"]}</strong></div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="sy-data-row"><span>Route confidence</span><strong>{values["probability"]}</strong></div>', unsafe_allow_html=True)
+            else:
+                st.markdown(f'<div class="sy-data-row"><span>Authority / confidence</span><strong>{values["authority"]}</strong></div>', unsafe_allow_html=True)
             st.markdown(f'<div class="sy-data-row"><span>Submission position</span><strong>{"Ready to submit" if "READY TO SUBMIT" in sections.get(config["readiness_key"], "").upper() else "Review required"}</strong></div>', unsafe_allow_html=True)
             st.markdown("")
             st.markdown('<div class="sy-panel-title">Quick Actions</div>', unsafe_allow_html=True)

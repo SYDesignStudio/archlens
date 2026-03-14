@@ -225,6 +225,7 @@ def detect_local_authority(address: str = "", text: str = "") -> str:
         "Richmond upon Thames": ["richmond", "twickenham", "isleworth", "tw1", "tw2", "tw10", "tw11"],
         "Brent": ["brent", "wembley", "harlesden", "nw10", "ha9"],
         "Barnet": ["barnet", "edgware", "n20", "en4", "nw7"],
+        "Enfield": ["enfield", "n13", "n14", "en1", "en2", "en3", "en4", "en8", "berkshire gardens"],
         "Slough": ["slough", "sl1", "sl2", "sl3"],
         "Reading": ["reading", "rg1", "rg2", "rg30", "rg31"],
         "Surrey Heath": ["surrey heath", "camberley", "gu15", "gu16"],
@@ -276,15 +277,17 @@ def build_project_summary_from_inputs(project_types_text: str, proposal_summary_
         sentence += "."
     return sentence
 
+
 def infer_application_type(project_types_text: str, proposal_summary_text: str, property_type_text: str) -> str:
     combined = f"{project_types_text} {proposal_summary_text} {property_type_text}".lower()
-    if "ground floor rear extension" in combined and property_type_text.lower() not in {"flat", "maisonette"}:
-        return "PRIOR APPROVAL"
     if property_type_text.lower() in {"flat", "maisonette"}:
         return "FULL PLANNING"
-    if "loft" in combined or "first floor" in combined or "conversion" in combined:
+    if "ground floor rear extension" in combined and not any(term in combined for term in ["side extension", "wraparound", "first floor", "loft", "dormer", "gable"]):
+        return "PRIOR APPROVAL"
+    if any(term in combined for term in ["loft", "dormer", "gable", "first floor", "conversion", "side extension", "wraparound", "rooflight", "roof light"]):
         return "FULL PLANNING"
     return "FULL PLANNING"
+
 
 def infer_submission_readiness_from_context(
     application_type: str,
@@ -313,6 +316,96 @@ def infer_submission_readiness_from_context(
         "LIKELY READY WITH MINOR AMENDMENTS",
         "Initial AI assessment based on drawing pack completeness and clarity.",
     )
+
+
+
+
+def detect_proposal_features(project_types_text: str, proposal_summary_text: str, text: str, page_summary: str) -> Dict[str, bool]:
+    combined = f"{project_types_text}\n{proposal_summary_text}\n{text}\n{page_summary}".lower()
+    return {
+        "gable": any(term in combined for term in ["gable", "hip to gable", "side gable"]),
+        "rear_dormer": any(term in combined for term in ["rear dormer", "dormer", "rear roof enlargement"]),
+        "front_rooflights": any(term in combined for term in ["front rooflight", "front rooflights", "rooflight", "rooflights"]),
+        "single_storey_rear_extension": "ground floor rear extension" in combined or "single-storey rear extension" in combined or "single storey rear extension" in combined,
+        "first_floor_extension": "first floor" in combined,
+        "side_extension": "side extension" in combined,
+        "wraparound": "wraparound" in combined or "wrap around" in combined,
+        "loft_extension": "loft extension" in combined or "loft conversion" in combined or "rear dormer" in combined or "dormer" in combined,
+        "flat_or_maisonette": any(term in combined for term in ["flat", "maisonette"]),
+    }
+
+
+def build_detected_proposal_label(features: Dict[str, bool], fallback_project_types: str) -> str:
+    labels = []
+    if features.get("gable"):
+        labels.append("side gable roof extension")
+    if features.get("rear_dormer"):
+        labels.append("rear dormer")
+    if features.get("front_rooflights"):
+        labels.append("front rooflights")
+    if features.get("single_storey_rear_extension"):
+        labels.append("single-storey rear extension")
+    if features.get("first_floor_extension"):
+        labels.append("first-floor extension")
+    if features.get("side_extension") and "side gable roof extension" not in labels:
+        labels.append("side extension")
+    if features.get("wraparound"):
+        labels.append("wraparound form")
+    if not labels:
+        return fallback_project_types or "residential alterations"
+    return ", ".join(labels)
+
+
+def detect_street_precedent_signal(text: str, page_summary: str) -> str:
+    combined = f"{text}\n{page_summary}".lower()
+    precedent_terms = [
+        "existing 3d", "proposed 3d", "street scene", "front elevation", "rear elevation",
+        "terraced", "end-terraced", "end terrace", "mid-terrace", "mid terrace",
+        "similar roof extensions", "similar dormers", "surrounding area", "street scene"
+    ]
+    score = sum(1 for term in precedent_terms if term in combined)
+    if score >= 5:
+        return "STRONG"
+    if score >= 3:
+        return "MODERATE"
+    return "LIMITED"
+
+
+def calculate_planning_route_confidence_score(
+    application_type: str,
+    project_types_text: str,
+    proposal_summary_text: str,
+    property_type_text: str,
+    text: str,
+    page_summary: str,
+) -> int:
+    combined = f"{project_types_text}\n{proposal_summary_text}\n{property_type_text}\n{text}\n{page_summary}".lower()
+    score = 52
+    if application_type in {"PRIOR APPROVAL", "FULL PLANNING"}:
+        score += 8
+    if "location plan" in combined:
+        score += 5
+    if "block plan" in combined:
+        score += 5
+    if "site plan" in combined:
+        score += 4
+    if "proposed plans" in combined or "proposed plan" in combined:
+        score += 6
+    if "proposed elevations" in combined or "proposed elevation" in combined:
+        score += 6
+    if "proposed sections" in combined or "proposed section" in combined:
+        score += 5
+    if "3d" in combined or "isometric" in combined:
+        score += 3
+    if any(term in combined for term in ["ridge", "eaves", "rooflights", "dormer", "gable"]):
+        score += 4
+    if property_type_text.lower() in {"terraced house", "semi-detached house", "detached house", "end of terrace house"}:
+        score += 3
+    if "not clearly identified" in combined:
+        score -= 8
+    if "conservation area" in combined or "article 4" in combined:
+        score -= 4
+    return max(35, min(96, score))
 
 
 def analyze_image_batch(image_paths: List[str], text: str, checks: List[str], review_mode: str) -> str:
@@ -701,8 +794,14 @@ def analyze_planning_pdf(
         else "Write in plain English suitable for a homeowner, keep the officer-style reasoning structure, and frame the output as a preliminary planning feasibility report rather than a formal planning decision."
     )
 
-    project_summary_value = build_project_summary_from_inputs(project_types_text, proposal_summary_text, property_type_text)
+    proposal_features = detect_proposal_features(project_types_text, proposal_summary_text, text, page_summary)
+    detected_proposal_label = build_detected_proposal_label(proposal_features, project_types_text)
+    project_summary_value = build_project_summary_from_inputs(detected_proposal_label, proposal_summary_text, property_type_text)
     application_type_value = infer_application_type(project_types_text, proposal_summary_text, property_type_text)
+    route_confidence_score = calculate_planning_route_confidence_score(
+        application_type_value, project_types_text, proposal_summary_text, property_type_text, text, page_summary
+    )
+    street_precedent_signal = detect_street_precedent_signal(text, page_summary)
     readiness_status, readiness_reason = infer_submission_readiness_from_context(
         application_type_value, project_types_text, proposal_summary_text, text, page_summary
     )
@@ -728,6 +827,11 @@ Local authority input:
 {authority_value}
 
 Planning reasoning requirements:
+- First identify the proposal accurately from the drawing pack and text. Recognise whether the scheme includes a side gable, rear dormer, rooflights, single-storey extension, side extension, wraparound form or mixed works.
+- If the drawings indicate a roof extension to side to form gable, rear dormer and front rooflights, describe that exact combination rather than only referring to a loft extension.
+- Include officer-style reasoning using concise delegated report language.
+- Include a short street precedent conclusion where the pack suggests similar roof forms, terraced context, repeated dormer patterns, 3D views or wider roofscape context.
+- Use the following detected inputs to stabilise the assessment: Detected proposal label = {detected_proposal_label}; Street precedent signal = {street_precedent_signal}; Planning route confidence score = {route_confidence_score}%.
 - If review mode is Homeowner Summary, the report should work as a preliminary planning feasibility review based on a simple sketch, basic PDF, or drawing pack.
 - Make clear that the output is an initial feasibility opinion only and does not guarantee planning approval.
 - Where the sketch or drawing lacks enough information, state the likely route and the main items that still need confirming.
@@ -778,6 +882,7 @@ TOP SUMMARY
 - Include only:
   - Project Summary: {project_summary_value}
   - Application Type: {application_type_value}
+  - Planning Route Confidence Score: {route_confidence_score}%
   - {authority_value}
 - Present 3 to 6 concise "Key Planning Considerations" bullets only.
 - Do not add informal caveat wording here.
@@ -799,11 +904,14 @@ PLANNING ASSESSMENT
 - Write this as a professional planning assessment, not as an AI or third-party reasoning section.
 - Use concise delegated-report style bullets or short paragraphs covering:
   - Site / proposal
+  - Design, scale and massing
+  - Street precedent / surrounding roofscape
   - Neighbouring amenity
   - Privacy / overlooking
   - Character and appearance
   - Fire safety where relevant
   - Overall planning balance
+- Where street precedent appears evident, say so directly in a professional way, for example: "Several similar roof extensions appear to exist within the surrounding terrace and, on balance, the proposal is likely to read as part of the established roofscape pattern."
 - Do not say a Fire Statement has been submitted unless it is actually evident in the pack.
 
 DRAWING-PACK INCONSISTENCIES
@@ -842,6 +950,7 @@ Detected pages:
         "TOP SUMMARY\n"
         f"Project Summary: {project_summary_value}\n"
         f"Application Type: {application_type_value}\n"
+        f"Planning Route Confidence Score: {route_confidence_score}%\n"
         f"{authority_value}\n"
     )
     output_text = re.sub(top_summary_pattern, top_summary_replacement, output_text, count=1)
@@ -861,6 +970,7 @@ Detected pages:
             "TOP SUMMARY\n"
             f"Project Summary: {project_summary_value}\n"
             f"Application Type: {application_type_value}\n"
+            f"Planning Route Confidence Score: {route_confidence_score}%\n"
             f"{authority_value}\n"
         )
         output_text = re.sub(top_summary_pattern, top_summary_replacement, output_text, count=1)
@@ -868,6 +978,48 @@ Detected pages:
         output_text = re.sub(r"^.*Planning Approval Probability:.*$\n?", "", output_text, flags=re.MULTILINE)
     gc.collect()
     return output_text
+
+
+
+
+def infer_planning_statement_mode(report_text: str, sections: Optional[Dict[str, str]] = None) -> str:
+    sections = sections or {}
+    combined = f"{report_text}\n{sections.get('PD / PRIOR APPROVAL / PLANNING ROUTE', '')}\n{sections.get('PROJECT CLASSIFICATION', '')}".lower()
+    if "prior approval" in combined:
+        return "prior_approval"
+    if any(term in combined for term in ["householder", "full planning", "planning permission", "gable", "dormer", "rooflights", "roof lights", "side extension", "wraparound", "first-floor"]):
+        return "householder"
+    if "pd may be available" in combined or "permitted development" in combined or "lawful development" in combined:
+        return "pd"
+    return "householder"
+
+
+def build_planning_statement_structure(statement_mode: str) -> str:
+    if statement_mode == "prior_approval":
+        return """Use this approved-style structure:
+1. Introduction
+2. Site Context and Surroundings
+3. Proposal Details
+4. Compliance with Prior Approval Requirements
+5. Design Considerations
+6. Neighbour Amenity
+7. Conclusion"""
+    if statement_mode == "pd":
+        return """Use this approved-style structure:
+1. Introduction
+2. Site Context and Surroundings
+3. Proposal Details
+4. Permitted Development Assessment
+5. Design Considerations
+6. Conclusion"""
+    return """Use this approved-style structure:
+1. Introduction
+2. Site Context and Surroundings
+3. Proposal Details
+4. Design and Character
+5. Neighbour Amenity
+6. Planning Policy Context
+7. Conclusion"""
 
 
 def generate_planning_statement(
@@ -879,10 +1031,18 @@ def generate_planning_statement(
     review_mode: str = "Architect / Professional",
 ) -> str:
     sections = sections or {}
+    statement_mode = infer_planning_statement_mode(report_text, sections)
+    structure_text = build_planning_statement_structure(statement_mode)
+    route_context = sections.get("PD / PRIOR APPROVAL / PLANNING ROUTE", "")
+    classification_context = sections.get("PROJECT CLASSIFICATION", "")
+    overview_context = sections.get("SITE AND PROPOSAL OVERVIEW", "")
+    policy_context = sections.get("LOCAL AUTHORITY CONTEXT", "")
+    readiness_context = sections.get("SUBMISSION READINESS", "")
+
     audience_hint = (
-        "Write a concise professional planning statement suitable for a householder planning or prior approval submission."
+        "Write a concise professional planning statement suitable for a UK submission prepared by an architectural practice."
         if review_mode == "Architect / Professional"
-        else "Write a plain-English homeowner-friendly planning statement draft."
+        else "Write a plain-English homeowner-friendly planning statement draft while keeping the structure professional."
     )
 
     prompt = f"""
@@ -893,31 +1053,46 @@ You are drafting a UK planning statement using an ArchLens AI planning review.
 Project Address: {project_address or 'Not provided'}
 Client: {client_name or 'Not provided'}
 Local Authority: {local_authority or 'Not provided'}
+Detected statement mode: {statement_mode}
 
 Use the report findings below to draft a practical planning statement.
-Keep it factual, clean, and application-ready.
+Keep it factual, clean, concise and application-ready.
 Do not invent measurements or policy references that are not supported by the report.
 Write like an approved planning statement prepared by a UK architectural practice.
-Keep the wording factual, concise, confident and submission-ready.
-If a rear extension is located to the rear of the property and is not visible from the public highway, explain clearly that it would not be visible from the public highway and would therefore not impact the character or appearance of the street scene.
-Where the route is PD / prior approval, explain that clearly.
-Where planning permission is likely required, explain that clearly.
-Do not mention fire statements unless they are genuinely relevant to the scheme.
 
-Use this approved-style structure and keep it concise:
+Critical route rules:
+- Always follow the detected statement mode.
+- If statement mode is "householder", write this as a Householder Planning Application statement and do not describe the proposal as an LDC, PD-only or Prior Approval scheme unless the report clearly says that forms part of the proposal.
+- If statement mode is "prior_approval", write this as a Prior Approval statement and explain the larger home extension route clearly.
+- If statement mode is "pd", write this as a Permitted Development / Lawful Development style statement only where the report clearly indicates that route.
+- If the report refers to side gable, rear dormer and front rooflights, describe that exact combination.
+- Always align the proposal description with the detected report content rather than generic wording.
 
-1. Introduction
-2. Site Context and Surroundings
-3. Proposal Details
-4. Compliance with Prior Approval Requirements
-5. Design Considerations
-6. Conclusion
+Design reasoning rules:
+- If a rear extension is located to the rear of the property and is not visible from the public highway, explain clearly that it would not be visible from the public highway and would therefore not impact the character or appearance of the street scene.
+- Use concise planning officer style reasoning where relevant.
+- Do not mention fire statements unless they are genuinely relevant to the scheme.
+- Keep the statement clean and submission-ready.
 
-Where relevant, use concise planning officer style reasoning such as:
-- The proposed extension is located to the rear of the property and would not be visible from the public highway. The development would therefore not impact the character or appearance of the street scene.
-- Given the single-storey scale of the development, the proposal is unlikely to result in unacceptable loss of light, outlook or overbearing impact to neighbouring occupiers.
+{structure_text}
 
-Report text:
+Use these report sections:
+PROJECT CLASSIFICATION:
+{classification_context}
+
+SITE AND PROPOSAL OVERVIEW:
+{overview_context}
+
+LOCAL AUTHORITY CONTEXT:
+{policy_context}
+
+ROUTE CONTEXT:
+{route_context}
+
+SUBMISSION READINESS:
+{readiness_context}
+
+Full report text:
 {report_text[:18000]}
 """
 
@@ -925,6 +1100,53 @@ Report text:
         response = _call_responses_api("gpt-5", prompt)
         return response.output_text
     except Exception:
+        if statement_mode == "prior_approval":
+            fallback_parts = [
+                "1. Introduction",
+                f"This Statement has been prepared in support of the proposed development at {project_address or 'the subject property'}. It should be read alongside the submitted drawings.",
+                "",
+                "2. Site Context and Surroundings",
+                sections.get("SITE AND PROPOSAL OVERVIEW", "The site forms part of an established residential setting."),
+                "",
+                "3. Proposal Details",
+                sections.get("PROJECT CLASSIFICATION", "The proposal should be read alongside the submitted drawings and supporting information."),
+                "",
+                "4. Compliance with Prior Approval Requirements",
+                sections.get("PD / PRIOR APPROVAL / PLANNING ROUTE", "The likely statutory route should be confirmed before submission."),
+                "",
+                "5. Design Considerations",
+                "The proposal has been assessed in the context of the host dwelling and surrounding built form, with regard to scale, visual impact and relationship to neighbouring properties.",
+                "",
+                "6. Neighbour Amenity",
+                "The proposal should be considered with regard to outlook, enclosure, daylight and relationship to adjoining occupiers.",
+                "",
+                "7. Conclusion",
+                sections.get("SUBMISSION READINESS", "Further confirmation of route and supporting information may be required prior to submission."),
+            ]
+            return "\n".join(fallback_parts)
+
+        if statement_mode == "pd":
+            fallback_parts = [
+                "1. Introduction",
+                f"This Statement has been prepared in support of the proposed development at {project_address or 'the subject property'}. It should be read alongside the submitted drawings.",
+                "",
+                "2. Site Context and Surroundings",
+                sections.get("SITE AND PROPOSAL OVERVIEW", "The site forms part of an established residential setting."),
+                "",
+                "3. Proposal Details",
+                sections.get("PROJECT CLASSIFICATION", "The proposal should be read alongside the submitted drawings and supporting information."),
+                "",
+                "4. Permitted Development Assessment",
+                sections.get("PD / PRIOR APPROVAL / PLANNING ROUTE", "The likely statutory route should be confirmed before submission."),
+                "",
+                "5. Design Considerations",
+                "The proposal should be assessed in the context of the host dwelling and surrounding built form, with regard to scale, materials and visual impact.",
+                "",
+                "6. Conclusion",
+                sections.get("SUBMISSION READINESS", "Further confirmation of route and supporting information may be required prior to submission."),
+            ]
+            return "\n".join(fallback_parts)
+
         fallback_parts = [
             "1. Introduction",
             f"This Planning Statement has been prepared in support of the proposed development at {project_address or 'the subject property'}. It should be read alongside the submitted drawings.",
@@ -935,13 +1157,16 @@ Report text:
             "3. Proposal Details",
             sections.get("PROJECT CLASSIFICATION", "The proposal should be read alongside the submitted drawings and supporting information."),
             "",
-            "4. Compliance with Prior Approval Requirements",
-            sections.get("PD / PRIOR APPROVAL / PLANNING ROUTE", "The likely statutory route should be confirmed before submission."),
+            "4. Design and Character",
+            "The proposal should be assessed in the context of the host dwelling and surrounding built form, with regard to scale, visual impact, roof form and relationship to the established pattern of development.",
             "",
-            "5. Design Considerations",
-            "The proposal should be assessed in the context of the host dwelling and surrounding built form, with regard to scale, materials, visual impact and relationship to neighbouring properties.",
+            "5. Neighbour Amenity",
+            "The proposal should be considered with regard to outlook, enclosure, daylight, privacy and relationship to adjoining occupiers.",
             "",
-            "6. Conclusion",
+            "6. Planning Policy Context",
+            sections.get("LOCAL AUTHORITY CONTEXT", "The proposal should be assessed against the relevant local and strategic planning policy framework."),
+            "",
+            "7. Conclusion",
             sections.get("SUBMISSION READINESS", "Further confirmation of route and supporting information may be required prior to submission."),
         ]
         return "\n".join(fallback_parts)
