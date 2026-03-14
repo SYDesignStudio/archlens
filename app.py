@@ -1,5 +1,6 @@
 
 import os
+import base64
 import gc
 import re
 import time
@@ -165,60 +166,91 @@ def inject_custom_css():
     st.markdown(
         """
         <style>
-        .block-container {padding-top: 1.2rem; padding-bottom: 2rem;}
+        .block-container {padding-top: 1rem; padding-bottom: 2rem; max-width: 1600px;}
+        [data-testid="stSidebar"] {
+            background: linear-gradient(180deg, rgba(15,19,29,0.98), rgba(11,15,24,0.98));
+            border-right: 1px solid rgba(255,255,255,0.06);
+        }
+        .sy-topbar {
+            display:flex; justify-content:space-between; align-items:center;
+            padding: 0.9rem 1rem; border:1px solid rgba(255,255,255,0.08);
+            border-radius:18px; background:rgba(255,255,255,0.03); margin-bottom:0.9rem;
+        }
+        .sy-topbar-title {font-size:0.9rem; text-transform:uppercase; letter-spacing:0.12em; opacity:0.72;}
+        .sy-topbar-meta {font-size:0.9rem; opacity:0.82;}
         .sy-hero {
-            padding: 1.2rem 1.25rem;
-            border: 1px solid rgba(255,255,255,0.08);
-            border-radius: 18px;
-            background: linear-gradient(135deg, rgba(31,59,115,0.22), rgba(10,14,23,0.85));
+            padding: 1.35rem 1.35rem; border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 22px;
+            background:
+                radial-gradient(circle at 10% 20%, rgba(64,123,255,0.18), transparent 30%),
+                radial-gradient(circle at 90% 10%, rgba(17,191,255,0.14), transparent 28%),
+                linear-gradient(135deg, rgba(20,31,62,0.90), rgba(8,12,20,0.96));
             margin-bottom: 1rem;
+            box-shadow: 0 12px 40px rgba(0,0,0,0.28);
         }
-        .sy-step {
+        .sy-hero-grid {display:grid; grid-template-columns: 1.4fr 0.9fr; gap:1rem; align-items:stretch;}
+        .sy-hero-stat {
+            border:1px solid rgba(255,255,255,0.08); border-radius:16px; padding:0.9rem 1rem;
+            background:rgba(255,255,255,0.04); min-height:78px;
+        }
+        .sy-step, .sy-card, .sy-mini-card, .sy-upload-item, .sy-sidepanel {
             border: 1px solid rgba(255,255,255,0.08);
-            border-radius: 16px;
-            padding: 0.85rem 1rem;
             background: rgba(255,255,255,0.03);
-            min-height: 92px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.12);
         }
-        .sy-card {
-            border: 1px solid rgba(255,255,255,0.08);
-            border-radius: 18px;
-            padding: 1rem 1rem 0.85rem 1rem;
-            background: rgba(255,255,255,0.03);
-            margin-bottom: 0.9rem;
+        .sy-step { border-radius: 18px; padding: 0.95rem 1rem; min-height: 106px; }
+        .sy-card { border-radius: 20px; padding: 1rem 1rem 0.95rem 1rem; margin-bottom: 0.9rem; }
+        .sy-mini-card { border-radius: 18px; padding: 0.95rem 1rem; min-height: 158px; }
+        .sy-sidepanel {border-radius:20px; padding:1rem 1rem; position:sticky; top:1rem;}
+        .sy-panel-title {font-size:0.86rem; text-transform:uppercase; letter-spacing:0.1em; opacity:0.70; margin-bottom:0.4rem;}
+        .sy-workspace {
+            border:1px solid rgba(255,255,255,0.08); border-radius:22px;
+            background: linear-gradient(180deg, rgba(255,255,255,0.025), rgba(255,255,255,0.015));
+            padding:1rem; box-shadow:0 10px 26px rgba(0,0,0,0.18);
         }
-        .sy-mini-card {
-            border: 1px solid rgba(255,255,255,0.08);
-            border-radius: 16px;
-            padding: 0.85rem 1rem;
-            background: rgba(255,255,255,0.03);
-            min-height: 146px;
+        .sy-workspace-header {display:flex; justify-content:space-between; align-items:center; margin-bottom:0.8rem;}
+        .sy-workspace-title {font-size:1.05rem; font-weight:700;}
+        .sy-workspace-meta {font-size:0.88rem; opacity:0.74;}
+        .sy-preview-shell {border:1px solid rgba(255,255,255,0.08); border-radius:18px; overflow:hidden; background:#0C1018;}
+        .sy-preview-topbar {
+            display:flex; justify-content:space-between; align-items:center;
+            padding:0.8rem 0.95rem; border-bottom:1px solid rgba(255,255,255,0.08);
+            background:rgba(255,255,255,0.03);
         }
-        .sy-kpi {
-            font-size: 0.78rem;
-            text-transform: uppercase;
-            letter-spacing: 0.06em;
-            opacity: 0.75;
-            margin-bottom: 0.35rem;
+        .sy-preview-title {font-weight:700; font-size:0.98rem;}
+        .sy-preview-meta {font-size:0.84rem; opacity:0.72; margin-top:0.1rem;}
+        .sy-preview-badge {
+            padding:0.28rem 0.55rem; border-radius:999px; font-size:0.76rem; font-weight:700;
+            background:rgba(79,131,255,0.18); color:#DCE7FF; border:1px solid rgba(79,131,255,0.35);
         }
-        .sy-kpi-value {
-            font-size: 1.02rem;
-            font-weight: 700;
-            line-height: 1.35;
+        .sy-preview-frame {border:0; background:white;}
+        .sy-empty-preview {
+            min-height:280px; display:flex; align-items:center; justify-content:center; text-align:center;
+            border:1px dashed rgba(255,255,255,0.12); border-radius:18px; opacity:0.78;
+            background:rgba(255,255,255,0.02); padding:1rem;
         }
-        .sy-upload-item {
-            border: 1px solid rgba(255,255,255,0.08);
-            border-radius: 14px;
-            padding: 0.65rem 0.8rem;
-            background: rgba(255,255,255,0.02);
-            margin-bottom: 0.5rem;
+        .sy-kpi { font-size: 0.76rem; text-transform: uppercase; letter-spacing: 0.08em; opacity: 0.72; margin-bottom: 0.35rem; }
+        .sy-upload-item { border-radius: 14px; padding: 0.75rem 0.9rem; margin-bottom: 0.55rem; }
+        .sy-muted { opacity: 0.78; font-size: 0.93rem; }
+        .sy-data-row {display:flex; justify-content:space-between; gap:0.8rem; padding:0.48rem 0; border-bottom:1px solid rgba(255,255,255,0.06);}
+        .sy-data-row:last-child {border-bottom:0;}
+        .sy-data-row span:first-child {opacity:0.72;}
+        .sy-quicktag {
+            display:inline-flex; align-items:center; gap:0.4rem; padding:0.35rem 0.6rem;
+            border-radius:999px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.06);
+            font-size:0.82rem; margin:0.12rem 0.18rem 0.12rem 0;
         }
-        .sy-muted {opacity: 0.78; font-size: 0.93rem;}
         div[data-testid="stMetric"] {
             background: rgba(255,255,255,0.03);
             border: 1px solid rgba(255,255,255,0.08);
             padding: 0.75rem 0.9rem;
             border-radius: 16px;
+        }
+        .stDownloadButton button, .stButton button { border-radius: 14px; }
+        .stTabs [data-baseweb="tab-list"] {gap:0.4rem;}
+        .stTabs [data-baseweb="tab"] {
+            border-radius:12px; padding:0.5rem 0.9rem; background:rgba(255,255,255,0.03);
+            border:1px solid rgba(255,255,255,0.06);
         }
         </style>
         """,
@@ -354,6 +386,31 @@ def get_pdf_page_count(pdf_path: str) -> int:
     finally:
         doc.close()
 
+
+def render_pdf_preview(uploaded_files):
+    if not uploaded_files:
+        st.markdown('<div class="sy-empty-preview">Upload a PDF to preview the drawing pack workspace.</div>', unsafe_allow_html=True)
+        return
+
+    selected_file = uploaded_files[-1]
+    try:
+        pdf_bytes = selected_file.getvalue()
+        pdf_b64 = base64.b64encode(pdf_bytes).decode("utf-8")
+        iframe = f'''
+        <div class="sy-preview-shell">
+            <div class="sy-preview-topbar">
+                <div>
+                    <div class="sy-preview-title">{selected_file.name}</div>
+                    <div class="sy-preview-meta">{round(selected_file.size / (1024 * 1024), 2)} MB • Live drawing preview</div>
+                </div>
+                <div class="sy-preview-badge">PDF</div>
+            </div>
+            <iframe src="data:application/pdf;base64,{pdf_b64}" width="100%" height="760" type="application/pdf" class="sy-preview-frame"></iframe>
+        </div>
+        '''
+        st.markdown(iframe, unsafe_allow_html=True)
+    except Exception:
+        st.markdown('<div class="sy-empty-preview">Preview not available for this file in the live browser view.</div>', unsafe_allow_html=True)
 
 def set_cell_shading(cell, fill):
     tc_pr = cell._tc.get_or_add_tcPr()
@@ -895,24 +952,80 @@ def inject_custom_css():
     st.markdown(
         """
         <style>
-        .block-container {padding-top: 1.2rem; padding-bottom: 2rem;}
-        .sy-hero {
-            padding: 1.2rem 1.25rem;
-            border: 1px solid rgba(255,255,255,0.08);
-            border-radius: 22px;
-            background: linear-gradient(135deg, rgba(31,59,115,0.24), rgba(8,11,18,0.92));
-            margin-bottom: 1rem;
+        .block-container {padding-top: 1rem; padding-bottom: 2rem; max-width: 1600px;}
+        [data-testid="stSidebar"] {
+            background: linear-gradient(180deg, rgba(15,19,29,0.98), rgba(11,15,24,0.98));
+            border-right: 1px solid rgba(255,255,255,0.06);
         }
-        .sy-step, .sy-card, .sy-mini-card, .sy-upload-item {
+        .sy-topbar {
+            display:flex; justify-content:space-between; align-items:center;
+            padding: 0.9rem 1rem; border:1px solid rgba(255,255,255,0.08);
+            border-radius:18px; background:rgba(255,255,255,0.03); margin-bottom:0.9rem;
+        }
+        .sy-topbar-title {font-size:0.9rem; text-transform:uppercase; letter-spacing:0.12em; opacity:0.72;}
+        .sy-topbar-meta {font-size:0.9rem; opacity:0.82;}
+        .sy-hero {
+            padding: 1.35rem 1.35rem; border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 22px;
+            background:
+                radial-gradient(circle at 10% 20%, rgba(64,123,255,0.18), transparent 30%),
+                radial-gradient(circle at 90% 10%, rgba(17,191,255,0.14), transparent 28%),
+                linear-gradient(135deg, rgba(20,31,62,0.90), rgba(8,12,20,0.96));
+            margin-bottom: 1rem;
+            box-shadow: 0 12px 40px rgba(0,0,0,0.28);
+        }
+        .sy-hero-grid {display:grid; grid-template-columns: 1.4fr 0.9fr; gap:1rem; align-items:stretch;}
+        .sy-hero-stat {
+            border:1px solid rgba(255,255,255,0.08); border-radius:16px; padding:0.9rem 1rem;
+            background:rgba(255,255,255,0.04); min-height:78px;
+        }
+        .sy-step, .sy-card, .sy-mini-card, .sy-upload-item, .sy-sidepanel {
             border: 1px solid rgba(255,255,255,0.08);
             background: rgba(255,255,255,0.03);
+            box-shadow: 0 8px 24px rgba(0,0,0,0.12);
         }
-        .sy-step { border-radius: 18px; padding: 0.9rem 1rem; min-height: 96px; }
-        .sy-card { border-radius: 20px; padding: 1rem 1rem 0.85rem 1rem; margin-bottom: 0.9rem; }
-        .sy-mini-card { border-radius: 16px; padding: 0.9rem 1rem; min-height: 148px; }
-        .sy-kpi { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.06em; opacity: 0.75; margin-bottom: 0.35rem; }
+        .sy-step { border-radius: 18px; padding: 0.95rem 1rem; min-height: 106px; }
+        .sy-card { border-radius: 20px; padding: 1rem 1rem 0.95rem 1rem; margin-bottom: 0.9rem; }
+        .sy-mini-card { border-radius: 18px; padding: 0.95rem 1rem; min-height: 158px; }
+        .sy-sidepanel {border-radius:20px; padding:1rem 1rem; position:sticky; top:1rem;}
+        .sy-panel-title {font-size:0.86rem; text-transform:uppercase; letter-spacing:0.1em; opacity:0.70; margin-bottom:0.4rem;}
+        .sy-workspace {
+            border:1px solid rgba(255,255,255,0.08); border-radius:22px;
+            background: linear-gradient(180deg, rgba(255,255,255,0.025), rgba(255,255,255,0.015));
+            padding:1rem; box-shadow:0 10px 26px rgba(0,0,0,0.18);
+        }
+        .sy-workspace-header {display:flex; justify-content:space-between; align-items:center; margin-bottom:0.8rem;}
+        .sy-workspace-title {font-size:1.05rem; font-weight:700;}
+        .sy-workspace-meta {font-size:0.88rem; opacity:0.74;}
+        .sy-preview-shell {border:1px solid rgba(255,255,255,0.08); border-radius:18px; overflow:hidden; background:#0C1018;}
+        .sy-preview-topbar {
+            display:flex; justify-content:space-between; align-items:center;
+            padding:0.8rem 0.95rem; border-bottom:1px solid rgba(255,255,255,0.08);
+            background:rgba(255,255,255,0.03);
+        }
+        .sy-preview-title {font-weight:700; font-size:0.98rem;}
+        .sy-preview-meta {font-size:0.84rem; opacity:0.72; margin-top:0.1rem;}
+        .sy-preview-badge {
+            padding:0.28rem 0.55rem; border-radius:999px; font-size:0.76rem; font-weight:700;
+            background:rgba(79,131,255,0.18); color:#DCE7FF; border:1px solid rgba(79,131,255,0.35);
+        }
+        .sy-preview-frame {border:0; background:white;}
+        .sy-empty-preview {
+            min-height:280px; display:flex; align-items:center; justify-content:center; text-align:center;
+            border:1px dashed rgba(255,255,255,0.12); border-radius:18px; opacity:0.78;
+            background:rgba(255,255,255,0.02); padding:1rem;
+        }
+        .sy-kpi { font-size: 0.76rem; text-transform: uppercase; letter-spacing: 0.08em; opacity: 0.72; margin-bottom: 0.35rem; }
         .sy-upload-item { border-radius: 14px; padding: 0.75rem 0.9rem; margin-bottom: 0.55rem; }
         .sy-muted { opacity: 0.78; font-size: 0.93rem; }
+        .sy-data-row {display:flex; justify-content:space-between; gap:0.8rem; padding:0.48rem 0; border-bottom:1px solid rgba(255,255,255,0.06);}
+        .sy-data-row:last-child {border-bottom:0;}
+        .sy-data-row span:first-child {opacity:0.72;}
+        .sy-quicktag {
+            display:inline-flex; align-items:center; gap:0.4rem; padding:0.35rem 0.6rem;
+            border-radius:999px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.06);
+            font-size:0.82rem; margin:0.12rem 0.18rem 0.12rem 0;
+        }
         div[data-testid="stMetric"] {
             background: rgba(255,255,255,0.03);
             border: 1px solid rgba(255,255,255,0.08);
@@ -920,6 +1033,11 @@ def inject_custom_css():
             border-radius: 16px;
         }
         .stDownloadButton button, .stButton button { border-radius: 14px; }
+        .stTabs [data-baseweb="tab-list"] {gap:0.4rem;}
+        .stTabs [data-baseweb="tab"] {
+            border-radius:12px; padding:0.5rem 0.9rem; background:rgba(255,255,255,0.03);
+            border:1px solid rgba(255,255,255,0.06);
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -1027,11 +1145,32 @@ def build_simple_word_doc(title: str, body_text: str) -> BytesIO:
 
 st.set_page_config(page_title="ArchLens AI", layout="wide")
 inject_custom_css()
+
 st.markdown(
-    """
+    f"""
+    <div class="sy-topbar">
+        <div>
+            <div class="sy-topbar-title">Architect AI Workspace</div>
+            <div class="sy-topbar-meta">ArchLens AI • Drawing-focused planning and building regulations review</div>
+        </div>
+        <div class="sy-topbar-meta">Mode: {st.session_state.active_module}</div>
+    </div>
     <div class="sy-hero">
-        <h1 style="margin:0;">ArchLens AI</h1>
-        <div class="sy-muted">AI planning feasibility, planning route, and Building Regulations review for drawing packs, homeowner sketches, and professional reports.</div>
+        <div class="sy-hero-grid">
+            <div>
+                <h1 style="margin:0 0 0.35rem 0;">ArchLens AI</h1>
+                <div class="sy-muted" style="max-width:780px;">
+                    A premium AI assistant for architects and designers — review drawing packs, inspect planning route risk,
+                    check Building Regulations issues, and generate client-ready outputs from one workspace.
+                </div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.7rem;">
+                <div class="sy-hero-stat"><div class="sy-kpi">Workspace</div><div style="font-size:1.02rem;font-weight:700;">Drawing-Centred Review</div></div>
+                <div class="sy-hero-stat"><div class="sy-kpi">Output</div><div style="font-size:1.02rem;font-weight:700;">Professional Reports</div></div>
+                <div class="sy-hero-stat"><div class="sy-kpi">Use Case</div><div style="font-size:1.02rem;font-weight:700;">Planning + Building Regs</div></div>
+                <div class="sy-hero-stat"><div class="sy-kpi">Experience</div><div style="font-size:1.02rem;font-weight:700;">Architect SaaS Interface</div></div>
+            </div>
+        </div>
     </div>
     """,
     unsafe_allow_html=True,
@@ -1133,7 +1272,7 @@ with setup_tab:
             st.info("Use this module for technical Building Regulations review including plans, sections, details, specifications, and structural sheets.")
 
 with upload_tab:
-    st.markdown('<div class="sy-card"><h3 style="margin-top:0;">Upload drawing pack</h3><div class="sy-muted">Upload one or more PDFs. Complete drawing packs usually produce more accurate outputs, but homeowner sketches can still support a preliminary feasibility review. Keep each file and the total live upload pack within 20MB.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="sy-card"><h3 style="margin-top:0;">Drawing Workspace</h3><div class="sy-muted">Review the uploaded drawing pack inside a more visual architect-style workspace. The centre panel focuses on the drawing set, while the side panel keeps the project context and live review controls visible.</div></div>', unsafe_allow_html=True)
 
     uploaded_file = st.file_uploader(
         "Upload Drawing PDF",
@@ -1142,167 +1281,191 @@ with upload_tab:
         key="drawing_pdf_upload",
     )
 
-    if review_module == "Planning Review" and review_mode == "Homeowner Summary":
-        st.info("Homeowners can upload a simple sketch or basic PDF. ArchLens AI will frame the output as a preliminary planning feasibility review, not a formal planning decision.")
+    workspace_col, assistant_col = st.columns([1.75, 0.85], gap="large")
 
-    if uploaded_file:
-        total_uploaded_mb = sum(f.size for f in uploaded_file) / (1024 * 1024)
-        if total_uploaded_mb > 20:
-            st.error("Drawing pack too large for the live app. Please keep the total upload size to 20MB or less, or split the pack into smaller PDFs.")
-            st.stop()
+    with workspace_col:
+        st.markdown('<div class="sy-workspace">', unsafe_allow_html=True)
+        st.markdown('<div class="sy-workspace-header"><div><div class="sy-workspace-title">Drawing Pack Workspace</div><div class="sy-workspace-meta">Visual preview area for the active PDF and uploaded drawing set.</div></div></div>', unsafe_allow_html=True)
 
-        preview_col, action_col = st.columns([1.5, 1])
+        if review_module == "Planning Review" and review_mode == "Homeowner Summary":
+            st.info("Homeowners can upload a simple sketch or basic PDF. ArchLens AI will frame the output as a preliminary planning feasibility review, not a formal planning decision.")
+
+        preview_col, meta_col = st.columns([1.45, 0.75], gap="large")
         with preview_col:
+            render_pdf_preview(uploaded_file)
+        with meta_col:
             st.markdown("**Uploaded files**")
-            for file in uploaded_file:
-                file_size_mb = round(file.size / (1024 * 1024), 2)
-                st.markdown(
-                    f'<div class="sy-upload-item"><strong>{file.name}</strong><br><span class="sy-muted">{file_size_mb} MB</span></div>',
-                    unsafe_allow_html=True,
-                )
-        with action_col:
-            st.markdown("**Drawing pack summary**")
+            if uploaded_file:
+                for file in uploaded_file:
+                    file_size_mb = round(file.size / (1024 * 1024), 2)
+                    st.markdown(
+                        f'<div class="sy-upload-item"><strong>{file.name}</strong><br><span class="sy-muted">{file_size_mb} MB</span></div>',
+                        unsafe_allow_html=True,
+                    )
+            else:
+                st.markdown('<div class="sy-empty-preview">No drawing pack uploaded yet.</div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with assistant_col:
+        st.markdown('<div class="sy-sidepanel">', unsafe_allow_html=True)
+        st.markdown('<div class="sy-panel-title">AI Project Assistant</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="sy-data-row"><span>Review module</span><strong>{review_module}</strong></div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="sy-data-row"><span>Report mode</span><strong>{review_mode}</strong></div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="sy-data-row"><span>Project type</span><strong>{", ".join(project_types) if project_types else "Not stated"}</strong></div>', unsafe_allow_html=True)
+        if review_module == "Planning Review":
+            st.markdown(f'<div class="sy-data-row"><span>Property type</span><strong>{property_type or "Not stated"}</strong></div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="sy-data-row"><span>Project address</span><strong>{project_address or "Not provided"}</strong></div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="sy-data-row"><span>Client</span><strong>{client_name or "Not provided"}</strong></div>', unsafe_allow_html=True)
+        st.markdown("")
+
+        if uploaded_file:
+            total_uploaded_mb = sum(f.size for f in uploaded_file) / (1024 * 1024)
+            if total_uploaded_mb > 20:
+                st.error("Drawing pack too large for the live app. Please keep the total upload size to 20MB or less, or split the pack into smaller PDFs.")
+                st.stop()
+
             st.metric("Files uploaded", len(uploaded_file))
-            total_mb = round(sum(f.size for f in uploaded_file) / (1024 * 1024), 2)
-            st.metric("Total size", f"{total_mb} MB")
+            st.metric("Total size", f"{round(total_uploaded_mb, 2)} MB")
             st.metric("Selected project types", len(project_types))
             run_analysis = st.button(f"Run {review_module}", key="run_review_btn", use_container_width=True)
+        else:
+            st.markdown('<div class="sy-muted">Upload a drawing pack to enable the AI review controls.</div>', unsafe_allow_html=True)
+            run_analysis = False
+        st.markdown('</div>', unsafe_allow_html=True)
 
-        if run_analysis:
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            temp_pdf_path = None
-            file = uploaded_file[-1]
+    if uploaded_file and run_analysis:
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        temp_pdf_path = None
+        file = uploaded_file[-1]
 
-            for file in uploaded_file:
-                if file.size > MAX_FILE_SIZE_MB * 1024 * 1024:
-                    st.error(f"PDF too large. Maximum file size is {MAX_FILE_SIZE_MB}MB.")
-                    st.stop()
+        for file in uploaded_file:
+            if file.size > MAX_FILE_SIZE_MB * 1024 * 1024:
+                st.error(f"PDF too large. Maximum file size is {MAX_FILE_SIZE_MB}MB.")
+                st.stop()
 
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
-                    tmp_file.write(file.getbuffer())
-                    temp_pdf_path = tmp_file.name
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
+                tmp_file.write(file.getbuffer())
+                temp_pdf_path = tmp_file.name
+
+        try:
+            page_count = get_pdf_page_count(temp_pdf_path)
+            if page_count > MAX_PAGE_COUNT:
+                st.error(f"PDF has {page_count} pages. Maximum allowed is {MAX_PAGE_COUNT} pages.")
+                os.remove(temp_pdf_path)
+                st.stop()
+            if page_count > 12:
+                st.warning("Large drawing pack detected. The live app will analyse the first 12 pages only to keep processing stable.")
+
+            smooth_progress(progress_bar, status_text, 10, 25, "Preparing drawing analysis...", 0.6)
+
+            def update_analysis_progress(current_batch, total_batches):
+                start_pct = 25
+                end_pct = 85
+                progress = start_pct + int((current_batch / max(1, total_batches)) * (end_pct - start_pct))
+                progress_bar.progress(progress)
+                status_text.text(f"Step 3 of 4 — Analyzing drawing pages... Batch {current_batch} of {total_batches} ({progress}%)")
 
             try:
-                page_count = get_pdf_page_count(temp_pdf_path)
-                if page_count > MAX_PAGE_COUNT:
-                    st.error(f"PDF has {page_count} pages. Maximum allowed is {MAX_PAGE_COUNT} pages.")
-                    os.remove(temp_pdf_path)
-                    st.stop()
-                if page_count > 12:
-                    st.warning("Large drawing pack detected. The live app will analyse the first 12 pages only to keep processing stable.")
+                if review_module == "Building Regulations Review":
+                    report = pdf_summary.analyze_pdf(
+                        temp_pdf_path,
+                        client_project_type=("Project type: " + (", ".join(project_types) or "Not stated") + "\nProposal summary: " + (proposal_summary or "Not stated")),
+                        review_mode=review_mode,
+                        progress_callback=update_analysis_progress,
+                    )
+                else:
+                    smooth_progress(progress_bar, status_text, 25, 40,
+                                    "Reading drawings and extracting planning data...", 0.8)
 
-                smooth_progress(progress_bar, status_text, 10, 25, "Preparing drawing analysis...", 0.6)
+                    proposal_summary_for_ai = proposal_summary
+                    if "Ground Floor Rear Extension" in project_types:
+                        depth_txt = f"{rear_extension_depth_m:.1f}m depth from original rear wall" if rear_extension_depth_m is not None else ""
+                        height_txt = f"{rear_extension_height_m:.1f}m overall height" if rear_extension_height_m is not None else ""
+                        extra_bits = ", ".join([x for x in [depth_txt, height_txt] if x])
+                        if extra_bits:
+                            proposal_summary_for_ai = (proposal_summary_for_ai.strip() + " | " + extra_bits).strip(" |")
 
-                def update_analysis_progress(current_batch, total_batches):
-                    start_pct = 25
-                    end_pct = 85
-                    progress = start_pct + int((current_batch / max(1, total_batches)) * (end_pct - start_pct))
-                    progress_bar.progress(progress)
-                    status_text.text(f"Step 3 of 4 — Analyzing drawing pages... Batch {current_batch} of {total_batches} ({progress}%)")
+                    report = pdf_summary.analyze_planning_pdf(
+                        temp_pdf_path,
+                        client_project_types=project_types,
+                        property_type=property_type,
+                        proposal_summary=proposal_summary_for_ai,
+                        project_address=project_address,
+                        local_authority=local_authority,
+                        review_mode=review_mode,
+                    )
 
+                    smooth_progress(progress_bar, status_text, 40, 85, "Analyzing planning route and risks...", 0.8)
+            except Exception as e:
+                msg = str(e).lower()
+                if "insufficient_quota" in msg or "quota" in msg:
+                    st.error("OpenAI API quota exceeded. Please add credits in your OpenAI billing dashboard.")
+                elif "rate limit" in msg or "429" in msg:
+                    st.error("The AI analysis service is temporarily rate-limited. Please try again shortly.")
+                else:
+                    st.error(f"Could not analyze this PDF: {e}")
+                st.stop()
+
+            valid, missing = validate_report_headings(report, config["required_headings"])
+            if not valid:
+                st.error(f"AI report validation failed. Missing headings: {', '.join(missing)}")
+                st.stop()
+
+            sections = parse_report_sections(report, config["required_headings"])
+
+            extracted_report_address = extract_address_from_report(report, "Not provided")
+            clean_project_address = clean_input_value(project_address, extracted_report_address)
+            clean_client_name = clean_input_value(client_name, "Not provided")
+            clean_practice_name = clean_input_value(practice_name, "ArchLens AI")
+            report_id = str(uuid.uuid4())[:8].upper()
+
+            smooth_progress(progress_bar, status_text, 85, 95, "Preparing report files...", 0.6)
+
+            word_file = build_word_report(
+                file.name,
+                clean_project_address,
+                clean_client_name,
+                review_date,
+                clean_practice_name,
+                report_id,
+                sections,
+                review_module,
+            )
+
+            pdf_file = build_pdf_report(
+                file.name,
+                clean_project_address,
+                clean_client_name,
+                review_date,
+                clean_practice_name,
+                report_id,
+                sections,
+                review_module,
+            )
+
+            st.session_state.report = report
+            st.session_state.sections = sections
+            st.session_state.word_file = word_file
+            st.session_state.pdf_file = pdf_file
+            st.session_state.last_filename = file.name
+            st.session_state.last_error = None
+            st.session_state.report_id = report_id
+            st.session_state.active_module = review_module
+            st.session_state["planning_statement_text"] = None
+            st.session_state["planning_statement_file"] = None
+
+            smooth_progress(progress_bar, status_text, 95, 100, "Finalising report...", 0.4)
+            status_text.text("Analysis complete. 100%")
+            progress_bar.progress(100)
+            st.success("Report created successfully. Open the AI Review Report tab.")
+        finally:
+            if temp_pdf_path:
                 try:
-                    if review_module == "Building Regulations Review":
-                        report = pdf_summary.analyze_pdf(
-                            temp_pdf_path,
-                            client_project_type=("Project type: " + (", ".join(project_types) or "Not stated") + "\nProposal summary: " + (proposal_summary or "Not stated")),
-                            review_mode=review_mode,
-                            progress_callback=update_analysis_progress,
-                        )
-                    else:
-                        smooth_progress(progress_bar, status_text, 25, 40,
-                                        "Reading drawings and extracting planning data...", 0.8)
-
-                        proposal_summary_for_ai = proposal_summary
-                        if "Ground Floor Rear Extension" in project_types:
-                            depth_txt = f"{rear_extension_depth_m:.1f}m depth from original rear wall" if rear_extension_depth_m is not None else ""
-                            height_txt = f"{rear_extension_height_m:.1f}m overall height" if rear_extension_height_m is not None else ""
-                            extra_bits = ", ".join([x for x in [depth_txt, height_txt] if x])
-                            if extra_bits:
-                                proposal_summary_for_ai = (proposal_summary_for_ai.strip() + " | " + extra_bits).strip(" |")
-
-                        report = pdf_summary.analyze_planning_pdf(
-                            temp_pdf_path,
-                            client_project_types=project_types,
-                            property_type=property_type,
-                            proposal_summary=proposal_summary_for_ai,
-                            project_address=project_address,
-                            local_authority=local_authority,
-                            review_mode=review_mode,
-                        )
-
-                        smooth_progress(progress_bar, status_text, 40, 85, "Analyzing planning route and risks...", 0.8)
-                except Exception as e:
-                    msg = str(e).lower()
-                    if "insufficient_quota" in msg or "quota" in msg:
-                        st.error("OpenAI API quota exceeded. Please add credits in your OpenAI billing dashboard.")
-                    elif "rate limit" in msg or "429" in msg:
-                        st.error("The AI analysis service is temporarily rate-limited. Please try again shortly.")
-                    else:
-                        st.error(f"Could not analyze this PDF: {e}")
-                    st.stop()
-
-                valid, missing = validate_report_headings(report, config["required_headings"])
-                if not valid:
-                    st.error(f"AI report validation failed. Missing headings: {', '.join(missing)}")
-                    st.stop()
-
-                sections = parse_report_sections(report, config["required_headings"])
-
-                extracted_report_address = extract_address_from_report(report, "Not provided")
-                clean_project_address = clean_input_value(project_address, extracted_report_address)
-                clean_client_name = clean_input_value(client_name, "Not provided")
-                clean_practice_name = clean_input_value(practice_name, "ArchLens AI")
-                report_id = str(uuid.uuid4())[:8].upper()
-
-                smooth_progress(progress_bar, status_text, 85, 95, "Preparing report files...", 0.6)
-
-                word_file = build_word_report(
-                    file.name,
-                    clean_project_address,
-                    clean_client_name,
-                    review_date,
-                    clean_practice_name,
-                    report_id,
-                    sections,
-                    review_module,
-                )
-
-                pdf_file = build_pdf_report(
-                    file.name,
-                    clean_project_address,
-                    clean_client_name,
-                    review_date,
-                    clean_practice_name,
-                    report_id,
-                    sections,
-                    review_module,
-                )
-
-                st.session_state.report = report
-                st.session_state.sections = sections
-                st.session_state.word_file = word_file
-                st.session_state.pdf_file = pdf_file
-                st.session_state.last_filename = file.name
-                st.session_state.last_error = None
-                st.session_state.report_id = report_id
-                st.session_state.active_module = review_module
-                st.session_state["planning_statement_text"] = None
-                st.session_state["planning_statement_file"] = None
-
-                smooth_progress(progress_bar, status_text, 95, 100, "Finalising report...", 0.4)
-                status_text.text("Analysis complete. 100%")
-                progress_bar.progress(100)
-                st.success("Report created successfully. Open the AI Review Report tab.")
-            finally:
-                if temp_pdf_path:
-                    try:
-                        os.remove(temp_pdf_path)
-                    except Exception:
-                        pass
-                gc.collect()
-    else:
-        st.info("No files uploaded yet. Add one or more PDFs to preview the drawing pack.")
+                    os.remove(temp_pdf_path)
+                except Exception:
+                    pass
+            gc.collect()
 
 with report_tab:
     if st.session_state.sections and st.session_state.active_module == review_module:
@@ -1320,15 +1483,28 @@ with report_tab:
 
         st.markdown(f'<div class="sy-card"><h3 style="margin-top:0;">{panel_title}</h3><div class="sy-muted">{panel_note}</div></div>', unsafe_allow_html=True)
 
-        render_at_a_glance(sections, report_id, review_module)
-        st.markdown("")
-        render_sections(sections, report, review_module)
+        report_col, insight_col = st.columns([1.65, 0.95], gap="large")
 
-        base_filename = (st.session_state.last_filename or "drawing_pack").rsplit(".", 1)[0]
-        suffix = "Planning" if review_module == "Planning Review" else "BuildingRegs"
+        with report_col:
+            render_at_a_glance(sections, report_id, review_module)
+            st.markdown("")
+            render_sections(sections, report, review_module)
 
-        d1, d2 = st.columns(2)
-        with d1:
+        with insight_col:
+            values = extract_summary_values(sections, review_module)
+            st.markdown('<div class="sy-sidepanel">', unsafe_allow_html=True)
+            st.markdown('<div class="sy-panel-title">AI Insights Panel</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="sy-data-row"><span>Report ID</span><strong>{report_id}</strong></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="sy-data-row"><span>Review module</span><strong>{review_module}</strong></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="sy-data-row"><span>Application / status</span><strong>{values["route"]}</strong></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="sy-data-row"><span>Authority / confidence</span><strong>{values["authority"]}</strong></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="sy-data-row"><span>Submission position</span><strong>{"Ready to submit" if "READY TO SUBMIT" in sections.get(config["readiness_key"], "").upper() else "Review required"}</strong></div>', unsafe_allow_html=True)
+            st.markdown("")
+            st.markdown('<div class="sy-panel-title">Quick Actions</div>', unsafe_allow_html=True)
+
+            base_filename = (st.session_state.last_filename or "drawing_pack").rsplit(".", 1)[0]
+            suffix = "Planning" if review_module == "Planning Review" else "BuildingRegs"
+
             st.download_button(
                 label=("Download Homeowner Feasibility Report (.docx)" if review_module == "Planning Review" and review_mode == "Homeowner Summary" else "Download Professional Report (.docx)"),
                 data=word_file,
@@ -1337,7 +1513,6 @@ with report_tab:
                 key="download_docx",
                 use_container_width=True,
             )
-        with d2:
             st.download_button(
                 label=("Download Homeowner Feasibility Report (.pdf)" if review_module == "Planning Review" and review_mode == "Homeowner Summary" else "Download Professional Report (.pdf)"),
                 data=pdf_file,
@@ -1347,31 +1522,34 @@ with report_tab:
                 use_container_width=True,
             )
 
-        if review_module == "Planning Review":
-            st.markdown("")
-            st.markdown('<div class="sy-card"><h3 style="margin-top:0;">Automatic Planning Statement</h3><div class="sy-muted">Generate a draft planning statement from the ArchLens review and download it as Word.</div></div>', unsafe_allow_html=True)
-            if st.button("Generate Planning Statement", key="generate_planning_statement_btn", use_container_width=True):
-                statement_text = pdf_summary.generate_planning_statement(
-                    report_text=report,
-                    sections=sections,
-                    project_address=project_address or "Not provided",
-                    client_name=client_name or "Not provided",
-                    local_authority=local_authority or "",
-                    review_mode=review_mode,
-                )
-                st.session_state["planning_statement_text"] = statement_text
-                st.session_state["planning_statement_file"] = build_simple_word_doc("Draft Planning Statement", statement_text)
+            if review_module == "Planning Review":
+                st.markdown("")
+                if st.button("Generate Planning Statement", key="generate_planning_statement_btn", use_container_width=True):
+                    statement_text = pdf_summary.generate_planning_statement(
+                        report_text=report,
+                        sections=sections,
+                        project_address=project_address or "Not provided",
+                        client_name=client_name or "Not provided",
+                        local_authority=local_authority or "",
+                        review_mode=review_mode,
+                    )
+                    st.session_state["planning_statement_text"] = statement_text
+                    st.session_state["planning_statement_file"] = build_simple_word_doc("Draft Planning Statement", statement_text)
 
-            if st.session_state.get("planning_statement_text"):
-                with st.expander("Show planning statement draft", expanded=False):
-                    st.text(st.session_state["planning_statement_text"])
-                st.download_button(
-                    label="Download Planning Statement (.docx)",
-                    data=st.session_state["planning_statement_file"],
-                    file_name=f"{base_filename}_Planning_Statement.docx",
-                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    key="download_planning_statement_docx",
-                    use_container_width=True,
-                )
+                if st.session_state.get("planning_statement_text"):
+                    st.download_button(
+                        label="Download Planning Statement (.docx)",
+                        data=st.session_state["planning_statement_file"],
+                        file_name=f"{base_filename}_Planning_Statement.docx",
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        key="download_planning_statement_docx",
+                        use_container_width=True,
+                    )
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        if review_module == "Planning Review" and st.session_state.get("planning_statement_text"):
+            st.markdown("")
+            with st.expander("Show planning statement draft", expanded=False):
+                st.text(st.session_state["planning_statement_text"])
     else:
         st.info("No report generated yet. Complete the setup, upload the drawing pack, and run the review.")
