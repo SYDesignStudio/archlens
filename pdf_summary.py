@@ -164,10 +164,13 @@ def detect_sheet_type(page_text: str) -> str:
 
 
 def extract_text_by_page(pdf_path: str) -> List[Dict[str, str]]:
-    pages = []
-    with pdfplumber.open(pdf_path) as pdf:
-        for i, page in enumerate(pdf.pages):
-            page_text = clean_extracted_text(page.extract_text() or "")
+    pages: List[Dict[str, str]] = []
+    doc = fitz.open(pdf_path)
+    try:
+        max_pages = min(len(doc), LIVE_ANALYSIS_MAX_PAGES)
+        for i in range(max_pages):
+            page = doc.load_page(i)
+            page_text = clean_extracted_text(page.get_text("text") or "")
             lines = [ln.strip() for ln in page_text.splitlines() if ln.strip()]
             first_line = lines[0] if lines else "Untitled sheet"
             pages.append(
@@ -178,6 +181,10 @@ def extract_text_by_page(pdf_path: str) -> List[Dict[str, str]]:
                     "sheet_title": first_line,
                 }
             )
+            del page
+            gc.collect()
+    finally:
+        doc.close()
     return pages
 
 
@@ -427,8 +434,6 @@ def analyze_pdf(
 ) -> str:
     text = extract_text_from_pdf(pdf_path)
     page_data = extract_text_by_page(pdf_path)
-    if len(page_data) > LIVE_ANALYSIS_MAX_PAGES:
-        page_data = page_data[:LIVE_ANALYSIS_MAX_PAGES]
     max_pages_for_analysis = LIVE_ANALYSIS_MAX_PAGES
     if len(page_data) > max_pages_for_analysis:
         page_data = page_data[:max_pages_for_analysis]
