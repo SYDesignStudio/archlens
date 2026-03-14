@@ -622,6 +622,11 @@ def analyze_planning_pdf(
         else "Write in plain English suitable for a homeowner, keep the officer-style reasoning structure, and frame the output as a preliminary planning feasibility report rather than a formal planning decision."
     )
 
+    # Default AI estimation placeholders used inside the planning prompt
+    readiness_status = "LIKELY READY WITH MINOR AMENDMENTS"
+    readiness_reason = "Initial AI assessment based on drawing pack completeness and clarity."
+    approval_probability = "Medium"
+
     prompt = f"""
 You are reviewing a UK residential planning drawing pack.
 
