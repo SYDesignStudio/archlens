@@ -417,6 +417,12 @@ def analyze_pdf(
 ) -> str:
     text = extract_text_from_pdf(pdf_path)
     page_data = extract_text_by_page(pdf_path)
+    max_pages_for_analysis = 12
+    if len(page_data) > max_pages_for_analysis:
+        page_data = page_data[:max_pages_for_analysis]
+    max_pages_for_analysis = 12
+    if len(page_data) > max_pages_for_analysis:
+        page_data = page_data[:max_pages_for_analysis]
 
     if not text.strip():
         return """PROJECT CLASSIFICATION
@@ -485,22 +491,24 @@ BUILDING CONTROL SUBMISSION READINESS
 """
 
     checks = build_checks(text)
-    image_paths = render_all_pdf_pages_to_images(pdf_path)
-    try:
-        batch_summaries = []
-        batches = list(chunk_list(image_paths, 2))
-        total_batches = len(batches)
+    batch_summaries = []
+    total_pages = len(page_data)
+    batch_size = 2
+    total_batches = max(1, (total_pages + batch_size - 1) // batch_size)
 
-        for idx, batch in enumerate(batches, start=1):
+    for idx, start in enumerate(range(0, total_pages, batch_size), start=1):
+        batch_paths = render_pdf_page_batch_to_images(pdf_path, start, start + batch_size, scale=1.2)
+        try:
             if progress_callback:
                 progress_callback(idx, total_batches)
-            batch_summaries.append(analyze_image_batch(batch, text, checks, review_mode))
+            batch_summaries.append(analyze_image_batch(batch_paths, text, checks, review_mode))
+        finally:
+            for image_path in batch_paths:
+                if os.path.exists(image_path):
+                    os.remove(image_path)
+            gc.collect()
 
-        combined_batch_text = "\n\n".join(batch_summaries)
-    finally:
-        for image_path in image_paths:
-            if os.path.exists(image_path):
-                os.remove(image_path)
+    combined_batch_text = "\n\n".join(batch_summaries)
 
     sheet_summary_lines = [
         f"Page {page['page_number']}: {page['sheet_type']} | Sheet title: {page['sheet_title']}"
@@ -844,6 +852,7 @@ Detected pages:
         output_text = re.sub(top_summary_pattern, top_summary_replacement, output_text, count=1)
         output_text = re.sub(r"^.*Overall Planning Risk Rating:.*$\n?", "", output_text, flags=re.MULTILINE)
         output_text = re.sub(r"^.*Planning Approval Probability:.*$\n?", "", output_text, flags=re.MULTILINE)
+    gc.collect()
     return output_text
 
 
@@ -876,7 +885,7 @@ Keep it factual, clean, and application-ready.
 Do not invent measurements or policy references that are not supported by the report.
 Write like an approved planning statement prepared by a UK architectural practice.
 Keep the wording factual, concise, confident and submission-ready.
-If a rear extension is located to the rear of the property and is not visible from the public highway, say that it would not impact the character or appearance of the street scene.
+If a rear extension is located to the rear of the property and is not visible from the public highway, explain clearly that it would not be visible from the public highway and would therefore not impact the character or appearance of the street scene.
 Where the route is PD / prior approval, explain that clearly.
 Where planning permission is likely required, explain that clearly.
 Do not mention fire statements unless they are genuinely relevant to the scheme.
@@ -899,20 +908,20 @@ Report text:
         return response.output_text
     except Exception:
         fallback_parts = [
-            "1. Site and Surroundings",
-            f"The application site is {project_address or 'the subject property'}. This draft statement is based on the ArchLens AI review and uploaded drawings.",
+            "1. Introduction",
+            f"This Planning Statement has been prepared in support of the proposed development at {project_address or 'the subject property'}. It should be read alongside the submitted drawings.",
             "",
-            "2. Proposed Development",
-            sections.get("SITE AND PROPOSAL OVERVIEW", "The proposal should be read alongside the submitted drawings."),
+            "2. Site Context and Surroundings",
+            sections.get("SITE AND PROPOSAL OVERVIEW", "The application site forms part of an established residential setting and should be assessed in that context."),
             "",
-            "3. Relevant Planning Route",
+            "3. Proposal Details",
+            sections.get("PROJECT CLASSIFICATION", "The proposal should be read alongside the submitted drawings and supporting information."),
+            "",
+            "4. Compliance with Prior Approval Requirements",
             sections.get("PD / PRIOR APPROVAL / PLANNING ROUTE", "The likely statutory route should be confirmed before submission."),
             "",
-            "4. Design and Appearance",
-            "The proposal should be assessed in the context of the host dwelling and surrounding built form, with particular regard to scale, subservience, materials, and visual integration.",
-            "",
-            "5. Impact on Residential Amenity",
-            "Residential amenity should be considered with regard to outlook, enclosure, daylight, privacy, and the relationship to adjoining occupiers.",
+            "5. Design Considerations",
+            "The proposal should be assessed in the context of the host dwelling and surrounding built form, with regard to scale, materials, visual impact and relationship to neighbouring properties.",
             "",
             "6. Conclusion",
             sections.get("SUBMISSION READINESS", "Further confirmation of route and supporting information may be required prior to submission."),

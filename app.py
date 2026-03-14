@@ -1127,7 +1127,7 @@ with setup_tab:
             st.info("Use this module for technical Building Regulations review including plans, sections, details, specifications, and structural sheets.")
 
 with upload_tab:
-    st.markdown('<div class="sy-card"><h3 style="margin-top:0;">Upload drawing pack</h3><div class="sy-muted">Upload one or more PDFs. Complete drawing packs usually produce more accurate outputs, but homeowner sketches can still support a preliminary feasibility review.</div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="sy-card"><h3 style="margin-top:0;">Upload drawing pack</h3><div class="sy-muted">Upload one or more PDFs. Complete drawing packs usually produce more accurate outputs, but homeowner sketches can still support a preliminary feasibility review. Keep each file and the total live upload pack within 20MB.</div></div>', unsafe_allow_html=True)
 
     uploaded_file = st.file_uploader(
         "Upload Drawing PDF",
