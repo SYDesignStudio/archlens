@@ -1,4 +1,5 @@
 import base64
+import gc
 import os
 import re
 import time
@@ -176,16 +177,19 @@ def extract_text_by_page(pdf_path: str) -> List[Dict[str, str]]:
     return pages
 
 
-def render_all_pdf_pages_to_images(pdf_path: str, scale: float = 1.5) -> List[str]:
+
+def render_pdf_page_batch_to_images(pdf_path: str, start_index: int, end_index: int, scale: float = 1.2) -> List[str]:
     doc = fitz.open(pdf_path)
-    image_paths = []
+    image_paths: List[str] = []
     try:
-        for i in range(len(doc)):
+        for i in range(start_index, min(end_index, len(doc))):
             page = doc.load_page(i)
-            pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale))
+            pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
             image_path = f"temp_page_{i + 1}.png"
             pix.save(image_path)
             image_paths.append(image_path)
+            del pix
+            gc.collect()
     finally:
         doc.close()
     return image_paths
@@ -618,6 +622,7 @@ Report to repair:
         repaired = _call_responses_api("gpt-5", repair_prompt)
         output_text = repaired.output_text
 
+    gc.collect()
     return output_text
 
 
@@ -672,6 +677,12 @@ def analyze_planning_pdf(
         "Write like a concise UK planning consultant and delegated officer note."
         if review_mode == "Architect / Professional"
         else "Write in plain English suitable for a homeowner, keep the officer-style reasoning structure, and frame the output as a preliminary planning feasibility report rather than a formal planning decision."
+    )
+
+    project_summary_value = build_project_summary_from_inputs(project_types_text, proposal_summary_text, property_type_text)
+    application_type_value = infer_application_type(project_types_text, proposal_summary_text, property_type_text)
+    readiness_status, readiness_reason = infer_submission_readiness_from_context(
+        application_type_value, project_types_text, proposal_summary_text, text, page_summary
     )
 
     prompt = f"""
@@ -865,6 +876,7 @@ Keep it factual, clean, and application-ready.
 Do not invent measurements or policy references that are not supported by the report.
 Write like an approved planning statement prepared by a UK architectural practice.
 Keep the wording factual, concise, confident and submission-ready.
+If a rear extension is located to the rear of the property and is not visible from the public highway, say that it would not impact the character or appearance of the street scene.
 Where the route is PD / prior approval, explain that clearly.
 Where planning permission is likely required, explain that clearly.
 Do not mention fire statements unless they are genuinely relevant to the scheme.

@@ -1,5 +1,6 @@
 
 import os
+import gc
 import re
 import time
 import uuid
@@ -31,7 +32,7 @@ for key, value in DEFAULT_STATE.items():
     if key not in st.session_state:
         st.session_state[key] = value
 
-MAX_FILE_SIZE_MB = 50
+MAX_FILE_SIZE_MB = 20
 MAX_PAGE_COUNT = 120
 
 BUILDING_REQUIRED_HEADINGS = [
@@ -1139,6 +1140,11 @@ with upload_tab:
         st.info("Homeowners can upload a simple sketch or basic PDF. ArchLens AI will frame the output as a preliminary planning feasibility review, not a formal planning decision.")
 
     if uploaded_file:
+        total_uploaded_mb = sum(f.size for f in uploaded_file) / (1024 * 1024)
+        if total_uploaded_mb > 20:
+            st.error("Drawing pack too large for the live app. Please keep the total upload size to 20MB or less, or split the pack into smaller PDFs.")
+            st.stop()
+
         preview_col, action_col = st.columns([1.5, 1])
         with preview_col:
             st.markdown("**Uploaded files**")
@@ -1286,6 +1292,7 @@ with upload_tab:
                         os.remove(temp_pdf_path)
                     except Exception:
                         pass
+                gc.collect()
     else:
         st.info("No files uploaded yet. Add one or more PDFs to preview the drawing pack.")
 
