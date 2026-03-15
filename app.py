@@ -35,6 +35,7 @@ for key, value in DEFAULT_STATE.items():
 
 MAX_FILE_SIZE_MB = 20
 MAX_PAGE_COUNT = 30
+STARTER_MONTHLY_REVIEW_LIMIT = 10
 
 BUILDING_REQUIRED_HEADINGS = [
     "PROJECT CLASSIFICATION",
@@ -160,6 +161,31 @@ PROPERTY_TYPE_OPTIONS = [
     "Maisonette",
     "Other",
 ]
+
+
+PLAN_LABELS = {
+    "starter": "Solo",
+    "pro": "Studio",
+}
+
+def get_current_plan() -> str:
+    try:
+        query_params = st.query_params
+        plan_value = query_params.get("plan", "starter")
+    except Exception:
+        plan_value = "starter"
+    if isinstance(plan_value, list):
+        plan_value = plan_value[0] if plan_value else "starter"
+    plan_value = str(plan_value).strip().lower()
+    return plan_value if plan_value in {"starter", "pro"} else "starter"
+
+
+def get_allowed_review_modules(plan: str) -> List[str]:
+    return ["Planning Review", "Building Regulations Review"] if plan == "pro" else ["Planning Review"]
+
+
+def get_plan_upgrade_message(feature_name: str) -> str:
+    return f"{feature_name} is available on Studio. Upgrade to unlock this feature."
 
 
 def inject_custom_css():
@@ -1053,6 +1079,7 @@ def build_simple_word_doc(title: str, body_text: str) -> BytesIO:
 
 st.set_page_config(page_title="ArchLens AI", layout="wide")
 inject_custom_css()
+current_plan = get_current_plan()
 
 st.markdown(
     f"""
@@ -1061,7 +1088,7 @@ st.markdown(
             <div class="sy-topbar-title">Architect AI Workspace</div>
             <div class="sy-topbar-meta">ArchLens AI • Drawing-focused planning and building regulations review</div>
         </div>
-        <div class="sy-topbar-meta">Mode: {st.session_state.active_module}</div>
+        <div class="sy-topbar-meta">Mode: {st.session_state.active_module} | Plan: {PLAN_LABELS.get(current_plan, "Solo")}</div>
     </div>
     <div class="sy-hero">
         <div class="sy-hero-grid">
@@ -1094,11 +1121,16 @@ with step3:
 
 with st.sidebar:
     st.header("Project Setup")
+    st.caption(f"Current Plan: {PLAN_LABELS.get(current_plan, 'Solo')}")
+    allowed_review_modules = get_allowed_review_modules(current_plan)
+    default_module = st.session_state.active_module if st.session_state.active_module in allowed_review_modules else allowed_review_modules[0]
     review_module = st.selectbox(
         "Review Module",
-        ["Building Regulations Review", "Planning Review"],
-        index=0 if st.session_state.active_module == "Building Regulations Review" else 1,
+        allowed_review_modules,
+        index=allowed_review_modules.index(default_module),
     )
+    if current_plan == "starter":
+        st.caption("Building Regulations Review is available on Studio.")
     project_types = st.multiselect("Project Type", PROJECT_TYPE_OPTIONS, default=[])
 
     if review_module == "Planning Review":
@@ -1153,7 +1185,12 @@ with st.sidebar:
         st.info("Stored report cleared.")
 
 st.session_state.active_module = review_module
+if "starter_review_count" not in st.session_state:
+    st.session_state["starter_review_count"] = 0
 config = MODULE_CONFIG[review_module]
+if current_plan == "starter" and review_module == "Building Regulations Review":
+    st.warning(get_plan_upgrade_message("Building Regulations Review"))
+    st.stop()
 
 setup_tab, upload_tab, report_tab = st.tabs(["Project Setup", "Upload Drawing Pack", "AI Review Report"])
 
@@ -1176,8 +1213,12 @@ with setup_tab:
     with c2:
         if review_module == "Planning Review":
             st.info("Use this module for officer-style reasoning, street precedent review, proposal recognition, PD / prior approval / full planning route review, route confidence scoring, and planning statement drafting.")
+            if current_plan == "starter":
+                st.caption("Solo includes planning review only and PDF exports.")
         else:
             st.info("Use this module for technical Building Regulations review including plans, sections, details, specifications, and structural sheets.")
+            if current_plan == "starter":
+                st.warning("Building Regulations Review is available on Studio only.")
 
 with upload_tab:
     st.markdown('<div class="sy-card"><h3 style="margin-top:0;">Drawing Workspace</h3><div class="sy-muted">Review the uploaded drawing pack inside a more visual architect-style workspace. The centre panel focuses on the drawing set, while the side panel keeps the project context and live review controls visible.</div></div>', unsafe_allow_html=True)
@@ -1226,6 +1267,8 @@ with upload_tab:
         st.markdown(f'<div class="sy-data-row"><span>Project address</span><strong>{project_address or "Not provided"}</strong></div>', unsafe_allow_html=True)
         st.markdown(f'<div class="sy-data-row"><span>Client</span><strong>{client_name or "Not provided"}</strong></div>', unsafe_allow_html=True)
         st.markdown("")
+        if current_plan == "starter":
+            st.info("Solo plan: Planning Review + PDF exports. Upgrade to Studio for Building Regulations Review, Word exports, and unlimited reviews.")
 
         if uploaded_file:
             total_uploaded_mb = sum(f.size for f in uploaded_file) / (1024 * 1024)
@@ -1243,6 +1286,9 @@ with upload_tab:
         st.markdown('</div>', unsafe_allow_html=True)
 
     if uploaded_file and run_analysis:
+        if current_plan == "starter" and st.session_state.get("starter_review_count", 0) >= STARTER_MONTHLY_REVIEW_LIMIT:
+            st.error("You have reached your 10 monthly reviews on Solo. Upgrade to Studio for unlimited project reviews.")
+            st.stop()
         progress_bar = st.progress(0)
         status_text = st.empty()
         temp_pdf_path = None
@@ -1363,6 +1409,8 @@ with upload_tab:
             st.session_state.active_module = review_module
             st.session_state["planning_statement_text"] = None
             st.session_state["planning_statement_file"] = None
+            if current_plan == "starter":
+                st.session_state["starter_review_count"] = st.session_state.get("starter_review_count", 0) + 1
 
             smooth_progress(progress_bar, status_text, 95, 100, "Finalising report...", 0.4)
             status_text.text("Analysis complete. 100%")
@@ -1405,6 +1453,7 @@ with report_tab:
             st.markdown('<div class="sy-panel-title">AI Insights Panel</div>', unsafe_allow_html=True)
             st.markdown(f'<div class="sy-data-row"><span>Report ID</span><strong>{report_id}</strong></div>', unsafe_allow_html=True)
             st.markdown(f'<div class="sy-data-row"><span>Review module</span><strong>{review_module}</strong></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="sy-data-row"><span>Plan</span><strong>{PLAN_LABELS.get(current_plan, "Solo")}</strong></div>', unsafe_allow_html=True)
             st.markdown(f'<div class="sy-data-row"><span>Application / status</span><strong>{values["route"]}</strong></div>', unsafe_allow_html=True)
             if review_module == "Planning Review":
                 st.markdown(f'<div class="sy-data-row"><span>Local authority</span><strong>{values["authority"]}</strong></div>', unsafe_allow_html=True)
@@ -1437,6 +1486,8 @@ with report_tab:
 
             if review_module == "Planning Review":
                 st.markdown("")
+                if current_plan == "starter":
+                    st.caption("Solo includes planning statement drafting, but Word download is available on Studio only.")
                 if st.button("Generate Planning Statement", key="generate_planning_statement_btn", use_container_width=True):
                     statement_text = pdf_summary.generate_planning_statement(
                         report_text=report,
@@ -1458,6 +1509,8 @@ with report_tab:
                         key="download_planning_statement_docx",
                         use_container_width=True,
                     )
+            if current_plan == "starter":
+                st.markdown(f'<div class="sy-data-row"><span>Monthly reviews used</span><strong>{st.session_state.get("starter_review_count", 0)} / {STARTER_MONTHLY_REVIEW_LIMIT}</strong></div>', unsafe_allow_html=True)
             st.markdown('</div>', unsafe_allow_html=True)
 
         if review_module == "Planning Review" and st.session_state.get("planning_statement_text"):
