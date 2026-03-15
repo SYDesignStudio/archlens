@@ -166,63 +166,104 @@ def inject_custom_css():
     st.markdown(
         """
         <style>
-        .stApp { background: #0B0F18; color: #E8EDF7; }
+        .stApp { background: #060B16; color: #F2F6FF; }
         .block-container {padding-top: 1rem; padding-bottom: 2rem; max-width: 1600px;}
         [data-testid="stSidebar"] {
-            background: linear-gradient(180deg, rgba(15,19,29,0.98), rgba(11,15,24,0.98));
-            border-right: 1px solid rgba(255,255,255,0.08);
+            background: linear-gradient(180deg, #08111F 0%, #060B16 100%);
+            border-right: 1px solid rgba(91,140,255,0.16);
         }
-        [data-testid="stSidebar"] * { color: #E8EDF7; }
+        [data-testid="stSidebar"] * { color: #F2F6FF; }
         .sy-topbar {
             display:flex; justify-content:space-between; align-items:center;
-            padding: 1rem 1rem; border:1px solid rgba(255,255,255,0.08);
-            border-radius:18px; background:rgba(255,255,255,0.03); margin-bottom:1.1rem;
-            box-shadow:0 8px 24px rgba(0,0,0,0.12);
+            padding: 1rem 1rem; border:1px solid rgba(91,140,255,0.14);
+            border-radius:18px; background:linear-gradient(90deg, rgba(10,20,42,0.88), rgba(8,14,28,0.88));
+            margin-bottom:1.1rem; box-shadow:0 12px 28px rgba(0,0,0,0.24);
         }
         .sy-topbar-title {font-size:0.9rem; text-transform:uppercase; letter-spacing:0.12em; opacity:0.72;}
-        .sy-topbar-meta {font-size:0.9rem; opacity:0.82;}
+        .sy-topbar-meta {font-size:0.9rem; opacity:0.88;}
         .sy-hero {
-            padding: 1.6rem 1.35rem 1.35rem 1.35rem; border: 1px solid rgba(255,255,255,0.08); border-radius: 22px;
+            padding: 1.65rem 1.4rem 1.4rem 1.4rem; border: 1px solid rgba(91,140,255,0.18); border-radius: 24px;
             background:
-                radial-gradient(circle at 10% 20%, rgba(64,123,255,0.18), transparent 30%),
-                radial-gradient(circle at 90% 10%, rgba(17,191,255,0.14), transparent 28%),
-                linear-gradient(135deg, rgba(20,31,62,0.90), rgba(8,12,20,0.96));
-            margin-bottom: 1rem; box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+                radial-gradient(circle at 8% 18%, rgba(91,140,255,0.24), transparent 30%),
+                radial-gradient(circle at 92% 12%, rgba(0,212,255,0.18), transparent 28%),
+                linear-gradient(135deg, #10244E 0%, #08111F 55%, #050A14 100%);
+            margin-bottom: 1rem; box-shadow: 0 18px 40px rgba(0,0,0,0.28);
         }
         .sy-hero-grid {display:grid; grid-template-columns: 1.4fr 0.9fr; gap:1rem; align-items:start;}
-        .sy-hero-copy {padding-top:0.2rem;}
-        .sy-hero-copy h1 {margin:0 0 0.55rem 0 !important; line-height:1.08;}
-        .sy-hero-copy .sy-muted {margin-top:0.15rem; line-height:1.65;}
-        .sy-hero-stat {border:1px solid rgba(255,255,255,0.08); border-radius:16px; padding:0.9rem 1rem; background:rgba(255,255,255,0.04); min-height:78px;}
-        .sy-step, .sy-card, .sy-mini-card, .sy-upload-item, .sy-sidepanel {border: 1px solid rgba(255,255,255,0.08); background: rgba(255,255,255,0.03); box-shadow: 0 8px 24px rgba(0,0,0,0.12);}
-        .sy-step { border-radius: 18px; padding: 0.95rem 1rem; min-height: 106px; }
-        .sy-card { border-radius: 20px; padding: 1rem 1rem 0.95rem 1rem; margin-bottom: 0.9rem; }
-        .sy-mini-card { border-radius: 18px; padding: 0.95rem 1rem; min-height: 158px; }
+        .sy-hero-copy {padding-top:0.25rem;}
+        .sy-hero-copy h1 {
+            margin:0 0 0.55rem 0 !important; line-height:1.06; color:#FFFFFF;
+            font-size:3.05rem; letter-spacing:-0.03em;
+        }
+        .sy-hero-copy .sy-muted {margin-top:0.2rem; line-height:1.7; color:rgba(237,243,255,0.84);}
+        .sy-hero-stat {
+            border:1px solid rgba(120,165,255,0.16); border-radius:18px; padding:1rem 1rem;
+            background:linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.03)); min-height:82px;
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.04);
+        }
+        .sy-step, .sy-card, .sy-mini-card, .sy-upload-item, .sy-sidepanel {
+            border: 1px solid rgba(91,140,255,0.12);
+            background: linear-gradient(180deg, rgba(255,255,255,0.045), rgba(255,255,255,0.025));
+            box-shadow: 0 12px 28px rgba(0,0,0,0.18);
+        }
+        .sy-step { border-radius: 18px; padding: 1rem 1rem; min-height: 112px; }
+        .sy-card { border-radius: 20px; padding: 1.05rem 1.05rem 1rem 1.05rem; margin-bottom: 0.95rem; }
+        .sy-mini-card { border-radius: 18px; padding: 1rem 1rem; min-height: 158px; }
         .sy-sidepanel {border-radius:20px; padding:1rem 1rem; position:sticky; top:1rem;}
-        .sy-panel-title {font-size:0.86rem; text-transform:uppercase; letter-spacing:0.1em; opacity:0.70; margin-bottom:0.4rem;}
-        .sy-workspace {border:1px solid rgba(255,255,255,0.08); border-radius:22px; background:linear-gradient(180deg, rgba(255,255,255,0.025), rgba(255,255,255,0.015)); padding:1rem; box-shadow:0 8px 24px rgba(0,0,0,0.12);}
+        .sy-panel-title {font-size:0.86rem; text-transform:uppercase; letter-spacing:0.1em; opacity:0.74; margin-bottom:0.45rem; color:#C7D7FF;}
+        .sy-workspace {
+            border:1px solid rgba(91,140,255,0.12); border-radius:22px;
+            background:linear-gradient(180deg, rgba(255,255,255,0.035), rgba(255,255,255,0.02));
+            padding:1rem; box-shadow:0 12px 28px rgba(0,0,0,0.18);
+        }
         .sy-workspace-header {display:flex; justify-content:space-between; align-items:center; margin-bottom:0.8rem;}
-        .sy-workspace-title {font-size:1.05rem; font-weight:700;}
-        .sy-workspace-meta {font-size:0.88rem; opacity:0.74;}
-        .sy-preview-shell {border:1px solid rgba(255,255,255,0.08); border-radius:18px; overflow:hidden; background:#0C1018;}
-        .sy-preview-topbar {display:flex; justify-content:space-between; align-items:center; padding:0.8rem 0.95rem; border-bottom:1px solid rgba(255,255,255,0.08); background:rgba(255,255,255,0.03);}
-        .sy-preview-title {font-weight:700; font-size:0.98rem; color:#E8EDF7;}
-        .sy-preview-meta {font-size:0.84rem; opacity:0.72; margin-top:0.1rem; color:#E8EDF7;}
-        .sy-preview-badge {padding:0.28rem 0.55rem; border-radius:999px; font-size:0.76rem; font-weight:700; background:rgba(79,131,255,0.18); color:#DCE7FF; border:1px solid rgba(255,255,255,0.08);}
+        .sy-workspace-title {font-size:1.08rem; font-weight:700; color:#F6F9FF;}
+        .sy-workspace-meta {font-size:0.89rem; opacity:0.76;}
+        .sy-preview-shell {border:1px solid rgba(91,140,255,0.12); border-radius:18px; overflow:hidden; background:#09111E;}
+        .sy-preview-topbar {display:flex; justify-content:space-between; align-items:center; padding:0.82rem 0.95rem; border-bottom:1px solid rgba(91,140,255,0.12); background:linear-gradient(90deg, rgba(18,33,65,0.88), rgba(8,14,28,0.9));}
+        .sy-preview-title {font-weight:700; font-size:0.98rem; color:#F2F6FF;}
+        .sy-preview-meta {font-size:0.84rem; opacity:0.76; margin-top:0.1rem; color:#E1EBFF;}
+        .sy-preview-badge {padding:0.28rem 0.58rem; border-radius:999px; font-size:0.76rem; font-weight:700; background:linear-gradient(135deg, rgba(91,140,255,0.24), rgba(0,212,255,0.2)); color:#EAF2FF; border:1px solid rgba(91,140,255,0.2);}
         .sy-preview-frame {border:0; background:white;}
-        .sy-empty-preview {min-height:280px; display:flex; align-items:center; justify-content:center; text-align:center; border:1px dashed rgba(255,255,255,0.08); border-radius:18px; opacity:0.78; background:rgba(255,255,255,0.03); padding:1rem; color:#E8EDF7;}
-        .sy-kpi { font-size: 0.76rem; text-transform: uppercase; letter-spacing: 0.08em; opacity: 0.72; margin-bottom: 0.35rem; }
-        .sy-upload-item { border-radius: 14px; padding: 0.75rem 0.9rem; margin-bottom: 0.55rem; }
-        .sy-muted { color: rgba(232,237,247,0.78); font-size: 0.93rem; }
-        .sy-data-row {display:flex; justify-content:space-between; gap:0.8rem; padding:0.48rem 0; border-bottom:1px solid rgba(255,255,255,0.08);}
+        .sy-empty-preview {
+            min-height:280px; display:flex; align-items:center; justify-content:center; text-align:center;
+            border:1px dashed rgba(91,140,255,0.18); border-radius:18px; opacity:0.82;
+            background:rgba(255,255,255,0.025); padding:1rem; color:#EAF1FF;
+        }
+        .sy-kpi { font-size: 0.76rem; text-transform: uppercase; letter-spacing: 0.1em; opacity: 0.74; margin-bottom: 0.35rem; color:#C7D7FF; }
+        .sy-upload-item { border-radius: 14px; padding: 0.78rem 0.9rem; margin-bottom: 0.55rem; }
+        .sy-muted { color: rgba(232,237,247,0.78); font-size: 0.94rem; }
+        .sy-data-row {display:flex; justify-content:space-between; gap:0.8rem; padding:0.52rem 0; border-bottom:1px solid rgba(91,140,255,0.10);}
         .sy-data-row:last-child {border-bottom:0;}
         .sy-data-row span:first-child {opacity:0.72;}
-        .sy-quicktag {display:inline-flex; align-items:center; gap:0.4rem; padding:0.35rem 0.6rem; border-radius:999px; background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.08); font-size:0.82rem; margin:0.12rem 0.18rem 0.12rem 0;}
-        div[data-testid="stMetric"] {background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); padding: 0.75rem 0.9rem; border-radius: 16px;}
+        .sy-quicktag {
+            display:inline-flex; align-items:center; gap:0.4rem; padding:0.35rem 0.62rem; border-radius:999px;
+            background:rgba(255,255,255,0.04); border:1px solid rgba(91,140,255,0.12); font-size:0.82rem; margin:0.12rem 0.18rem 0.12rem 0;
+        }
+        div[data-testid="stMetric"] {
+            background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.025));
+            border: 1px solid rgba(91,140,255,0.12); padding: 0.78rem 0.9rem; border-radius: 16px;
+        }
         .stDownloadButton button, .stButton button { border-radius: 14px; }
-        .stTabs [data-baseweb="tab-list"] {gap:0.4rem;}
-        .stTabs [data-baseweb="tab"] {border-radius:12px; padding:0.5rem 0.9rem; background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.08);}
+        .stButton button, .stDownloadButton button {
+            background: linear-gradient(135deg, rgba(43,89,255,0.92), rgba(0,191,255,0.92));
+            color: white; border: 0;
+            box-shadow: 0 10px 24px rgba(18,57,160,0.28);
+        }
+        .stButton button:hover, .stDownloadButton button:hover { filter: brightness(1.07); }
+        .stTabs [data-baseweb="tab-list"] {gap:0.42rem;}
+        .stTabs [data-baseweb="tab"] {
+            border-radius:12px; padding:0.5rem 0.9rem; background:rgba(255,255,255,0.03);
+            border:1px solid rgba(91,140,255,0.12);
+        }
         .stSelectbox label, .stTextInput label, .stTextArea label, .stNumberInput label, .stDateInput label { color: #E8EDF7 !important; }
+        [data-baseweb="select"] > div, .stTextInput input, .stTextArea textarea, .stNumberInput input {
+            background: rgba(255,255,255,0.035) !important;
+            border: 1px solid rgba(91,140,255,0.12) !important;
+            color: #F2F6FF !important;
+        }
+        .stDateInput input { color:#F2F6FF !important; }
+        .stProgress > div > div > div > div { background: linear-gradient(90deg, #3B82F6, #00D4FF); }
         </style>
         """,
         unsafe_allow_html=True,
@@ -1033,8 +1074,8 @@ st.markdown(
             </div>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.7rem;">
                 <div class="sy-hero-stat"><div class="sy-kpi">Workspace</div><div style="font-size:1.02rem;font-weight:700;">Drawing-Centred Review</div></div>
-                <div class="sy-hero-stat"><div class="sy-kpi">Output</div><div style="font-size:1.02rem;font-weight:700;">Professional Reports</div></div>
-                <div class="sy-hero-stat"><div class="sy-kpi">Use Case</div><div style="font-size:1.02rem;font-weight:700;">Planning + Building Regs</div></div>
+                <div class="sy-hero-stat"><div class="sy-kpi">Output</div><div style="font-size:1.02rem;font-weight:700;">Client-Ready Reports</div></div>
+                <div class="sy-hero-stat"><div class="sy-kpi">Use Case</div><div style="font-size:1.02rem;font-weight:700;">Planning + Design Review</div></div>
                 <div class="sy-hero-stat"><div class="sy-kpi">Experience</div><div style="font-size:1.02rem;font-weight:700;">Architect SaaS Interface</div></div>
             </div>
         </div>
