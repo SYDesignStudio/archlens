@@ -5,6 +5,7 @@ import gc
 import re
 import time
 import uuid
+import jwt
 import tempfile
 from io import BytesIO
 from typing import Dict, List, Tuple
@@ -169,32 +170,36 @@ PLAN_LABELS = {
 }
 WEBSITE_PRICING_URL = "https://www.sydesignstudio.co.uk/pricing-plans"
 WEBSITE_HOME_URL = "https://www.sydesignstudio.co.uk"
+ARCHLENS_SHARED_SECRET = "ArchLens-SYDS-2026-very-long-random-private-secret-839201"
 
-def get_current_plan() -> str:
+def get_verified_plan_and_user() -> Tuple[str, str]:
     try:
         query_params = st.query_params
-        plan_value = query_params.get("plan", "starter")
+        token_value = query_params.get("token", "")
     except Exception:
-        plan_value = "starter"
-    if isinstance(plan_value, list):
-        plan_value = plan_value[0] if plan_value else "starter"
-    plan_value = str(plan_value).strip().lower()
-    return plan_value if plan_value in {"starter", "pro"} else "starter"
+        token_value = ""
 
+    if isinstance(token_value, list):
+        token_value = token_value[0] if token_value else ""
 
-def get_current_user_name() -> str:
+    token_value = str(token_value).strip()
+    if not token_value:
+        return "starter", ""
+
     try:
-        query_params = st.query_params
-        user_value = query_params.get("user", "")
+        payload = jwt.decode(
+            token_value,
+            ARCHLENS_SHARED_SECRET,
+            algorithms=["HS256"],
+        )
+        plan = str(payload.get("plan", "starter")).strip().lower()
+        if plan not in {"starter", "pro"}:
+            plan = "starter"
+        email = str(payload.get("email", "")).strip()
+        display_name = email or str(payload.get("sub", "")).strip()
+        return plan, display_name
     except Exception:
-        user_value = ""
-    if isinstance(user_value, list):
-        user_value = user_value[0] if user_value else ""
-    user_value = str(user_value).strip()
-    if not user_value:
-        return ""
-    return user_value.replace("%20", " ").replace("+", " ")
-
+        return "starter", ""
 
 
 def get_allowed_review_modules(plan: str) -> List[str]:
@@ -1096,8 +1101,7 @@ def build_simple_word_doc(title: str, body_text: str) -> BytesIO:
 
 st.set_page_config(page_title="ArchLens AI", layout="wide")
 inject_custom_css()
-current_plan = get_current_plan()
-current_user_name = get_current_user_name()
+current_plan, current_user_name = get_verified_plan_and_user()
 
 st.markdown(
     f"""
@@ -1137,6 +1141,9 @@ with step2:
     st.markdown('<div class="sy-step"><strong>Step 2 — Upload drawing pack</strong><br><span class="sy-muted">Upload plans, elevations, sections, location/block plans, or a simple homeowner sketch. The more complete the pack, the stronger the route and readiness assessment. For live stability, the app analyses the first 12 pages of larger packs.</span></div>', unsafe_allow_html=True)
 with step3:
     st.markdown('<div class="sy-step"><strong>Step 3 — Generate outputs</strong><br><span class="sy-muted">Review the project summary, planning route or compliance findings, recommended actions, download the report, and generate a draft planning statement where needed.</span></div>', unsafe_allow_html=True)
+
+if "token" not in st.query_params:
+    st.warning("No valid site token detected. Please launch ArchLens from your SY Design Studio member area.")
 
 with st.sidebar:
     st.header("Project Setup")
