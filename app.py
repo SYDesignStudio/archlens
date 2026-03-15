@@ -167,6 +167,8 @@ PLAN_LABELS = {
     "starter": "Solo",
     "pro": "Studio",
 }
+WEBSITE_PRICING_URL = "https://www.sydesignstudio.co.uk/pricing-plans"
+WEBSITE_HOME_URL = "https://www.sydesignstudio.co.uk"
 
 def get_current_plan() -> str:
     try:
@@ -178,6 +180,21 @@ def get_current_plan() -> str:
         plan_value = plan_value[0] if plan_value else "starter"
     plan_value = str(plan_value).strip().lower()
     return plan_value if plan_value in {"starter", "pro"} else "starter"
+
+
+def get_current_user_name() -> str:
+    try:
+        query_params = st.query_params
+        user_value = query_params.get("user", "")
+    except Exception:
+        user_value = ""
+    if isinstance(user_value, list):
+        user_value = user_value[0] if user_value else ""
+    user_value = str(user_value).strip()
+    if not user_value:
+        return ""
+    return user_value.replace("%20", " ").replace("+", " ")
+
 
 
 def get_allowed_review_modules(plan: str) -> List[str]:
@@ -1080,6 +1097,7 @@ def build_simple_word_doc(title: str, body_text: str) -> BytesIO:
 st.set_page_config(page_title="ArchLens AI", layout="wide")
 inject_custom_css()
 current_plan = get_current_plan()
+current_user_name = get_current_user_name()
 
 st.markdown(
     f"""
@@ -1088,12 +1106,13 @@ st.markdown(
             <div class="sy-topbar-title">Architect AI Workspace</div>
             <div class="sy-topbar-meta">ArchLens AI • Drawing-focused planning and building regulations review</div>
         </div>
-        <div class="sy-topbar-meta">Mode: {st.session_state.active_module} | Plan: {PLAN_LABELS.get(current_plan, "Solo")}</div>
+        <div class="sy-topbar-meta">Mode: {st.session_state.active_module} | Plan: {PLAN_LABELS.get(current_plan, "Solo")}{(" | User: " + current_user_name) if current_user_name else ""}</div>
     </div>
     <div class="sy-hero">
         <div class="sy-hero-grid">
             <div class="sy-hero-copy">
                 <h1>ArchLens AI</h1>
+                {f'<div style="font-size:0.92rem;color:#C7D7FF;margin-bottom:0.5rem;">Welcome {current_user_name}</div>' if current_user_name else ""}
                 <div class="sy-muted" style="max-width:780px;">
                     A premium AI assistant for architects and designers — review drawing packs, inspect planning route risk,
                     check Building Regulations issues, and generate client-ready outputs from one workspace.
@@ -1269,6 +1288,8 @@ with upload_tab:
         st.markdown("")
         if current_plan == "starter":
             st.info("Solo plan: Planning Review + PDF exports. Upgrade to Studio for Building Regulations Review, Word exports, and unlimited reviews.")
+            st.link_button("Upgrade to Studio", WEBSITE_PRICING_URL, use_container_width=True)
+            st.link_button("Return to SY Design Studio", WEBSITE_HOME_URL, use_container_width=True)
 
         if uploaded_file:
             total_uploaded_mb = sum(f.size for f in uploaded_file) / (1024 * 1024)
@@ -1467,14 +1488,17 @@ with report_tab:
             base_filename = (st.session_state.last_filename or "drawing_pack").rsplit(".", 1)[0]
             suffix = "Planning" if review_module == "Planning Review" else "BuildingRegs"
 
-            st.download_button(
-                label=("Download Homeowner Feasibility Report (.docx)" if review_module == "Planning Review" and review_mode == "Homeowner Summary" else "Download Professional Report (.docx)"),
-                data=word_file,
-                file_name=f"{base_filename}_{suffix}_AI_Review_Report.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                key="download_docx",
-                use_container_width=True,
-            )
+            if current_plan == "pro":
+                st.download_button(
+                    label=("Download Homeowner Feasibility Report (.docx)" if review_module == "Planning Review" and review_mode == "Homeowner Summary" else "Download Professional Report (.docx)"),
+                    data=word_file,
+                    file_name=f"{base_filename}_{suffix}_AI_Review_Report.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    key="download_docx",
+                    use_container_width=True,
+                )
+            else:
+                st.button("Download Word Report (.docx) 🔒 Studio", key="download_docx_locked", disabled=True, use_container_width=True)
             st.download_button(
                 label=("Download Homeowner Feasibility Report (.pdf)" if review_module == "Planning Review" and review_mode == "Homeowner Summary" else "Download Professional Report (.pdf)"),
                 data=pdf_file,
@@ -1501,16 +1525,21 @@ with report_tab:
                     st.session_state["planning_statement_file"] = build_simple_word_doc("Draft Planning Statement", statement_text)
 
                 if st.session_state.get("planning_statement_text"):
-                    st.download_button(
-                        label="Download Planning Statement (.docx)",
-                        data=st.session_state["planning_statement_file"],
-                        file_name=f"{base_filename}_Planning_Statement.docx",
-                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                        key="download_planning_statement_docx",
-                        use_container_width=True,
-                    )
+                    if current_plan == "pro":
+                        st.download_button(
+                            label="Download Planning Statement (.docx)",
+                            data=st.session_state["planning_statement_file"],
+                            file_name=f"{base_filename}_Planning_Statement.docx",
+                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                            key="download_planning_statement_docx",
+                            use_container_width=True,
+                        )
+                    else:
+                        st.button("Download Planning Statement (.docx) 🔒 Studio", key="download_planning_statement_docx_locked", disabled=True, use_container_width=True)
             if current_plan == "starter":
                 st.markdown(f'<div class="sy-data-row"><span>Monthly reviews used</span><strong>{st.session_state.get("starter_review_count", 0)} / {STARTER_MONTHLY_REVIEW_LIMIT}</strong></div>', unsafe_allow_html=True)
+                st.link_button("Upgrade to Studio", WEBSITE_PRICING_URL, use_container_width=True)
+            st.link_button("Return to SY Design Studio", WEBSITE_HOME_URL, use_container_width=True)
             st.markdown('</div>', unsafe_allow_html=True)
 
         if review_module == "Planning Review" and st.session_state.get("planning_statement_text"):
