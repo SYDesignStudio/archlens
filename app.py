@@ -1255,9 +1255,22 @@ def build_simple_word_doc(title: str, body_text: str) -> BytesIO:
 
 st.set_page_config(page_title="ArchLens AI", layout="wide")
 inject_custom_css()
-current_plan, current_user_name, has_valid_token = get_verified_plan_and_user()
 
-if not has_valid_token:
+if "authenticated" not in st.session_state:
+    st.session_state["authenticated"] = False
+if "auth_plan" not in st.session_state:
+    st.session_state["auth_plan"] = "starter"
+if "auth_user_name" not in st.session_state:
+    st.session_state["auth_user_name"] = ""
+
+token_plan, token_user_name, has_valid_token = get_verified_plan_and_user()
+
+if has_valid_token:
+    st.session_state["authenticated"] = True
+    st.session_state["auth_plan"] = token_plan
+    st.session_state["auth_user_name"] = token_user_name
+
+if not st.session_state.get("authenticated", False):
     st.markdown(
         """
         <div class="sy-hero" style="max-width:900px;margin:3rem auto 1rem auto;">
@@ -1279,6 +1292,8 @@ if not has_valid_token:
         st.link_button("View Plans", WEBSITE_PRICING_URL, use_container_width=True)
     st.stop()
 
+current_plan = st.session_state.get("auth_plan", "starter")
+current_user_name = st.session_state.get("auth_user_name", "")
 hero_welcome = f'<div style="font-size:0.92rem;color:#C7D7FF;margin-bottom:0.5rem;">Welcome {current_user_name}</div>' if current_user_name else ""
 
 st.markdown(
