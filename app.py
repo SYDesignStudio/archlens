@@ -5,7 +5,6 @@ import gc
 import re
 import time
 import uuid
-import jwt
 import tempfile
 from io import BytesIO
 from typing import Dict, List, Tuple
@@ -29,6 +28,7 @@ DEFAULT_STATE = {
     "last_error": None,
     "report_id": None,
     "active_module": "Building Regulations Review",
+    "saved_projects": [],
 }
 for key, value in DEFAULT_STATE.items():
     if key not in st.session_state:
@@ -170,36 +170,32 @@ PLAN_LABELS = {
 }
 WEBSITE_PRICING_URL = "https://www.sydesignstudio.co.uk/pricing-plans"
 WEBSITE_HOME_URL = "https://www.sydesignstudio.co.uk"
-ARCHLENS_SHARED_SECRET = "ArchLens-SYDS-2026-very-long-random-private-secret-839201"
 
-def get_verified_plan_and_user() -> Tuple[str, str, bool]:
+def get_current_plan() -> str:
     try:
         query_params = st.query_params
-        token_value = query_params.get("token", "")
+        plan_value = query_params.get("plan", "starter")
     except Exception:
-        token_value = ""
+        plan_value = "starter"
+    if isinstance(plan_value, list):
+        plan_value = plan_value[0] if plan_value else "starter"
+    plan_value = str(plan_value).strip().lower()
+    return plan_value if plan_value in {"starter", "pro"} else "starter"
 
-    if isinstance(token_value, list):
-        token_value = token_value[0] if token_value else ""
 
-    token_value = str(token_value).strip()
-    if not token_value:
-        return "starter", "", False
-
+def get_current_user_name() -> str:
     try:
-        payload = jwt.decode(
-            token_value,
-            ARCHLENS_SHARED_SECRET,
-            algorithms=["HS256"],
-        )
-        plan = str(payload.get("plan", "starter")).strip().lower()
-        if plan not in {"starter", "pro"}:
-            plan = "starter"
-        email = str(payload.get("email", "")).strip()
-        display_name = email or str(payload.get("sub", "")).strip()
-        return plan, display_name, True
+        query_params = st.query_params
+        user_value = query_params.get("user", "")
     except Exception:
-        return "starter", "", False
+        user_value = ""
+    if isinstance(user_value, list):
+        user_value = user_value[0] if user_value else ""
+    user_value = str(user_value).strip()
+    if not user_value:
+        return ""
+    return user_value.replace("%20", " ").replace("+", " ")
+
 
 
 def get_allowed_review_modules(plan: str) -> List[str]:
@@ -208,6 +204,12 @@ def get_allowed_review_modules(plan: str) -> List[str]:
 
 def get_plan_upgrade_message(feature_name: str) -> str:
     return f"{feature_name} is available on Studio. Upgrade to unlock this feature."
+
+def add_saved_project(project_record: Dict):
+    saved = st.session_state.get("saved_projects", [])
+    filtered = [item for item in saved if item.get("report_id") != project_record.get("report_id")]
+    filtered.insert(0, project_record)
+    st.session_state["saved_projects"] = filtered[:25]
 
 
 def inject_custom_css():
@@ -1101,7 +1103,8 @@ def build_simple_word_doc(title: str, body_text: str) -> BytesIO:
 
 st.set_page_config(page_title="ArchLens AI", layout="wide")
 inject_custom_css()
-current_plan, current_user_name, has_valid_token = get_verified_plan_and_user()
+current_plan = get_current_plan()
+current_user_name = get_current_user_name()
 
 st.markdown(
     f"""
@@ -1141,28 +1144,6 @@ with step2:
     st.markdown('<div class="sy-step"><strong>Step 2 — Upload drawing pack</strong><br><span class="sy-muted">Upload plans, elevations, sections, location/block plans, or a simple homeowner sketch. The more complete the pack, the stronger the route and readiness assessment. For live stability, the app analyses the first 12 pages of larger packs.</span></div>', unsafe_allow_html=True)
 with step3:
     st.markdown('<div class="sy-step"><strong>Step 3 — Generate outputs</strong><br><span class="sy-muted">Review the project summary, planning route or compliance findings, recommended actions, download the report, and generate a draft planning statement where needed.</span></div>', unsafe_allow_html=True)
-
-if not has_valid_token:
-    st.markdown(
-        """
-        <div class="sy-hero" style="max-width:900px;margin:1rem auto 0 auto;">
-            <div class="sy-hero-copy">
-                <h1>ArchLens AI</h1>
-                <div class="sy-muted" style="max-width:760px;">
-                    Access is managed through your SY Design Studio member account.
-                    Please launch ArchLens from your member area to verify your subscription and open the correct plan.
-                </div>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-    btn1, btn2 = st.columns(2)
-    with btn1:
-        st.link_button("Login to Member Area", WEBSITE_HOME_URL + "/login", use_container_width=True)
-    with btn2:
-        st.link_button("View Plans", WEBSITE_PRICING_URL, use_container_width=True)
-    st.stop()
 
 with st.sidebar:
     st.header("Project Setup")
@@ -1221,6 +1202,13 @@ with st.sidebar:
 
     client_name = st.text_input("Client")
     review_date = st.date_input("Report Date")
+
+    saved_projects = st.session_state.get("saved_projects", [])
+    if saved_projects:
+        st.markdown("### Saved Projects")
+        for item in saved_projects[:5]:
+            st.write(item.get("project_address", "Not provided"))
+            st.caption(f"{item.get('module', 'Review')} • {item.get('date', '')} • {item.get('plan', '')}")
 
     if st.button("Clear Report", key="clear_report_btn"):
         for key, value in DEFAULT_STATE.items():
@@ -1459,6 +1447,20 @@ with upload_tab:
             if current_plan == "starter":
                 st.session_state["starter_review_count"] = st.session_state.get("starter_review_count", 0) + 1
 
+            add_saved_project(
+                {
+                    "report_id": report_id,
+                    "project_address": clean_project_address,
+                    "client_name": clean_client_name,
+                    "module": review_module,
+                    "project_types": ", ".join(project_types) if project_types else "Not stated",
+                    "property_type": property_type if review_module == "Planning Review" else "Not stated",
+                    "filename": file.name,
+                    "date": str(review_date),
+                    "plan": PLAN_LABELS.get(current_plan, "Solo"),
+                }
+            )
+
             smooth_progress(progress_bar, status_text, 95, 100, "Finalising report...", 0.4)
             status_text.text("Analysis complete. 100%")
             progress_bar.progress(100)
@@ -1567,6 +1569,22 @@ with report_tab:
                 st.link_button("Upgrade to Studio", WEBSITE_PRICING_URL, use_container_width=True)
             st.link_button("Return to SY Design Studio", WEBSITE_HOME_URL, use_container_width=True)
             st.markdown('</div>', unsafe_allow_html=True)
+
+        st.markdown("")
+        with st.expander("Saved Projects", expanded=False):
+            saved_projects = st.session_state.get("saved_projects", [])
+            if saved_projects:
+                for item in saved_projects:
+                    st.write(item.get("project_address", "Not provided"))
+                    st.caption(f"Report ID: {item.get('report_id', '')}")
+                    st.caption(f"Module: {item.get('module', '')}")
+                    st.caption(f"Project Type: {item.get('project_types', '')}")
+                    st.caption(f"File: {item.get('filename', '')}")
+                    st.caption(f"Date: {item.get('date', '')}")
+                    st.caption(f"Plan: {item.get('plan', '')}")
+                    st.markdown("---")
+            else:
+                st.info("No saved projects yet. Run a review to build your project history.")
 
         if review_module == "Planning Review" and st.session_state.get("planning_statement_text"):
             st.markdown("")
