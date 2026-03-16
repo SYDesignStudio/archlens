@@ -320,6 +320,18 @@ def infer_submission_readiness_from_context(
 
 
 
+def infer_officer_recommendation(readiness_status: str, route_text: str, proposal_features: Dict[str, bool]) -> str:
+    route_lower = (route_text or "").lower()
+    if "further information required" in (readiness_status or "").lower():
+        return "FURTHER INFORMATION REQUIRED"
+    if proposal_features.get("rear_dormer") and not proposal_features.get("first_floor_extension"):
+        if "full planning" in route_lower:
+            return "LIKELY APPROVE"
+    if "ready to submit" in (readiness_status or "").lower():
+        return "LIKELY APPROVE"
+    return "LIKELY APPROVE WITH MINOR AMENDMENTS"
+
+
 def detect_proposal_features(project_types_text: str, proposal_summary_text: str, text: str, page_summary: str) -> Dict[str, bool]:
     combined = f"{project_types_text}\n{proposal_summary_text}\n{text}\n{page_summary}".lower()
     return {
@@ -327,7 +339,12 @@ def detect_proposal_features(project_types_text: str, proposal_summary_text: str
         "rear_dormer": any(term in combined for term in ["rear dormer", "dormer", "rear roof enlargement"]),
         "front_rooflights": any(term in combined for term in ["front rooflight", "front rooflights", "rooflight", "rooflights"]),
         "single_storey_rear_extension": "ground floor rear extension" in combined or "single-storey rear extension" in combined or "single storey rear extension" in combined,
-        "first_floor_extension": "first floor" in combined,
+        "first_floor_extension": (
+        "first floor rear extension" in combined
+        or "first floor side extension" in combined
+        or "two storey rear extension" in combined
+        or "second storey extension" in combined
+    ),
         "side_extension": "side extension" in combined,
         "wraparound": "wraparound" in combined or "wrap around" in combined,
         "loft_extension": "loft extension" in combined or "loft conversion" in combined or "rear dormer" in combined or "dormer" in combined,
@@ -863,6 +880,15 @@ MISSING INFORMATION
 RECOMMENDED ACTIONS
 SUBMISSION READINESS
 
+Within PLANNING ASSESSMENT, write in a delegated-report tone and cover:
+- Site / proposal
+- Design, scale and massing
+- Neighbouring amenity
+- Character and appearance
+- Fire safety
+- Overall planning balance
+Use concise officer-style wording such as "By reason of", "On balance", "The proposal would", "The proposal is likely to".
+
 Section guidance:
 PROJECT CLASSIFICATION
 - Keep this concise and professional.
@@ -976,6 +1002,14 @@ Detected pages:
         output_text = re.sub(top_summary_pattern, top_summary_replacement, output_text, count=1)
         output_text = re.sub(r"^.*Overall Planning Risk Rating:.*$\n?", "", output_text, flags=re.MULTILINE)
         output_text = re.sub(r"^.*Planning Approval Probability:.*$\n?", "", output_text, flags=re.MULTILINE)
+    recommendation_value = infer_officer_recommendation(
+        readiness_status,
+        output_text,
+        proposal_features,
+    )
+    if "Recommendation:" not in output_text:
+        output_text = output_text.rstrip() + f"\n\nRecommendation: {recommendation_value}\n"
+
     gc.collect()
     return output_text
 
