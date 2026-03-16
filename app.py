@@ -1111,6 +1111,30 @@ st.set_page_config(page_title="ArchLens AI", layout="wide")
 inject_custom_css()
 current_plan, current_user_name, has_valid_token = get_verified_plan_and_user()
 
+if not has_valid_token:
+    st.markdown(
+        """
+        <div class="sy-hero" style="max-width:900px;margin:3rem auto 1rem auto;">
+            <div class="sy-hero-copy">
+                <h1>ArchLens AI</h1>
+                <div class="sy-muted" style="max-width:760px;">
+                    Access is managed through your SY Design Studio member account.
+                    Please launch ArchLens from your member area to verify your subscription and open the correct plan.
+                </div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    col1, col2 = st.columns(2)
+    with col1:
+        st.link_button("Login to Member Area", WEBSITE_HOME_URL + "/login", use_container_width=True)
+    with col2:
+        st.link_button("View Plans", WEBSITE_PRICING_URL, use_container_width=True)
+    st.stop()
+
+hero_welcome = f'<div style="font-size:0.92rem;color:#C7D7FF;margin-bottom:0.5rem;">Welcome {current_user_name}</div>' if current_user_name else ""
+
 st.markdown(
     f"""
     <div class="sy-topbar">
@@ -1124,7 +1148,7 @@ st.markdown(
         <div class="sy-hero-grid">
             <div class="sy-hero-copy">
                 <h1>ArchLens AI</h1>
-                {f'<div style="font-size:0.92rem;color:#C7D7FF;margin-bottom:0.5rem;">Welcome {current_user_name}</div>' if current_user_name else ""}
+                {hero_welcome}
                 <div class="sy-muted" style="max-width:780px;">
                     A premium AI assistant for architects and designers — review drawing packs, inspect planning route risk,
                     check Building Regulations issues, and generate client-ready outputs from one workspace.
