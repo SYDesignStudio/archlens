@@ -172,7 +172,7 @@ WEBSITE_PRICING_URL = "https://www.sydesignstudio.co.uk/pricing-plans"
 WEBSITE_HOME_URL = "https://www.sydesignstudio.co.uk"
 ARCHLENS_SHARED_SECRET = "ArchLens-SYDS-2026-very-long-random-private-secret-839201"
 
-def get_verified_plan_and_user() -> Tuple[str, str]:
+def get_verified_plan_and_user() -> Tuple[str, str, bool]:
     try:
         query_params = st.query_params
         token_value = query_params.get("token", "")
@@ -184,7 +184,7 @@ def get_verified_plan_and_user() -> Tuple[str, str]:
 
     token_value = str(token_value).strip()
     if not token_value:
-        return "starter", ""
+        return "starter", "", False
 
     try:
         payload = jwt.decode(
@@ -197,9 +197,9 @@ def get_verified_plan_and_user() -> Tuple[str, str]:
             plan = "starter"
         email = str(payload.get("email", "")).strip()
         display_name = email or str(payload.get("sub", "")).strip()
-        return plan, display_name
+        return plan, display_name, True
     except Exception:
-        return "starter", ""
+        return "starter", "", False
 
 
 def get_allowed_review_modules(plan: str) -> List[str]:
@@ -1101,7 +1101,7 @@ def build_simple_word_doc(title: str, body_text: str) -> BytesIO:
 
 st.set_page_config(page_title="ArchLens AI", layout="wide")
 inject_custom_css()
-current_plan, current_user_name = get_verified_plan_and_user()
+current_plan, current_user_name, has_valid_token = get_verified_plan_and_user()
 
 st.markdown(
     f"""
@@ -1142,8 +1142,27 @@ with step2:
 with step3:
     st.markdown('<div class="sy-step"><strong>Step 3 — Generate outputs</strong><br><span class="sy-muted">Review the project summary, planning route or compliance findings, recommended actions, download the report, and generate a draft planning statement where needed.</span></div>', unsafe_allow_html=True)
 
-if "token" not in st.query_params:
-    st.warning("No valid site token detected. Please launch ArchLens from your SY Design Studio member area.")
+if not has_valid_token:
+    st.markdown(
+        """
+        <div class="sy-hero" style="max-width:900px;margin:1rem auto 0 auto;">
+            <div class="sy-hero-copy">
+                <h1>ArchLens AI</h1>
+                <div class="sy-muted" style="max-width:760px;">
+                    Access is managed through your SY Design Studio member account.
+                    Please launch ArchLens from your member area to verify your subscription and open the correct plan.
+                </div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    btn1, btn2 = st.columns(2)
+    with btn1:
+        st.link_button("Login to Member Area", WEBSITE_HOME_URL + "/login", use_container_width=True)
+    with btn2:
+        st.link_button("View Plans", WEBSITE_PRICING_URL, use_container_width=True)
+    st.stop()
 
 with st.sidebar:
     st.header("Project Setup")
