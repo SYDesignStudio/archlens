@@ -1553,14 +1553,80 @@ with st.sidebar:
 
     practice_name = ""
 
-    with st.expander("Advanced Details (optional)", expanded=False):
+    with st.expander("Improve Accuracy (Optional)", expanded=False):
+        st.caption("Add extra detail only where it improves planning route and report accuracy.")
         client_name = st.text_input("Client")
         review_date = st.date_input("Report Date")
+
+        if review_module == "Planning Review":
+            st.caption("These optional planning questions help improve PD / prior approval / full planning route accuracy.")
+            site_constraints = st.multiselect(
+                "Site constraints",
+                [
+                    "Conservation Area",
+                    "Article 4 Direction",
+                    "Listed Building",
+                    "Flat / Maisonette",
+                    "Corner Plot",
+                    "Flood Zone constraint",
+                ],
+                default=[],
+            )
+            existing_rear_extension_depth_m = st.number_input(
+                "Existing rear extension depth from original rear wall (m)",
+                min_value=0.0,
+                max_value=20.0,
+                value=0.0,
+                step=0.1,
+            )
+            proposed_eaves_height_m = st.number_input(
+                "Proposed eaves height (m)",
+                min_value=0.0,
+                max_value=10.0,
+                value=0.0,
+                step=0.1,
+            )
+            distance_to_rear_boundary_m = st.number_input(
+                "Approx. distance from rear wall to rear boundary (m)",
+                min_value=0.0,
+                max_value=100.0,
+                value=0.0,
+                step=0.1,
+            )
+            proposed_materials_match = st.selectbox(
+                "Do proposed external materials broadly match the existing house?",
+                ["Not stated", "Yes", "No"],
+                index=0,
+            )
+            pd_notes = st.text_area(
+                "Accuracy notes",
+                placeholder="Example: no previous enlargements to the original house, flat roof, not in conservation area, no side extension proposed.",
+                height=90,
+            )
+        else:
+            site_constraints = []
+            existing_rear_extension_depth_m = 0.0
+            proposed_eaves_height_m = 0.0
+            distance_to_rear_boundary_m = 0.0
+            proposed_materials_match = "Not stated"
+            pd_notes = ""
 
     if "client_name" not in locals():
         client_name = ""
     if "review_date" not in locals():
         review_date = __import__("datetime").date.today()
+    if "site_constraints" not in locals():
+        site_constraints = []
+    if "existing_rear_extension_depth_m" not in locals():
+        existing_rear_extension_depth_m = 0.0
+    if "proposed_eaves_height_m" not in locals():
+        proposed_eaves_height_m = 0.0
+    if "distance_to_rear_boundary_m" not in locals():
+        distance_to_rear_boundary_m = 0.0
+    if "proposed_materials_match" not in locals():
+        proposed_materials_match = "Not stated"
+    if "pd_notes" not in locals():
+        pd_notes = ""
 
     if st.button("Clear Report", key="clear_report_btn"):
         for key, value in DEFAULT_STATE.items():
@@ -1721,12 +1787,29 @@ with upload_tab:
                                     "Reading drawings and extracting planning data...", 0.8)
 
                     proposal_summary_for_ai = proposal_summary
+                    planning_accuracy_bits = []
                     if "Ground Floor Rear Extension" in project_types:
                         depth_txt = f"{rear_extension_depth_m:.1f}m depth from original rear wall" if rear_extension_depth_m is not None else ""
                         height_txt = f"{rear_extension_height_m:.1f}m overall height" if rear_extension_height_m is not None else ""
-                        extra_bits = ", ".join([x for x in [depth_txt, height_txt] if x])
+                        existing_depth_txt = f"{existing_rear_extension_depth_m:.1f}m existing rear extension from original rear wall" if existing_rear_extension_depth_m and existing_rear_extension_depth_m > 0 else ""
+                        eaves_txt = f"{proposed_eaves_height_m:.1f}m eaves height" if proposed_eaves_height_m and proposed_eaves_height_m > 0 else ""
+                        boundary_txt = f"{distance_to_rear_boundary_m:.1f}m rear garden depth / boundary distance" if distance_to_rear_boundary_m and distance_to_rear_boundary_m > 0 else ""
+                        materials_txt = f"Materials match existing: {proposed_materials_match}" if proposed_materials_match != "Not stated" else ""
+                        constraints_txt = f"Site constraints: {', '.join(site_constraints)}" if site_constraints else ""
+                        extra_bits = ", ".join([x for x in [depth_txt, height_txt, existing_depth_txt, eaves_txt, boundary_txt, materials_txt, constraints_txt] if x])
                         if extra_bits:
-                            proposal_summary_for_ai = (proposal_summary_for_ai.strip() + " | " + extra_bits).strip(" |")
+                            planning_accuracy_bits.append(extra_bits)
+                    elif site_constraints or pd_notes or proposed_materials_match != "Not stated":
+                        if site_constraints:
+                            planning_accuracy_bits.append(f"Site constraints: {', '.join(site_constraints)}")
+                        if proposed_materials_match != "Not stated":
+                            planning_accuracy_bits.append(f"Materials match existing: {proposed_materials_match}")
+
+                    if pd_notes:
+                        planning_accuracy_bits.append(f"Accuracy notes: {pd_notes}")
+
+                    if planning_accuracy_bits:
+                        proposal_summary_for_ai = (proposal_summary_for_ai.strip() + " | " + " | ".join(planning_accuracy_bits)).strip(" |")
 
                     report = pdf_summary.analyze_planning_pdf(
                         temp_pdf_path,
