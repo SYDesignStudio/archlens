@@ -1198,6 +1198,141 @@ def detect_local_authority_for_display(project_address: str, proposal_summary: s
         combined_text = f"{combined_text}\n{names}"
     return pdf_summary.detect_local_authority(project_address or "", combined_text or "")
 
+
+def get_planning_route_snapshot(
+    project_types: List[str],
+    property_type: str,
+    proposal_summary: str,
+    rear_extension_depth_m=None,
+    rear_extension_height_m=None,
+) -> Tuple[str, str, str]:
+    """Provide a lightweight UI-only planning route snapshot.
+
+    This is intentionally conservative and only guides the setup screen.
+    The full AI planning review still makes the final route assessment.
+    """
+    project_types = project_types or []
+    project_types_lower = [str(x).strip().lower() for x in project_types if str(x).strip()]
+    property_lower = (property_type or "").strip().lower()
+    summary_lower = (proposal_summary or "").strip().lower()
+
+    if not project_types_lower:
+        return (
+            "Full Planning likely",
+            "Medium",
+            "Select the project type to improve the route snapshot. The full AI review will still assess the uploaded drawing pack.",
+        )
+
+    if property_lower in {"flat", "maisonette"}:
+        return (
+            "Full Planning required",
+            "High",
+            "Flats and maisonettes do not normally benefit from standard householder permitted development rights, so a full planning route is more likely.",
+        )
+
+    has_rear = "ground floor rear extension" in project_types_lower
+    has_side = any(x in project_types_lower for x in ["ground floor side extension", "ground floor infill extension"])
+    has_upper = any(x in project_types_lower for x in ["first floor rear extension", "first floor side extension"])
+    has_loft = "loft extension" in project_types_lower
+    has_conversion = any(x in project_types_lower for x in ["flat conversion", "house conversion"])
+    detached = "detached" in property_lower
+    terrace_or_semi = any(term in property_lower for term in ["terraced", "terrace", "semi-detached", "semi detached", "end of terrace"])
+
+    if has_conversion:
+        return (
+            "Full Planning required",
+            "High",
+            "Conversions normally need a full planning assessment because the route depends on use, layout, standards, and local policy rather than standard householder PD rules.",
+        )
+
+    if has_upper or has_side:
+        return (
+            "Full Planning likely",
+            "High",
+            "Side, infill, wraparound, or first-floor style works often fall outside the simplest PD routes or need fuller planning judgment on design and neighbour impact.",
+        )
+
+    if has_loft:
+        return (
+            "PD / LDC possible",
+            "Medium",
+            "A loft extension may be capable of permitted development subject to full checks on roof form, volume, front-facing changes, and any local constraints.",
+        )
+
+    if has_rear:
+        if rear_extension_height_m is not None and float(rear_extension_height_m) > 4.0:
+            return (
+                "Full Planning likely",
+                "High",
+                "The entered rear extension height is above the usual 4.0m single-storey PD limit, so full planning is more likely unless the scheme is revised.",
+            )
+
+        if rear_extension_depth_m is not None:
+            depth = float(rear_extension_depth_m)
+            if detached and depth <= 4.0:
+                return (
+                    "PD / LDC possible",
+                    "Low",
+                    "The entered rear depth sits within the normal detached house PD range, subject to full dimensional and site-constraint checks.",
+                )
+            if detached and 4.0 < depth <= 8.0:
+                return (
+                    "Prior Approval possible",
+                    "Medium",
+                    "The entered rear depth is above normal detached house PD limits but may fall within the larger home extension prior approval route.",
+                )
+            if detached and depth > 8.0:
+                return (
+                    "Full Planning likely",
+                    "High",
+                    "The entered rear depth exceeds the usual detached house larger home extension threshold, so full planning is more likely.",
+                )
+
+            if terrace_or_semi and depth <= 3.0:
+                return (
+                    "PD / LDC possible",
+                    "Low",
+                    "The entered rear depth sits within the normal terrace / semi-detached PD range, subject to full dimensional and site-constraint checks.",
+                )
+            if terrace_or_semi and 3.0 < depth <= 6.0:
+                return (
+                    "Prior Approval possible",
+                    "Medium",
+                    "The entered rear depth is above the normal terrace / semi-detached PD range but may fit the larger home extension prior approval route.",
+                )
+            if terrace_or_semi and depth > 6.0:
+                return (
+                    "Full Planning likely",
+                    "High",
+                    "The entered rear depth exceeds the usual terrace / semi-detached larger home extension threshold, so full planning is more likely.",
+                )
+
+        return (
+            "PD / Prior Approval possible",
+            "Medium",
+            "A ground floor rear extension may be capable of PD or the larger home extension prior approval route, but the final position depends on measured depth, height, house type, and site constraints.",
+        )
+
+    if "porch" in project_types_lower:
+        return (
+            "PD possible",
+            "Low",
+            "A porch can often be permitted development, subject to size, height, highway relationship, and other site-specific checks.",
+        )
+
+    if "planning" in summary_lower or "permission" in summary_lower:
+        return (
+            "Full Planning likely",
+            "Medium",
+            "The proposal description suggests a planning-led route, but the full AI review should confirm the final application path.",
+        )
+
+    return (
+        "Full Planning likely",
+        "Medium",
+        "The proposal does not clearly fall within a simple PD route from the setup answers alone, so full planning should be assumed unless the drawing review confirms otherwise.",
+    )
+
 def render_at_a_glance(sections: Dict[str, str], report_id: str, module_name: str):
     config = MODULE_CONFIG[module_name]
     readiness_key = config["readiness_key"]
