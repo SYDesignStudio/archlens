@@ -3,7 +3,7 @@ import gc
 import os
 import re
 import time
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 
 import fitz
 import pdfplumber
@@ -354,6 +354,92 @@ def build_detected_proposal_label(features: Dict[str, bool], fallback_project_ty
     if not labels:
         return fallback_project_types or "residential alterations"
     return ", ".join(labels)
+
+
+def format_pd_context_for_prompt(pd_context: Optional[Dict[str, str]]) -> str:
+    if not pd_context:
+        return "No structured PD questionnaire answers were provided."
+    lines = []
+    for key, value in pd_context.items():
+        pretty_key = key.replace("_", " ").strip().title()
+        lines.append(f"- {pretty_key}: {value}")
+    return "\n".join(lines)
+
+
+def infer_route_from_pd_context(
+    pd_context: Optional[Dict[str, str]],
+    project_types_text: str,
+    property_type_text: str,
+) -> Tuple[Optional[str], str, str]:
+    if not pd_context:
+        return None, "", "MEDIUM"
+
+    property_lower = (property_type_text or "").lower()
+    project_lower = (project_types_text or "").lower()
+
+    is_house = str(pd_context.get("is_single_dwellinghouse", "")).lower() == "yes"
+    if not is_house or property_lower in {"flat", "maisonette"}:
+        return "FULL PLANNING", "The structured questionnaire indicates the property is not a single dwellinghouse / householder PD eligible property.", "HIGH"
+
+    constraints = str(pd_context.get("site_constraints", "")).lower()
+    if any(term in constraints for term in ["listed", "article 4", "conservation"]):
+        return "FULL PLANNING", "Site constraints may remove or materially restrict householder permitted development rights.", "HIGH"
+
+    if str(pd_context.get("forward_of_principal_elevation", "")).lower() == "yes":
+        return "FULL PLANNING", "Works projecting forward of the principal elevation are unlikely to benefit from normal householder permitted development rights.", "HIGH"
+
+    if str(pd_context.get("garden_coverage_over_50", "")).lower() == "yes":
+        return "FULL PLANNING", "The questionnaire indicates more than 50% curtilage coverage, which falls outside normal PD limits.", "HIGH"
+
+    if "ground floor rear extension" in project_lower:
+        try:
+            depth = float(pd_context.get("rear_extension_depth_m", "") or 0)
+        except Exception:
+            depth = 0.0
+        try:
+            overall_h = float(pd_context.get("rear_extension_overall_height_m", "") or 0)
+        except Exception:
+            overall_h = 0.0
+        boundary_within_2m = str(pd_context.get("within_2m_of_boundary", "")).lower() == "yes"
+        eaves_band = str(pd_context.get("eaves_height_within_2m", "")).lower()
+
+        if overall_h and overall_h > 4.0:
+            return "FULL PLANNING", "The stated overall height exceeds the usual 4.0m PD limit for a single-storey rear extension.", "HIGH"
+        if boundary_within_2m and "over 3.0m" in eaves_band:
+            return "FULL PLANNING", "The stated eaves height within 2m of the boundary exceeds the usual 3.0m PD limit.", "HIGH"
+
+        detached = "detached" in property_lower
+        terrace_or_semi = any(term in property_lower for term in ["terraced", "terrace", "semi-detached", "semi detached", "end of terrace"])
+
+        if detached:
+            if depth <= 4.0 and depth > 0:
+                return "PD / LDC", "The stated rear extension depth is within the normal detached house PD threshold.", "LOW"
+            if depth <= 8.0 and depth > 4.0:
+                risk = "HIGH" if str(pd_context.get("similar_neighbour_extensions", "")).lower() == "no" else "MEDIUM"
+                return "PRIOR APPROVAL", "The stated rear extension depth exceeds the normal detached house PD threshold but may proceed through the larger home extension prior approval route.", risk
+            if depth > 8.0:
+                return "FULL PLANNING", "The stated detached house rear extension depth exceeds the larger home extension prior approval threshold.", "HIGH"
+
+        if terrace_or_semi:
+            if depth <= 3.0 and depth > 0:
+                return "PD / LDC", "The stated rear extension depth is within the normal terrace / semi-detached PD threshold.", "LOW"
+            if depth <= 6.0 and depth > 3.0:
+                risk = "HIGH" if str(pd_context.get("similar_neighbour_extensions", "")).lower() == "no" else "MEDIUM"
+                return "PRIOR APPROVAL", "The stated rear extension depth exceeds the normal terrace / semi-detached PD threshold but may proceed through the larger home extension prior approval route.", risk
+            if depth > 6.0:
+                return "FULL PLANNING", "The stated terrace / semi-detached rear extension depth exceeds the larger home extension prior approval threshold.", "HIGH"
+
+    roof_change = str(pd_context.get("roof_change_type", "")).lower()
+    if any(term in project_lower for term in ["loft", "dormer"]) or roof_change:
+        if "front dormer" in roof_change:
+            return "FULL PLANNING", "A front dormer would normally fall outside standard householder roof enlargement PD limits.", "HIGH"
+        roof_volume = str(pd_context.get("roof_volume_band", "")).lower()
+        if "over limit" in roof_volume:
+            return "FULL PLANNING", "The stated additional roof volume exceeds the usual householder PD volume allowance.", "HIGH"
+        if any(term in roof_change for term in ["rear dormer", "side dormer", "hip to gable", "rear roof extension"]):
+            return "PD / LDC", "The roof enlargement may be capable of PD subject to full technical confirmation against the householder technical guidance.", "MEDIUM"
+
+    return None, "", "MEDIUM"
 
 
 def detect_street_precedent_signal(text: str, page_summary: str) -> str:
@@ -775,6 +861,7 @@ def analyze_planning_pdf(
     project_address: str = "",
     local_authority: str = "",
     review_mode: str = "Architect / Professional",
+    pd_context: Optional[Dict[str, str]] = None,
 ) -> str:
     text = extract_text_from_pdf(pdf_path)
     page_data = extract_text_by_page(pdf_path)
@@ -805,6 +892,11 @@ def analyze_planning_pdf(
     readiness_status, readiness_reason = infer_submission_readiness_from_context(
         application_type_value, project_types_text, proposal_summary_text, text, page_summary
     )
+    pd_route, pd_route_reason, pd_refusal_risk = infer_route_from_pd_context(
+        pd_context, project_types_text, property_type_text
+    )
+    if pd_route:
+        application_type_value = pd_route
 
     prompt = f"""
 You are reviewing a UK residential planning drawing pack.
@@ -826,6 +918,9 @@ Client proposal summary:
 Local authority input:
 {authority_value}
 
+Structured PD questionnaire answers:
+{format_pd_context_for_prompt(pd_context)}
+
 Planning reasoning requirements:
 - First identify the proposal accurately from the drawing pack and text. Recognise whether the scheme includes a side gable, rear dormer, rooflights, single-storey extension, side extension, wraparound form or mixed works.
 - If the drawings indicate a roof extension to side to form gable, rear dormer and front rooflights, describe that exact combination rather than only referring to a loft extension.
@@ -837,6 +932,7 @@ Planning reasoning requirements:
 - Where the sketch or drawing lacks enough information, state the likely route and the main items that still need confirming.
 - Apply bungalow logic where relevant. If the dwelling appears to be a bungalow or chalet bungalow, assess scale, ridge/eaves relationship, roof form, bulk and whether side/rear additions read as subordinate.
 - Apply PD vs full planning logic. If the works look capable of falling under permitted development, say so. If PD rules are not met or look doubtful, state that full planning is likely required.
+- Use the submitted structured PD questionnaire answers and the Permitted Development Rights for Householders Technical Guidance to stabilise route selection and refusal / approval risk.
 - Apply prior approval larger home extension logic where a larger single-storey rear extension appears relevant.
 - Flag when the proposal looks more like householder planning than PD.
 - Include rear extension risk logic: projection, height, relationship to neighbours, wraparound effects, depth, outlook and design balance.
@@ -879,6 +975,7 @@ SITE AND PROPOSAL OVERVIEW
 
 TOP SUMMARY
 - Do not include "Overall Planning Risk Rating" or "Planning Approval Probability".
+- Add one bullet stating refusal / approval risk using LOW / MEDIUM / HIGH where the PD questionnaire indicates neighbour amenity or PD compliance risk.
 - Include only:
   - Project Summary: {project_summary_value}
   - Application Type: {application_type_value}
@@ -895,6 +992,7 @@ LOCAL AUTHORITY CONTEXT
 
 PD / PRIOR APPROVAL / PLANNING ROUTE
 - State the most likely route.
+- If the structured PD questionnaire provides a clearer route basis than the drawing text, explain that clearly and use it.
 - Give a short route explanation in formal professional wording.
 - For homeowner mode, explain the likely route in simple plain English.
 - State clearly if PD rules do not appear to be met and full planning is likely required.
@@ -945,6 +1043,13 @@ Detected pages:
     fire_status = infer_fire_statement_status(text, page_summary)
     output_text = polish_planning_report_text(output_text, address_text, fire_status, authority_value)
 
+    if pd_route_reason and "PD / PRIOR APPROVAL / PLANNING ROUTE" in output_text:
+        output_text = output_text.replace(
+            "PD / PRIOR APPROVAL / PLANNING ROUTE\n",
+            "PD / PRIOR APPROVAL / PLANNING ROUTE\nStructured PD route logic:\n"
+            + pd_route_reason + "\nRefusal / approval risk from questionnaire: " + pd_refusal_risk + "\n\n",
+            1,
+        )
     top_summary_pattern = r"TOP SUMMARY\n([\s\S]*?)(?=\n[A-Z][A-Z /\-]+\n)"
     top_summary_replacement = (
         "TOP SUMMARY\n"
@@ -952,6 +1057,7 @@ Detected pages:
         f"Application Type: {application_type_value}\n"
         f"Planning Route Confidence Score: {route_confidence_score}%\n"
         f"{authority_value}\n"
+        f"Refusal / Approval Risk: {pd_refusal_risk}\n"
     )
     output_text = re.sub(top_summary_pattern, top_summary_replacement, output_text, count=1)
     output_text = re.sub(r"^.*Overall Planning Risk Rating:.*$\n?", "", output_text, flags=re.MULTILINE)

@@ -147,6 +147,12 @@ PROJECT_TYPE_OPTIONS = [
     "First Floor Rear Extension",
     "First Floor Side Extension",
     "Loft Extension",
+    "Rear Dormer",
+    "Hip to Gable",
+    "Rooflights",
+    "Wraparound Extension",
+    "Outbuilding / Annex",
+    "Garage Conversion",
     "Flat Conversion",
     "House Conversion",
 ]
@@ -1168,6 +1174,107 @@ def detect_local_authority_for_display(project_address: str, proposal_summary: s
         combined_text = f"{combined_text}\n{names}"
     return pdf_summary.detect_local_authority(project_address or "", combined_text or "")
 
+
+def build_pd_context_data(
+    is_single_dwellinghouse: str,
+    previous_extensions: str,
+    within_2m_of_boundary: str,
+    eaves_height_within_2m: str,
+    materials_match_existing: str,
+    garden_coverage_over_50: str,
+    roof_change_type: str,
+    roof_volume_band: str,
+    forward_of_principal_elevation: str,
+    site_constraints: str,
+    similar_neighbour_extensions: str,
+    rear_extension_depth_m,
+    rear_extension_overall_height_m,
+) -> Dict[str, str]:
+    return {
+        "is_single_dwellinghouse": is_single_dwellinghouse,
+        "previous_extensions": previous_extensions,
+        "within_2m_of_boundary": within_2m_of_boundary,
+        "eaves_height_within_2m": eaves_height_within_2m,
+        "materials_match_existing": materials_match_existing,
+        "garden_coverage_over_50": garden_coverage_over_50,
+        "roof_change_type": roof_change_type,
+        "roof_volume_band": roof_volume_band,
+        "forward_of_principal_elevation": forward_of_principal_elevation,
+        "site_constraints": site_constraints,
+        "similar_neighbour_extensions": similar_neighbour_extensions,
+        "rear_extension_depth_m": "" if rear_extension_depth_m is None else str(rear_extension_depth_m),
+        "rear_extension_overall_height_m": "" if rear_extension_overall_height_m is None else str(rear_extension_overall_height_m),
+    }
+
+
+def assess_pd_route_and_risk(
+    project_types: List[str],
+    property_type: str,
+    pd_context: Dict[str, str],
+) -> Tuple[str, str, str]:
+    prop = (property_type or "").lower()
+    project_text = ", ".join(project_types).lower()
+
+    if pd_context.get("is_single_dwellinghouse", "").lower() != "yes" or prop in {"flat", "maisonette"}:
+        return "Full Planning Likely Required", "HIGH", "PD rights generally apply to houses, not flats / maisonettes or non-householder situations."
+
+    constraints = pd_context.get("site_constraints", "").lower()
+    if any(term in constraints for term in ["listed", "article 4", "conservation"]):
+        return "Full Planning / Constraint Check Required", "HIGH", "Site constraints may remove or materially limit permitted development rights."
+
+    if pd_context.get("forward_of_principal_elevation", "").lower() == "yes":
+        return "Full Planning Likely Required", "HIGH", "Works forward of the principal elevation usually fall outside standard PD limits."
+
+    if pd_context.get("garden_coverage_over_50", "").lower() == "yes":
+        return "Full Planning Likely Required", "HIGH", "More than 50% curtilage coverage would usually fall outside standard PD limits."
+
+    if "ground floor rear extension" in project_text:
+        try:
+            depth = float(pd_context.get("rear_extension_depth_m", "") or 0)
+        except Exception:
+            depth = 0.0
+        try:
+            overall_h = float(pd_context.get("rear_extension_overall_height_m", "") or 0)
+        except Exception:
+            overall_h = 0.0
+
+        if overall_h and overall_h > 4.0:
+            return "Full Planning Likely Required", "HIGH", "Overall height exceeds the usual 4.0m single-storey PD limit."
+        if pd_context.get("within_2m_of_boundary", "").lower() == "yes" and "over 3.0m" in pd_context.get("eaves_height_within_2m", "").lower():
+            return "Full Planning Likely Required", "HIGH", "Eaves height within 2m of the boundary appears to exceed 3.0m."
+
+        detached = "detached" in prop
+        terrace_or_semi = any(term in prop for term in ["terraced", "terrace", "semi-detached", "semi detached", "end of terrace"])
+
+        if detached:
+            if 0 < depth <= 4.0:
+                return "PD / LDC Likely", "LOW", "Detached rear extension depth appears within standard PD limits."
+            if 4.0 < depth <= 8.0:
+                risk = "HIGH" if pd_context.get("similar_neighbour_extensions", "").lower() == "no" else "MEDIUM"
+                return "Prior Approval Likely", risk, "Detached larger home extension may proceed by prior approval, subject to amenity impact."
+            if depth > 8.0:
+                return "Full Planning Likely Required", "HIGH", "Rear extension depth exceeds the detached larger home extension threshold."
+
+        if terrace_or_semi:
+            if 0 < depth <= 3.0:
+                return "PD / LDC Likely", "LOW", "Terrace / semi-detached rear extension depth appears within standard PD limits."
+            if 3.0 < depth <= 6.0:
+                risk = "HIGH" if pd_context.get("similar_neighbour_extensions", "").lower() == "no" else "MEDIUM"
+                return "Prior Approval Likely", risk, "Larger home extension route may be available, but neighbour amenity is a key risk."
+            if depth > 6.0:
+                return "Full Planning Likely Required", "HIGH", "Rear extension depth exceeds the terrace / semi-detached prior approval threshold."
+
+    if any(term in project_text for term in ["loft extension", "rear dormer", "hip to gable", "rooflights"]):
+        roof_type = pd_context.get("roof_change_type", "").lower()
+        roof_volume = pd_context.get("roof_volume_band", "").lower()
+        if "front dormer" in roof_type:
+            return "Full Planning Likely Required", "HIGH", "A front dormer would normally fall outside standard PD limits."
+        if "over limit" in roof_volume:
+            return "Full Planning Likely Required", "HIGH", "The stated roof volume exceeds normal householder PD allowances."
+        return "PD / LDC Likely", "MEDIUM", "Roof enlargement may be capable of PD subject to full technical confirmation against the householder technical guidance."
+
+    return "Planning Route Requires Review", "MEDIUM", "Use the uploaded drawings and policy logic to confirm the most appropriate route."
+
 def render_at_a_glance(sections: Dict[str, str], report_id: str, module_name: str):
     config = MODULE_CONFIG[module_name]
     readiness_key = config["readiness_key"]
@@ -1295,6 +1402,7 @@ if not st.session_state.get("authenticated", False):
 current_plan = st.session_state.get("auth_plan", "starter")
 current_user_name = st.session_state.get("auth_user_name", "")
 hero_welcome = f'<div style="font-size:0.92rem;color:#C7D7FF;margin-bottom:0.5rem;">Welcome {current_user_name}</div>' if current_user_name else ""
+review_module = st.session_state.active_module
 
 st.markdown(
     f"""
@@ -1303,7 +1411,7 @@ st.markdown(
             <div class="sy-topbar-title">Architect AI Workspace</div>
             <div class="sy-topbar-meta">ArchLens AI • Drawing-focused planning and building regulations review</div>
         </div>
-        <div class="sy-topbar-meta">Mode: {st.session_state.active_module} | Plan: {PLAN_LABELS.get(current_plan, "Solo")}{(" | User: " + current_user_name) if current_user_name else ""}</div>
+        <div class="sy-topbar-meta">Mode: {review_module} | Plan: {PLAN_LABELS.get(current_plan, "Solo")}{(" | User: " + current_user_name) if current_user_name else ""}</div>
     </div>
     <div class="sy-hero">
         <div class="sy-hero-grid">
@@ -1381,9 +1489,56 @@ with st.sidebar:
             help="Enter the proposed overall height of the rear extension.",
         )
 
+    is_single_dwellinghouse = "Yes"
+    previous_extensions = "Not sure"
+    within_2m_of_boundary = "Not sure"
+    eaves_height_within_2m = "Not sure"
+    materials_match_existing = "Yes"
+    garden_coverage_over_50 = "Not sure"
+    roof_change_type = "None"
+    roof_volume_band = "Not sure"
+    forward_of_principal_elevation = "No"
+    site_constraints = "None / Not sure"
+    similar_neighbour_extensions = "Not sure"
+
+    if review_module == "Planning Review":
+        with st.expander("PD Accuracy Questions", expanded=False):
+            st.caption("These questions help ArchLens apply the Householder Technical Guidance more accurately and auto-decide PD vs Prior Approval vs Full Planning.")
+            is_single_dwellinghouse = st.selectbox("Is the property a single dwellinghouse?", ["Yes", "No"], index=0)
+            previous_extensions = st.selectbox("Has the property been extended previously?", ["No", "Yes - rear", "Yes - side", "Yes - multiple", "Not sure"], index=4)
+            within_2m_of_boundary = st.selectbox("Is the extension within 2m of a boundary?", ["Yes", "No", "Not sure"], index=2)
+            eaves_height_within_2m = st.selectbox("What is the eaves height within 2m of the boundary?", ["Under 3.0m", "Over 3.0m", "Not sure"], index=2)
+            materials_match_existing = st.selectbox("Will materials match the existing house?", ["Yes", "No", "Not sure"], index=0)
+            garden_coverage_over_50 = st.selectbox("Will total buildings cover more than 50% of the garden / curtilage?", ["Yes", "No", "Not sure"], index=2)
+            roof_change_type = st.selectbox("Is there a roof change?", ["None", "Rear dormer", "Side dormer", "Front dormer", "Hip to gable", "Rooflights only"], index=0)
+            roof_volume_band = st.selectbox("Estimated additional roof volume", ["Under 40m³", "Under 50m³", "Over limit", "Not sure"], index=3)
+            forward_of_principal_elevation = st.selectbox("Is any part of the proposal forward of the principal elevation?", ["Yes", "No", "Not sure"], index=1)
+            site_constraints = st.selectbox("Site constraints", ["None / Not sure", "Conservation Area", "Article 4 Direction", "Listed Building"], index=0)
+            similar_neighbour_extensions = st.selectbox("Do neighbours have similar rear extensions / roof forms?", ["Yes", "No", "Not sure"], index=2)
+
     review_mode = st.selectbox("Report Mode", ["Architect / Professional", "Homeowner Summary"])
     project_address = st.text_input("Project Address")
     local_authority = detect_local_authority_for_display(project_address, proposal_summary)
+    pd_context_data = build_pd_context_data(
+        is_single_dwellinghouse,
+        previous_extensions,
+        within_2m_of_boundary,
+        eaves_height_within_2m,
+        materials_match_existing,
+        garden_coverage_over_50,
+        roof_change_type,
+        roof_volume_band,
+        forward_of_principal_elevation,
+        site_constraints,
+        similar_neighbour_extensions,
+        rear_extension_depth_m,
+        rear_extension_height_m,
+    )
+    pd_route_label, pd_risk_label, pd_route_reason = assess_pd_route_and_risk(
+        project_types,
+        property_type,
+        pd_context_data,
+    )
 
     if review_mode != "Homeowner Summary":
         practice_name = st.text_input("Practice / Company Name (optional)")
@@ -1436,6 +1591,9 @@ with setup_tab:
     with c2:
         if review_module == "Planning Review":
             st.info("Use this module for officer-style reasoning, street precedent review, proposal recognition, PD / prior approval / full planning route review, route confidence scoring, and planning statement drafting.")
+            st.markdown(f"**Auto route logic:** {pd_route_label}")
+            st.markdown(f"**Refusal / approval risk:** {pd_risk_label}")
+            st.caption(pd_route_reason)
             if current_plan == "starter":
                 st.caption("Solo includes planning review only and PDF exports.")
         else:
@@ -1487,6 +1645,8 @@ with upload_tab:
         if review_module == "Planning Review":
             st.markdown(f'<div class="sy-data-row"><span>Property type</span><strong>{property_type or "Not stated"}</strong></div>', unsafe_allow_html=True)
             st.markdown(f'<div class="sy-data-row"><span>Local authority</span><strong>{local_authority or "Not clearly identified"}</strong></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="sy-data-row"><span>Auto route</span><strong>{pd_route_label}</strong></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="sy-data-row"><span>Route risk</span><strong>{pd_risk_label}</strong></div>', unsafe_allow_html=True)
         st.markdown(f'<div class="sy-data-row"><span>Project address</span><strong>{project_address or "Not provided"}</strong></div>', unsafe_allow_html=True)
         st.markdown(f'<div class="sy-data-row"><span>Client</span><strong>{client_name or "Not provided"}</strong></div>', unsafe_allow_html=True)
         st.markdown("")
@@ -1565,6 +1725,13 @@ with upload_tab:
                         extra_bits = ", ".join([x for x in [depth_txt, height_txt] if x])
                         if extra_bits:
                             proposal_summary_for_ai = (proposal_summary_for_ai.strip() + " | " + extra_bits).strip(" |")
+                    proposal_summary_for_ai = (
+                        proposal_summary_for_ai.strip()
+                        + " | Auto route: "
+                        + pd_route_label
+                        + " | Risk: "
+                        + pd_risk_label
+                    ).strip(" |")
 
                     report = pdf_summary.analyze_planning_pdf(
                         temp_pdf_path,
@@ -1574,6 +1741,7 @@ with upload_tab:
                         project_address=project_address,
                         local_authority=local_authority,
                         review_mode=review_mode,
+                        pd_context=pd_context_data,
                     )
 
                     smooth_progress(progress_bar, status_text, 40, 85, "Analyzing planning route and risks...", 0.8)
