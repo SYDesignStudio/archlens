@@ -298,6 +298,92 @@ def render_improve_accuracy_section(project_types: List[str]):
     return client_name, review_date, answers
 
 
+
+
+def get_planning_route_snapshot(project_types: List[str], property_type: str, proposal_summary: str, rear_extension_depth_m=None, rear_extension_height_m=None, accuracy_answers: Dict[str, str] | None = None):
+    selected = set(project_types or [])
+    accuracy_answers = accuracy_answers or {}
+    summary = (proposal_summary or '').lower()
+    property_type_l = (property_type or '').lower()
+
+    route = 'Full Planning likely'
+    risk = 'Medium'
+    reason = 'Add core project details to improve route accuracy.'
+
+    if 'Loft Extension' in selected:
+        front = accuracy_answers.get('roof_on_principal_elevation', 'Not sure')
+        highest = accuracy_answers.get('extends_above_highest_roof', 'Not sure')
+        volume = accuracy_answers.get('roof_volume_allowance', 'Not sure')
+        if front == 'No' and highest == 'No' and volume in {'Up to 40m³', '40m³ to 50m³'}:
+            route = 'PD / LDC possible'
+            risk = 'Low' if volume == 'Up to 40m³' else 'Medium'
+            reason = 'Class B may apply if the roof enlargement stays off the principal elevation, stays below the highest roof part, and remains within volume limits.'
+        elif front == 'Yes' or highest == 'Yes' or volume == 'Over 50m³':
+            route = 'Full Planning likely'
+            risk = 'High'
+            reason = 'Class B is less likely where the loft addition affects the front roof slope, exceeds the highest roof part, or appears above normal volume limits.'
+        else:
+            route = 'PD / LDC possible'
+            risk = 'Medium'
+            reason = 'Loft works may fall under Class B, but the key front roof, highest roof, and volume checks still need confirmation.'
+
+    elif selected & CLASS_A_PROJECT_TYPES:
+        depth = rear_extension_depth_m or 0.0
+        height = rear_extension_height_m or 0.0
+        detached = 'detached' in property_type_l
+        attached = any(x in property_type_l for x in ['semi', 'terraced', 'end of terrace'])
+        principal = accuracy_answers.get('beyond_principal_elevation', 'Not sure')
+        within_boundary = accuracy_answers.get('within_2m_boundary', 'Not sure')
+        eaves_test = accuracy_answers.get('eaves_height_within_2m', 'Not sure')
+
+        if principal == 'Yes' or 'first floor' in summary or {'First Floor Rear Extension', 'First Floor Side Extension'} & selected:
+            route = 'Full Planning likely'
+            risk = 'High'
+            reason = 'Upper-floor enlargements and works projecting beyond the principal elevation are usually outside straightforward Class A PD.'
+        else:
+            pd_limit = 4.0 if detached else 3.0
+            pa_limit = 8.0 if detached else 6.0
+            if depth and depth <= pd_limit and height <= 4.0 and not (within_boundary == 'Yes' and eaves_test == 'No'):
+                route = 'PD / LDC possible'
+                risk = 'Low'
+                reason = 'The extension appears within standard Class A depth and height limits, subject to full PD checks.'
+            elif depth and depth <= pa_limit and height <= 4.0 and attached:
+                route = 'Prior Approval likely'
+                risk = 'Medium'
+                reason = 'The rear extension appears to fall within the larger home extension range, so the neighbour consultation / prior approval route may apply.'
+            elif depth and depth <= pa_limit and height <= 4.0 and detached:
+                route = 'Prior Approval likely'
+                risk = 'Medium'
+                reason = 'The rear extension may fall within the larger home extension range for a detached house, subject to prior approval criteria.'
+            else:
+                route = 'Full Planning likely'
+                risk = 'High'
+                reason = 'The extension appears to exceed the usual Class A / larger home extension limits or needs fuller planning assessment.'
+
+    elif 'Porch' in selected:
+        area = accuracy_answers.get('porch_ground_area', 'Not sure')
+        h = accuracy_answers.get('porch_height_ok', 'Not sure')
+        highway = accuracy_answers.get('distance_to_highway', 'Not sure')
+        if area == 'Up to 3m²' and h == 'Yes' and highway == 'No':
+            route = 'PD possible'
+            risk = 'Low'
+            reason = 'The porch appears capable of falling within Class D size, height, and highway-distance limits.'
+        elif area == 'Over 3m²' or h == 'No' or highway == 'Yes':
+            route = 'Full Planning likely'
+            risk = 'High'
+            reason = 'The porch appears to fail one or more Class D limits on area, height, or distance to the highway boundary.'
+        else:
+            route = 'PD possible'
+            risk = 'Medium'
+            reason = 'A porch may fall under Class D, but the area, height, and highway checks still need confirmation.'
+
+    elif 'Flat Conversion' in selected or 'House Conversion' in selected or 'flat' in property_type_l or 'maisonette' in property_type_l:
+        route = 'Full Planning likely'
+        risk = 'High'
+        reason = 'Conversions and works to flats / maisonettes usually need fuller planning review rather than householder PD.'
+
+    return route, risk, reason
+
 def build_accuracy_context(answers: Dict[str, str]) -> str:
     if not answers:
         return ""
@@ -1572,6 +1658,19 @@ with st.sidebar:
     practice_name = ""
 
     client_name, review_date, accuracy_answers = render_improve_accuracy_section(project_types)
+
+    pd_route_label = "Not assessed"
+    pd_risk_label = "Medium"
+    pd_route_reason = "Add project details to improve the route snapshot."
+    if review_module == "Planning Review":
+        pd_route_label, pd_risk_label, pd_route_reason = get_planning_route_snapshot(
+            project_types,
+            property_type,
+            proposal_summary,
+            rear_extension_depth_m,
+            rear_extension_height_m,
+            accuracy_answers,
+        )
 
     if st.button("Clear Report", key="clear_report_btn"):
         for key, value in DEFAULT_STATE.items():
