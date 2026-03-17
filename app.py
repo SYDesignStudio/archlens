@@ -1294,6 +1294,9 @@ if "auth_user_name" not in st.session_state:
     st.session_state["auth_user_name"] = ""
 if "active_module" not in st.session_state:
     st.session_state["active_module"] = "Planning Review"
+pd_route_label = "Planning Route Requires Review"
+pd_risk_label = "MEDIUM"
+pd_route_label_reason = "Complete the project setup and optional accuracy questions to improve route detection."
 
 token_plan, token_user_name, has_valid_token = get_verified_plan_and_user()
 
