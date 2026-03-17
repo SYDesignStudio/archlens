@@ -1326,6 +1326,10 @@ current_plan = st.session_state.get("auth_plan", "starter")
 current_user_name = st.session_state.get("auth_user_name", "")
 hero_welcome = f'<div style="font-size:0.92rem;color:#C7D7FF;margin-bottom:0.5rem;">Welcome {current_user_name}</div>' if current_user_name else ""
 
+allowed_review_modules = get_allowed_review_modules(current_plan)
+default_module = st.session_state.active_module if st.session_state.active_module in allowed_review_modules else allowed_review_modules[0]
+review_module = default_module
+
 st.markdown(
     f"""
     <div class="sy-topbar">
@@ -1359,8 +1363,6 @@ with st.sidebar:
     st.header("Project Setup")
     st.caption("Keep the setup light. Add extra detail only where it improves route accuracy.")
     st.caption(f"Current Plan: {PLAN_LABELS.get(current_plan, 'Solo')}")
-    allowed_review_modules = get_allowed_review_modules(current_plan)
-    default_module = st.session_state.active_module if st.session_state.active_module in allowed_review_modules else allowed_review_modules[0]
     review_module = st.selectbox(
         "Review Module",
         allowed_review_modules,
@@ -1405,6 +1407,14 @@ with st.sidebar:
     review_mode = st.selectbox("Report Mode", ["Architect / Professional", "Homeowner Summary"])
     project_address = st.text_input("Project Address")
     local_authority = detect_local_authority_for_display(project_address, proposal_summary)
+
+    pd_route_label, pd_risk_label, pd_route_reason = get_planning_route_snapshot(
+        project_types,
+        property_type,
+        proposal_summary,
+        rear_extension_depth_m,
+        rear_extension_height_m,
+    )
 
     practice_name = ""
 
