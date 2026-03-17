@@ -165,6 +165,168 @@ PROPERTY_TYPE_OPTIONS = [
 ]
 
 
+CLASS_A_PROJECT_TYPES = {
+    "Ground Floor Rear Extension",
+    "Ground Floor Side Extension",
+    "Ground Floor Infill Extension",
+    "First Floor Rear Extension",
+    "First Floor Side Extension",
+}
+
+
+def get_accuracy_question_group(project_types: List[str]) -> str:
+    selected = set(project_types or [])
+    if "Loft Extension" in selected:
+        return "class_b"
+    if selected & CLASS_A_PROJECT_TYPES:
+        return "class_a"
+    if "Porch" in selected:
+        return "class_d"
+    return "generic"
+
+
+def render_improve_accuracy_section(project_types: List[str]):
+    answers = {}
+    with st.expander("Improve Accuracy (Optional)", expanded=False):
+        st.caption("Show only the extra questions that matter for the selected project type. Based on the householder technical guidance.")
+        client_name = st.text_input("Client")
+        review_date = st.date_input("Report Date")
+
+        group = get_accuracy_question_group(project_types)
+
+        if group == "class_b":
+            st.caption("Class B – additions to the roof")
+            answers["roof_on_principal_elevation"] = st.selectbox(
+                "Is any part of the loft / dormer on the front roof slope or principal elevation?",
+                ["Not sure", "No", "Yes"],
+                key="acc_class_b_front_roof",
+            )
+            answers["roof_volume_allowance"] = st.selectbox(
+                "Extra roof volume added",
+                ["Not sure", "Up to 40m³", "40m³ to 50m³", "Over 50m³"],
+                key="acc_class_b_volume",
+            )
+            answers["extends_above_highest_roof"] = st.selectbox(
+                "Does it extend above the highest part of the existing roof?",
+                ["Not sure", "No", "Yes"],
+                key="acc_class_b_highest_roof",
+            )
+            answers["eaves_alignment"] = st.selectbox(
+                "Are the dormer eaves kept within the existing roof eaves line?",
+                ["Not sure", "Yes", "No"],
+                key="acc_class_b_eaves",
+            )
+            answers["side_windows_obscure"] = st.selectbox(
+                "Any side-facing windows? If yes, will they be obscure glazed and non-opening below 1.7m?",
+                ["Not applicable", "Yes", "No", "Not sure"],
+                key="acc_class_b_side_windows",
+            )
+            answers["materials_match"] = st.selectbox(
+                "Will external materials broadly match the existing house?",
+                ["Not sure", "Yes", "No"],
+                key="acc_class_b_materials",
+            )
+
+        elif group == "class_a":
+            st.caption("Class A – enlargement, improvement or alteration")
+            answers["beyond_principal_elevation"] = st.selectbox(
+                "Does any part project beyond the principal elevation or side elevation facing a highway?",
+                ["Not sure", "No", "Yes"],
+                key="acc_class_a_principal",
+            )
+            answers["existing_rear_extensions"] = st.selectbox(
+                "Any previous rear extensions added to the original house?",
+                ["Not sure", "No", "Yes"],
+                key="acc_class_a_previous_rear",
+            )
+            answers["within_2m_boundary"] = st.selectbox(
+                "Is any part of the extension within 2m of a boundary?",
+                ["Not sure", "No", "Yes"],
+                key="acc_class_a_boundary",
+            )
+            answers["eaves_height_within_2m"] = st.selectbox(
+                "If within 2m of a boundary, are eaves 3.0m or lower?",
+                ["Not applicable", "Yes", "No", "Not sure"],
+                key="acc_class_a_eaves_2m",
+            )
+            answers["single_storey_height_ok"] = st.selectbox(
+                "For single-storey works, is the overall height 4.0m or lower?",
+                ["Not applicable", "Yes", "No", "Not sure"],
+                key="acc_class_a_height",
+            )
+            answers["materials_match"] = st.selectbox(
+                "Will external materials broadly match the existing house?",
+                ["Not sure", "Yes", "No"],
+                key="acc_class_a_materials",
+            )
+
+        elif group == "class_d":
+            st.caption("Class D – porch")
+            answers["porch_ground_area"] = st.selectbox(
+                "Approximate ground area of the porch",
+                ["Not sure", "Up to 3m²", "Over 3m²"],
+                key="acc_class_d_area",
+            )
+            answers["porch_height_ok"] = st.selectbox(
+                "Is the porch 3.0m high or lower?",
+                ["Not sure", "Yes", "No"],
+                key="acc_class_d_height",
+            )
+            answers["distance_to_highway"] = st.selectbox(
+                "Is any part within 2m of a highway boundary or highway?",
+                ["Not sure", "No", "Yes"],
+                key="acc_class_d_highway",
+            )
+
+        else:
+            st.caption("Add only anything that clearly affects the planning route.")
+            answers["accuracy_notes"] = st.text_area(
+                "Extra planning notes",
+                height=100,
+                placeholder="Example: flat is above shop, not a house, previous rear extension already built, Article 4 area, or no front-facing dormer.",
+                key="acc_generic_notes",
+            )
+
+        if group in {"class_a", "class_b", "class_d"}:
+            answers["accuracy_notes"] = st.text_area(
+                "Anything else that could affect the route?",
+                height=90,
+                placeholder="Only add details that change PD, prior approval or full planning route.",
+                key=f"acc_{group}_notes",
+            )
+
+    return client_name, review_date, answers
+
+
+def build_accuracy_context(answers: Dict[str, str]) -> str:
+    if not answers:
+        return ""
+    label_map = {
+        "roof_on_principal_elevation": "Front roof slope / principal elevation",
+        "roof_volume_allowance": "Added roof volume",
+        "extends_above_highest_roof": "Above highest roof",
+        "eaves_alignment": "Within existing eaves line",
+        "side_windows_obscure": "Side windows obscure glazed",
+        "materials_match": "Materials match existing house",
+        "beyond_principal_elevation": "Projects beyond principal elevation / highway side",
+        "existing_rear_extensions": "Previous rear extensions to original house",
+        "within_2m_boundary": "Within 2m of boundary",
+        "eaves_height_within_2m": "Boundary eaves test",
+        "single_storey_height_ok": "Single-storey height 4m or lower",
+        "porch_ground_area": "Porch ground area",
+        "porch_height_ok": "Porch height 3m or lower",
+        "distance_to_highway": "Within 2m of highway boundary",
+        "accuracy_notes": "Extra route notes",
+    }
+    lines = []
+    for key, value in answers.items():
+        value_str = str(value).strip()
+        if not value_str or value_str in {"Not sure", "Not stated", ""}:
+            continue
+        lines.append(f"{label_map.get(key, key)}: {value_str}")
+    return " | ".join(lines)
+
+
 PLAN_LABELS = {
     "starter": "Solo",
     "pro": "Studio",
@@ -1324,6 +1486,8 @@ if not st.session_state.get("authenticated", False):
 
 current_plan = st.session_state.get("auth_plan", "starter")
 current_user_name = st.session_state.get("auth_user_name", "")
+allowed_review_modules = get_allowed_review_modules(current_plan)
+review_module = st.session_state.active_module if st.session_state.active_module in allowed_review_modules else allowed_review_modules[0]
 hero_welcome = f'<div style="font-size:0.92rem;color:#C7D7FF;margin-bottom:0.5rem;">Welcome {current_user_name}</div>' if current_user_name else ""
 
 st.markdown(
@@ -1359,8 +1523,7 @@ with st.sidebar:
     st.header("Project Setup")
     st.caption("Keep the setup light. Add extra detail only where it improves route accuracy.")
     st.caption(f"Current Plan: {PLAN_LABELS.get(current_plan, 'Solo')}")
-    allowed_review_modules = get_allowed_review_modules(current_plan)
-    default_module = st.session_state.active_module if st.session_state.active_module in allowed_review_modules else allowed_review_modules[0]
+    default_module = review_module
     review_module = st.selectbox(
         "Review Module",
         allowed_review_modules,
@@ -1408,14 +1571,7 @@ with st.sidebar:
 
     practice_name = ""
 
-    with st.expander("Advanced Details (optional)", expanded=False):
-        client_name = st.text_input("Client")
-        review_date = st.date_input("Report Date")
-
-    if "client_name" not in locals():
-        client_name = ""
-    if "review_date" not in locals():
-        review_date = __import__("datetime").date.today()
+    client_name, review_date, accuracy_answers = render_improve_accuracy_section(project_types)
 
     if st.button("Clear Report", key="clear_report_btn"):
         for key, value in DEFAULT_STATE.items():
@@ -1582,6 +1738,10 @@ with upload_tab:
                         extra_bits = ", ".join([x for x in [depth_txt, height_txt] if x])
                         if extra_bits:
                             proposal_summary_for_ai = (proposal_summary_for_ai.strip() + " | " + extra_bits).strip(" |")
+
+                    accuracy_context = build_accuracy_context(accuracy_answers)
+                    if accuracy_context:
+                        proposal_summary_for_ai = (proposal_summary_for_ai.strip() + " | Improve Accuracy: " + accuracy_context).strip(" |")
 
                     report = pdf_summary.analyze_planning_pdf(
                         temp_pdf_path,
