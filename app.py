@@ -1198,141 +1198,6 @@ def detect_local_authority_for_display(project_address: str, proposal_summary: s
         combined_text = f"{combined_text}\n{names}"
     return pdf_summary.detect_local_authority(project_address or "", combined_text or "")
 
-
-def get_planning_route_snapshot(
-    project_types: List[str],
-    property_type: str,
-    proposal_summary: str,
-    rear_extension_depth_m=None,
-    rear_extension_height_m=None,
-) -> Tuple[str, str, str]:
-    """Provide a lightweight UI-only planning route snapshot.
-
-    This is intentionally conservative and only guides the setup screen.
-    The full AI planning review still makes the final route assessment.
-    """
-    project_types = project_types or []
-    project_types_lower = [str(x).strip().lower() for x in project_types if str(x).strip()]
-    property_lower = (property_type or "").strip().lower()
-    summary_lower = (proposal_summary or "").strip().lower()
-
-    if not project_types_lower:
-        return (
-            "Full Planning likely",
-            "Medium",
-            "Select the project type to improve the route snapshot. The full AI review will still assess the uploaded drawing pack.",
-        )
-
-    if property_lower in {"flat", "maisonette"}:
-        return (
-            "Full Planning required",
-            "High",
-            "Flats and maisonettes do not normally benefit from standard householder permitted development rights, so a full planning route is more likely.",
-        )
-
-    has_rear = "ground floor rear extension" in project_types_lower
-    has_side = any(x in project_types_lower for x in ["ground floor side extension", "ground floor infill extension"])
-    has_upper = any(x in project_types_lower for x in ["first floor rear extension", "first floor side extension"])
-    has_loft = "loft extension" in project_types_lower
-    has_conversion = any(x in project_types_lower for x in ["flat conversion", "house conversion"])
-    detached = "detached" in property_lower
-    terrace_or_semi = any(term in property_lower for term in ["terraced", "terrace", "semi-detached", "semi detached", "end of terrace"])
-
-    if has_conversion:
-        return (
-            "Full Planning required",
-            "High",
-            "Conversions normally need a full planning assessment because the route depends on use, layout, standards, and local policy rather than standard householder PD rules.",
-        )
-
-    if has_upper or has_side:
-        return (
-            "Full Planning likely",
-            "High",
-            "Side, infill, wraparound, or first-floor style works often fall outside the simplest PD routes or need fuller planning judgment on design and neighbour impact.",
-        )
-
-    if has_loft:
-        return (
-            "PD / LDC possible",
-            "Medium",
-            "A loft extension may be capable of permitted development subject to full checks on roof form, volume, front-facing changes, and any local constraints.",
-        )
-
-    if has_rear:
-        if rear_extension_height_m is not None and float(rear_extension_height_m) > 4.0:
-            return (
-                "Full Planning likely",
-                "High",
-                "The entered rear extension height is above the usual 4.0m single-storey PD limit, so full planning is more likely unless the scheme is revised.",
-            )
-
-        if rear_extension_depth_m is not None:
-            depth = float(rear_extension_depth_m)
-            if detached and depth <= 4.0:
-                return (
-                    "PD / LDC possible",
-                    "Low",
-                    "The entered rear depth sits within the normal detached house PD range, subject to full dimensional and site-constraint checks.",
-                )
-            if detached and 4.0 < depth <= 8.0:
-                return (
-                    "Prior Approval possible",
-                    "Medium",
-                    "The entered rear depth is above normal detached house PD limits but may fall within the larger home extension prior approval route.",
-                )
-            if detached and depth > 8.0:
-                return (
-                    "Full Planning likely",
-                    "High",
-                    "The entered rear depth exceeds the usual detached house larger home extension threshold, so full planning is more likely.",
-                )
-
-            if terrace_or_semi and depth <= 3.0:
-                return (
-                    "PD / LDC possible",
-                    "Low",
-                    "The entered rear depth sits within the normal terrace / semi-detached PD range, subject to full dimensional and site-constraint checks.",
-                )
-            if terrace_or_semi and 3.0 < depth <= 6.0:
-                return (
-                    "Prior Approval possible",
-                    "Medium",
-                    "The entered rear depth is above the normal terrace / semi-detached PD range but may fit the larger home extension prior approval route.",
-                )
-            if terrace_or_semi and depth > 6.0:
-                return (
-                    "Full Planning likely",
-                    "High",
-                    "The entered rear depth exceeds the usual terrace / semi-detached larger home extension threshold, so full planning is more likely.",
-                )
-
-        return (
-            "PD / Prior Approval possible",
-            "Medium",
-            "A ground floor rear extension may be capable of PD or the larger home extension prior approval route, but the final position depends on measured depth, height, house type, and site constraints.",
-        )
-
-    if "porch" in project_types_lower:
-        return (
-            "PD possible",
-            "Low",
-            "A porch can often be permitted development, subject to size, height, highway relationship, and other site-specific checks.",
-        )
-
-    if "planning" in summary_lower or "permission" in summary_lower:
-        return (
-            "Full Planning likely",
-            "Medium",
-            "The proposal description suggests a planning-led route, but the full AI review should confirm the final application path.",
-        )
-
-    return (
-        "Full Planning likely",
-        "Medium",
-        "The proposal does not clearly fall within a simple PD route from the setup answers alone, so full planning should be assumed unless the drawing review confirms otherwise.",
-    )
-
 def render_at_a_glance(sections: Dict[str, str], report_id: str, module_name: str):
     config = MODULE_CONFIG[module_name]
     readiness_key = config["readiness_key"]
@@ -1461,10 +1326,6 @@ current_plan = st.session_state.get("auth_plan", "starter")
 current_user_name = st.session_state.get("auth_user_name", "")
 hero_welcome = f'<div style="font-size:0.92rem;color:#C7D7FF;margin-bottom:0.5rem;">Welcome {current_user_name}</div>' if current_user_name else ""
 
-allowed_review_modules = get_allowed_review_modules(current_plan)
-default_module = st.session_state.active_module if st.session_state.active_module in allowed_review_modules else allowed_review_modules[0]
-review_module = default_module
-
 st.markdown(
     f"""
     <div class="sy-topbar">
@@ -1498,6 +1359,8 @@ with st.sidebar:
     st.header("Project Setup")
     st.caption("Keep the setup light. Add extra detail only where it improves route accuracy.")
     st.caption(f"Current Plan: {PLAN_LABELS.get(current_plan, 'Solo')}")
+    allowed_review_modules = get_allowed_review_modules(current_plan)
+    default_module = st.session_state.active_module if st.session_state.active_module in allowed_review_modules else allowed_review_modules[0]
     review_module = st.selectbox(
         "Review Module",
         allowed_review_modules,
@@ -1543,90 +1406,16 @@ with st.sidebar:
     project_address = st.text_input("Project Address")
     local_authority = detect_local_authority_for_display(project_address, proposal_summary)
 
-    pd_route_label, pd_risk_label, pd_route_reason = get_planning_route_snapshot(
-        project_types,
-        property_type,
-        proposal_summary,
-        rear_extension_depth_m,
-        rear_extension_height_m,
-    )
-
     practice_name = ""
 
-    with st.expander("Improve Accuracy (Optional)", expanded=False):
-        st.caption("Add extra detail only where it improves planning route and report accuracy.")
+    with st.expander("Advanced Details (optional)", expanded=False):
         client_name = st.text_input("Client")
         review_date = st.date_input("Report Date")
-
-        if review_module == "Planning Review":
-            st.caption("These optional planning questions help improve PD / prior approval / full planning route accuracy.")
-            site_constraints = st.multiselect(
-                "Site constraints",
-                [
-                    "Conservation Area",
-                    "Article 4 Direction",
-                    "Listed Building",
-                    "Flat / Maisonette",
-                    "Corner Plot",
-                    "Flood Zone constraint",
-                ],
-                default=[],
-            )
-            existing_rear_extension_depth_m = st.number_input(
-                "Existing rear extension depth from original rear wall (m)",
-                min_value=0.0,
-                max_value=20.0,
-                value=0.0,
-                step=0.1,
-            )
-            proposed_eaves_height_m = st.number_input(
-                "Proposed eaves height (m)",
-                min_value=0.0,
-                max_value=10.0,
-                value=0.0,
-                step=0.1,
-            )
-            distance_to_rear_boundary_m = st.number_input(
-                "Approx. distance from rear wall to rear boundary (m)",
-                min_value=0.0,
-                max_value=100.0,
-                value=0.0,
-                step=0.1,
-            )
-            proposed_materials_match = st.selectbox(
-                "Do proposed external materials broadly match the existing house?",
-                ["Not stated", "Yes", "No"],
-                index=0,
-            )
-            pd_notes = st.text_area(
-                "Accuracy notes",
-                placeholder="Example: no previous enlargements to the original house, flat roof, not in conservation area, no side extension proposed.",
-                height=90,
-            )
-        else:
-            site_constraints = []
-            existing_rear_extension_depth_m = 0.0
-            proposed_eaves_height_m = 0.0
-            distance_to_rear_boundary_m = 0.0
-            proposed_materials_match = "Not stated"
-            pd_notes = ""
 
     if "client_name" not in locals():
         client_name = ""
     if "review_date" not in locals():
         review_date = __import__("datetime").date.today()
-    if "site_constraints" not in locals():
-        site_constraints = []
-    if "existing_rear_extension_depth_m" not in locals():
-        existing_rear_extension_depth_m = 0.0
-    if "proposed_eaves_height_m" not in locals():
-        proposed_eaves_height_m = 0.0
-    if "distance_to_rear_boundary_m" not in locals():
-        distance_to_rear_boundary_m = 0.0
-    if "proposed_materials_match" not in locals():
-        proposed_materials_match = "Not stated"
-    if "pd_notes" not in locals():
-        pd_notes = ""
 
     if st.button("Clear Report", key="clear_report_btn"):
         for key, value in DEFAULT_STATE.items():
@@ -1787,29 +1576,12 @@ with upload_tab:
                                     "Reading drawings and extracting planning data...", 0.8)
 
                     proposal_summary_for_ai = proposal_summary
-                    planning_accuracy_bits = []
                     if "Ground Floor Rear Extension" in project_types:
                         depth_txt = f"{rear_extension_depth_m:.1f}m depth from original rear wall" if rear_extension_depth_m is not None else ""
                         height_txt = f"{rear_extension_height_m:.1f}m overall height" if rear_extension_height_m is not None else ""
-                        existing_depth_txt = f"{existing_rear_extension_depth_m:.1f}m existing rear extension from original rear wall" if existing_rear_extension_depth_m and existing_rear_extension_depth_m > 0 else ""
-                        eaves_txt = f"{proposed_eaves_height_m:.1f}m eaves height" if proposed_eaves_height_m and proposed_eaves_height_m > 0 else ""
-                        boundary_txt = f"{distance_to_rear_boundary_m:.1f}m rear garden depth / boundary distance" if distance_to_rear_boundary_m and distance_to_rear_boundary_m > 0 else ""
-                        materials_txt = f"Materials match existing: {proposed_materials_match}" if proposed_materials_match != "Not stated" else ""
-                        constraints_txt = f"Site constraints: {', '.join(site_constraints)}" if site_constraints else ""
-                        extra_bits = ", ".join([x for x in [depth_txt, height_txt, existing_depth_txt, eaves_txt, boundary_txt, materials_txt, constraints_txt] if x])
+                        extra_bits = ", ".join([x for x in [depth_txt, height_txt] if x])
                         if extra_bits:
-                            planning_accuracy_bits.append(extra_bits)
-                    elif site_constraints or pd_notes or proposed_materials_match != "Not stated":
-                        if site_constraints:
-                            planning_accuracy_bits.append(f"Site constraints: {', '.join(site_constraints)}")
-                        if proposed_materials_match != "Not stated":
-                            planning_accuracy_bits.append(f"Materials match existing: {proposed_materials_match}")
-
-                    if pd_notes:
-                        planning_accuracy_bits.append(f"Accuracy notes: {pd_notes}")
-
-                    if planning_accuracy_bits:
-                        proposal_summary_for_ai = (proposal_summary_for_ai.strip() + " | " + " | ".join(planning_accuracy_bits)).strip(" |")
+                            proposal_summary_for_ai = (proposal_summary_for_ai.strip() + " | " + extra_bits).strip(" |")
 
                     report = pdf_summary.analyze_planning_pdf(
                         temp_pdf_path,

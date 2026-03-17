@@ -366,6 +366,21 @@ def format_pd_context_for_prompt(pd_context: Optional[Dict[str, str]]) -> str:
     return "\n".join(lines)
 
 
+def _ctx_value(pd_context: Optional[Dict[str, str]], key: str) -> str:
+    if not pd_context:
+        return ""
+    return str(pd_context.get(key, "") or "").strip()
+
+
+def _ctx_yes(pd_context: Optional[Dict[str, str]], key: str) -> bool:
+    return _ctx_value(pd_context, key).lower() == "yes"
+
+
+def _ctx_contains(pd_context: Optional[Dict[str, str]], key: str, needles: List[str]) -> bool:
+    value = _ctx_value(pd_context, key).lower()
+    return any(needle.lower() in value for needle in needles)
+
+
 def infer_route_from_pd_context(
     pd_context: Optional[Dict[str, str]],
     project_types_text: str,
@@ -373,6 +388,109 @@ def infer_route_from_pd_context(
 ) -> Tuple[Optional[str], str, str]:
     if not pd_context:
         return None, "", "MEDIUM"
+
+    property_lower = (property_type_text or "").lower()
+    project_lower = (project_types_text or "").lower()
+    pd_family = _ctx_value(pd_context, "pd_question_family").lower()
+
+    if _ctx_yes(pd_context, "is_single_dwellinghouse") is False and _ctx_value(pd_context, "is_single_dwellinghouse").lower() == "no":
+        return "FULL PLANNING", "The questionnaire indicates the property is not a single dwellinghouse, so standard householder permitted development rights are unlikely to apply.", "HIGH"
+
+    if property_lower in {"flat", "maisonette"}:
+        return "FULL PLANNING", "Flats and maisonettes do not normally benefit from the standard householder permitted development rights used in this review.", "HIGH"
+
+    constraints_value = _ctx_value(pd_context, "site_constraints").lower()
+    has_article_23 = any(term in constraints_value for term in ["conservation", "article 2(3)", "national park", "world heritage", "aonb", "site of special scientific interest"])
+    has_article4 = "article 4" in constraints_value
+    has_listed = "listed" in constraints_value
+
+    if has_article4 or has_listed:
+        return "FULL PLANNING", "The questionnaire indicates site constraints that may remove or materially restrict normal householder permitted development rights.", "HIGH"
+
+    if _ctx_yes(pd_context, "forward_of_principal_elevation"):
+        return "FULL PLANNING", "Works projecting forward of the principal elevation are unlikely to benefit from normal householder permitted development rights.", "HIGH"
+
+    if pd_family == "class_a" or any(term in project_lower for term in ["rear extension", "side extension", "infill extension", "first floor"]):
+        try:
+            depth = float(_ctx_value(pd_context, "rear_extension_depth_m") or 0)
+        except Exception:
+            depth = 0.0
+        try:
+            overall_h = float(_ctx_value(pd_context, "rear_extension_overall_height_m") or 0)
+        except Exception:
+            overall_h = 0.0
+
+        if overall_h and overall_h > 4.0:
+            return "FULL PLANNING", "The stated overall height exceeds the usual 4.0m limit for a single-storey rear extension under Class A.", "HIGH"
+
+        if _ctx_yes(pd_context, "within_2m_of_boundary") and "over 3.0m" in _ctx_value(pd_context, "eaves_height_within_2m").lower():
+            return "FULL PLANNING", "The stated eaves height within 2m of the boundary exceeds the usual 3.0m limit under Class A.", "HIGH"
+
+        if "yes" == _ctx_value(pd_context, "side_extension_width").lower():
+            return "FULL PLANNING", "The questionnaire indicates the side extension is more than half the width of the original house, which falls outside the usual Class A side extension limit.", "HIGH"
+
+        if any(term in project_lower for term in ["first floor rear extension", "first floor side extension", "ground floor side extension", "ground floor infill extension"]):
+            return "FULL PLANNING", "The selected project type includes side / infill / first-floor enlargement works that commonly fall outside the simplest Class A permitted development routes and normally need fuller planning assessment.", "HIGH"
+
+        detached = "detached" in property_lower
+        terrace_or_other = any(term in property_lower for term in ["terraced", "terrace", "semi-detached", "semi detached", "end of terrace"]) or not detached
+
+        if "ground floor rear extension" in project_lower and depth > 0:
+            if detached:
+                if depth <= 4.0:
+                    risk = "MEDIUM" if _ctx_value(pd_context, "materials_similar").lower() == "no" else "LOW"
+                    return "PD / LDC", "The stated detached house rear extension depth sits within the normal Class A rear extension range, subject to full dimensional confirmation.", risk
+                if depth <= 8.0:
+                    if has_article_23:
+                        return "FULL PLANNING", "The larger home extension prior approval route is restricted on article 2(3) land / similar constrained sites, so full planning is more likely required.", "HIGH"
+                    return "PRIOR APPROVAL", "The stated detached house rear extension depth is above the normal Class A PD threshold but may proceed through the larger home extension prior approval route.", "MEDIUM"
+                return "FULL PLANNING", "The stated detached house rear extension depth exceeds the larger home extension threshold.", "HIGH"
+
+            if terrace_or_other:
+                if depth <= 3.0:
+                    risk = "MEDIUM" if _ctx_value(pd_context, "materials_similar").lower() == "no" else "LOW"
+                    return "PD / LDC", "The stated rear extension depth sits within the normal Class A rear extension range for a non-detached house, subject to full dimensional confirmation.", risk
+                if depth <= 6.0:
+                    if has_article_23:
+                        return "FULL PLANNING", "The larger home extension prior approval route is restricted on article 2(3) land / similar constrained sites, so full planning is more likely required.", "HIGH"
+                    return "PRIOR APPROVAL", "The stated rear extension depth is above the normal Class A PD threshold for a non-detached house but may proceed through the larger home extension prior approval route.", "MEDIUM"
+                return "FULL PLANNING", "The stated rear extension depth exceeds the larger home extension threshold for a non-detached house.", "HIGH"
+
+        if has_article_23 and any(term in project_lower for term in ["side extension", "first floor rear extension", "first floor side extension"]):
+            return "FULL PLANNING", "Article 2(3) land introduces extra Class A restrictions for side extensions and multi-storey rear enlargements, so full planning is more likely required.", "HIGH"
+
+        return None, "", "MEDIUM"
+
+    if pd_family == "class_b" or any(term in project_lower for term in ["loft", "dormer"]):
+        roof_change = _ctx_value(pd_context, "roof_change_type").lower()
+        roof_volume = _ctx_value(pd_context, "roof_volume_band").lower()
+
+        if has_article_23:
+            return "FULL PLANNING", "Class B roof enlargements are not normally permitted development on article 2(3) land such as conservation areas.", "HIGH"
+        if _ctx_yes(pd_context, "front_roof_plane_highway"):
+            return "FULL PLANNING", "An enlargement on the roof slope forming the principal elevation and fronting a highway would normally fall outside Class B.", "HIGH"
+        if _ctx_yes(pd_context, "above_existing_roof_height"):
+            return "FULL PLANNING", "The questionnaire indicates part of the roof enlargement would rise above the highest part of the existing roof, which would fall outside Class B.", "HIGH"
+        if "over limit" in roof_volume:
+            return "FULL PLANNING", "The stated additional roof volume exceeds the usual Class B allowance of 40m³ for terraced houses or 50m³ for other houses.", "HIGH"
+        if "front dormer" in roof_change:
+            return "FULL PLANNING", "A front dormer would normally fall outside Class B where it projects from the front roof slope.", "HIGH"
+        if _ctx_value(pd_context, "materials_similar").lower() == "no":
+            return "PD / LDC", "The roof enlargement may be capable of Class B permitted development, but material appearance should be revised or confirmed because similar appearance is a Class B condition.", "MEDIUM"
+        if _ctx_value(pd_context, "eaves_setback_0_2m").lower() == "no":
+            return "PD / LDC", "The roof enlargement may be capable of Class B permitted development, but the usual 0.2m eaves setback should be checked and justified where not practicable.", "MEDIUM"
+        return "PD / LDC", "The stated roof enlargement appears broadly capable of Class B permitted development, subject to final checks on volume, front-facing changes, materials, eaves setback and any local restrictions.", "MEDIUM"
+
+    if pd_family == "class_d" or "porch" in project_lower:
+        if _ctx_value(pd_context, "porch_ground_area_band").lower() == "no":
+            return "FULL PLANNING", "The questionnaire indicates the porch exceeds the usual 3m² Class D ground area limit.", "HIGH"
+        if _ctx_value(pd_context, "porch_height_band").lower() == "no":
+            return "FULL PLANNING", "The questionnaire indicates the porch exceeds the usual 3m Class D height limit.", "HIGH"
+        if _ctx_yes(pd_context, "porch_within_2m_highway"):
+            return "FULL PLANNING", "The questionnaire indicates part of the porch would be within 2m of a boundary with a highway, which would fall outside Class D.", "HIGH"
+        return "PD / LDC", "The porch appears broadly capable of Class D permitted development, subject to final dimensional confirmation.", "LOW"
+
+    return None, "", "MEDIUM"
 
     property_lower = (property_type_text or "").lower()
     project_lower = (project_types_text or "").lower()
