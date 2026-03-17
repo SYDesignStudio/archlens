@@ -1292,11 +1292,6 @@ if "auth_plan" not in st.session_state:
     st.session_state["auth_plan"] = "starter"
 if "auth_user_name" not in st.session_state:
     st.session_state["auth_user_name"] = ""
-if "active_module" not in st.session_state:
-    st.session_state["active_module"] = "Planning Review"
-pd_route_label = "Planning Route Requires Review"
-pd_risk_label = "MEDIUM"
-pd_route_label_reason = "Complete the project setup and optional accuracy questions to improve route detection."
 
 token_plan, token_user_name, has_valid_token = get_verified_plan_and_user()
 
@@ -1338,7 +1333,7 @@ st.markdown(
             <div class="sy-topbar-title">Architect AI Workspace</div>
             <div class="sy-topbar-meta">ArchLens AI • Drawing-focused planning and building regulations review</div>
         </div>
-        <div class="sy-topbar-meta">Mode: {st.session_state.get("active_module", "Planning Review")} | Plan: {PLAN_LABELS.get(current_plan, "Solo")}{(" | User: " + current_user_name) if current_user_name else ""}</div>
+        <div class="sy-topbar-meta">Mode: {review_module} | Plan: {PLAN_LABELS.get(current_plan, "Solo")}{(" | User: " + current_user_name) if current_user_name else ""}</div>
     </div>
     <div class="sy-hero">
         <div class="sy-hero-simple">
