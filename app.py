@@ -707,16 +707,22 @@ def inject_custom_css():
             border-radius:14px !important;
         }
         .stButton button, .stDownloadButton button, .stLinkButton a {
-            background: linear-gradient(
-                135deg,
-                color-mix(in srgb, var(--primary-color) 92%, #2b59ff 8%),
-                color-mix(in srgb, var(--primary-color) 78%, #00bfff 22%)
-            ) !important;
-            color:white !important;
-            border:0 !important;
-            box-shadow:0 10px 24px rgba(18,57,160,0.22) !important;
+            background: #D4C29A !important;
+            color: #111111 !important;
+            border: 1px solid #D4C29A !important;
+            box-shadow: 0 10px 24px rgba(212, 194, 154, 0.18) !important;
+            font-weight: 600 !important;
         }
-        .stButton button:hover, .stDownloadButton button:hover, .stLinkButton a:hover { filter:brightness(1.06); }
+        .stButton button:hover, .stDownloadButton button:hover, .stLinkButton a:hover {
+            background: #c5b183 !important;
+            border-color: #c5b183 !important;
+            color: #111111 !important;
+            filter:none !important;
+        }
+        .stButton button:focus, .stDownloadButton button:focus, .stLinkButton a:focus {
+            outline: none !important;
+            box-shadow: 0 0 0 2px rgba(212, 194, 154, 0.28) !important;
+        }
 
         .stTabs [data-baseweb="tab-list"] { gap:0.42rem; }
         .stTabs [data-baseweb="tab"] {
@@ -730,17 +736,43 @@ def inject_custom_css():
             border-color:color-mix(in srgb, var(--primary-color) 28%, transparent) !important;
         }
 
-        .stSelectbox label, .stTextInput label, .stTextArea label, .stNumberInput label, .stDateInput label {
+        .stSelectbox label, .stTextInput label, .stTextArea label, .stNumberInput label, .stDateInput label, .stMultiSelect label {
             color:var(--sy-text) !important;
+            font-weight:600 !important;
         }
         [data-baseweb="select"] > div,
+        [data-baseweb="tag"] {
+            background:color-mix(in srgb, var(--secondary-background-color) 86%, transparent) !important;
+            border:1px solid #5D6472 !important;
+            color:var(--sy-text) !important;
+        }
         .stTextInput input,
         .stTextArea textarea,
         .stNumberInput input,
-        .stDateInput input {
+        .stDateInput input,
+        div[data-baseweb="base-input"] > input,
+        div[data-baseweb="base-input"] > textarea {
             background:color-mix(in srgb, var(--secondary-background-color) 86%, transparent) !important;
-            border:1px solid var(--sy-border) !important;
+            border:1px solid #5D6472 !important;
             color:var(--sy-text) !important;
+            border-radius:12px !important;
+        }
+        .stTextInput input:focus,
+        .stTextArea textarea:focus,
+        .stNumberInput input:focus,
+        .stDateInput input:focus,
+        div[data-baseweb="base-input"] > input:focus,
+        div[data-baseweb="base-input"] > textarea:focus,
+        [data-baseweb="select"] > div:focus-within {
+            border-color:#D4C29A !important;
+            box-shadow:0 0 0 1px #D4C29A !important;
+        }
+        .stTextArea textarea {
+            min-height: 90px;
+        }
+        .streamlit-expanderHeader {
+            border:1px solid #5D6472 !important;
+            border-radius:12px !important;
         }
 
                 .sy-topbar { margin-bottom: 0.8rem; }
