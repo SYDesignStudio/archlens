@@ -36,6 +36,9 @@ DEFAULT_STATE = {
     "brand_logo_bytes": None,
     "ai_confidence": None,
     "rule_engine_summary": None,
+    "credit_balance": 10,
+    "credit_transactions": [],
+    "unlocked_reports": {},
 }
 for key, value in DEFAULT_STATE.items():
     if key not in st.session_state:
@@ -44,6 +47,24 @@ for key, value in DEFAULT_STATE.items():
 MAX_FILE_SIZE_MB = 20
 MAX_PAGE_COUNT = 30
 STARTER_MONTHLY_REVIEW_LIMIT = 10
+
+# -----------------------------------------------------------------------------
+# CREDIT / TOKEN SYSTEM
+# User-facing name: Credits. Internal name can still be treated as tokens.
+# Session-based foundation first; move to Supabase/Stripe for live persistence.
+# -----------------------------------------------------------------------------
+CREDIT_PACKS = {
+    "10 Credits": {"credits": 10, "price": "£19"},
+    "30 Credits": {"credits": 30, "price": "£49"},
+    "75 Credits": {"credits": 75, "price": "£99"},
+}
+
+EXPORT_CREDIT_COSTS = {
+    "Planning Review": {"pdf": 3, "word": 1, "planning_statement": 3, "design_access_statement": 4},
+    "Building Regulations Review": {"pdf": 5, "word": 1},
+}
+
+FREE_PREVIEW_NOTE = "Analysis preview is available first. Credits are used when exports/downloads are unlocked."
 
 BUILDING_REQUIRED_HEADINGS = [
     "PROJECT CLASSIFICATION",
@@ -486,12 +507,11 @@ def build_pd_context(project_types: List[str], property_type: str, rear_extensio
 # completeness, report sections and missing information.
 # -----------------------------------------------------------------------------
 PLANNING_CONFIDENCE_LABELS = [
-    "PASS",
-    "LIKELY PD",
+    "LIKELY COMPLIANT",
+    "LIKELY COMPLIANT SUBJECT TO MINOR CHECKS",
     "LIKELY PRIOR APPROVAL",
-    "FULL PLANNING ADVISED",
-    "FAIL",
-    "MANUAL REVIEW ADVISED",
+    "REQUIRES FURTHER REVIEW",
+    "LIKELY PLANNING PERMISSION REQUIRED",
 ]
 
 BUILDING_CONFIDENCE_LABELS = [
@@ -509,22 +529,23 @@ def _normalise_text(value) -> str:
 
 
 def _extract_route_from_rule_summary(rule_summary: str) -> str:
-    """Pull a stable route/status label from the deterministic rule summary."""
-    text = _normalise_text(rule_summary).upper()
-    if "LIKELY PRIOR APPROVAL" in text or "PRIOR APPROVAL" in text:
-        return "LIKELY PRIOR APPROVAL"
-    if "FULL PLANNING" in text:
-        return "FULL PLANNING ADVISED"
-    if "FAIL" in text:
-        return "FAIL"
-    if "PASS" in text:
-        return "PASS"
-    if "LIKELY PD" in text or "PD / LDC" in text or "PERMITTED DEVELOPMENT" in text:
-        return "LIKELY PD"
-    if "NEEDS CONFIRMATION" in text or "MANUAL" in text:
-        return "MANUAL REVIEW ADVISED"
-    return "MANUAL REVIEW ADVISED"
+    """Pull a stable route/status label from the deterministic rule summary.
 
+    Planning reports should use professional status wording rather than hard PASS/FAIL labels.
+    Missing minor confirmations should not create a fail result for otherwise typical PD schemes.
+    """
+    text = _normalise_text(rule_summary).upper()
+    if "PRIOR APPROVAL" in text:
+        return "LIKELY PRIOR APPROVAL"
+    if "FULL PLANNING" in text or "PLANNING PERMISSION" in text:
+        return "LIKELY PLANNING PERMISSION REQUIRED"
+    if "PD / LDC" in text or "PERMITTED DEVELOPMENT" in text or "PD POSSIBLE" in text or "LIKELY PD" in text or "PASS" in text:
+        return "LIKELY COMPLIANT"
+    if "FAIL" in text:
+        return "LIKELY PLANNING PERMISSION REQUIRED"
+    if "NEEDS CONFIRMATION" in text or "MANUAL" in text:
+        return "REQUIRES FURTHER REVIEW"
+    return "REQUIRES FURTHER REVIEW"
 
 def _count_report_signals(sections: Dict[str, str], needles: List[str]) -> int:
     combined = "\n".join(sections.values()).upper()
@@ -534,59 +555,70 @@ def _count_report_signals(sections: Dict[str, str], needles: List[str]) -> int:
 def calculate_planning_confidence(sections: Dict[str, str], rule_summary: str = "") -> Dict[str, object]:
     """Return user-facing planning confidence label and explanation.
 
-    This avoids fake percentage certainty. The label is based on the deterministic
-    rule-engine result first, then adjusted for missing information and drawing readiness.
+    This avoids fake percentage certainty and avoids harsh FAIL/PASS wording.
+    The label is based on the deterministic rule-engine result first, then adjusted
+    for actual report findings. Typical PD/LDC schemes with minor missing checks
+    should show as likely compliant subject to minor checks, not failed.
     """
     route_label = _extract_route_from_rule_summary(rule_summary)
     missing_text = _normalise_text(sections.get("MISSING INFORMATION", "")).upper()
     risk_text = _normalise_text(sections.get("KEY RISKS", "")).upper()
     readiness_text = _normalise_text(sections.get("SUBMISSION READINESS", "")).upper()
     route_text = _normalise_text(sections.get("PD / PRIOR APPROVAL / PLANNING ROUTE", "")).upper()
-    combined = "\n".join([missing_text, risk_text, readiness_text, route_text, _normalise_text(rule_summary).upper()])
+    top_text = _normalise_text(sections.get("TOP SUMMARY", "")).upper()
+    combined = "\n".join([missing_text, risk_text, readiness_text, route_text, top_text, _normalise_text(rule_summary).upper()])
 
     blockers = _count_report_signals(sections, [
         "NOT CLEARLY SHOWN",
         "NOT CLEARLY DIMENSIONED",
         "INSUFFICIENT",
         "REQUIRES CONFIRMATION",
-        "CONFIRM",
         "MISSING",
     ])
-    high_risk = "HIGH" in risk_text or "FAIL" in combined or "NOT READY" in readiness_text
+    clear_policy_issue = any(x in combined for x in [
+        "FULL PLANNING REQUIRED",
+        "LIKELY PLANNING PERMISSION REQUIRED",
+        "EXCEEDS",
+        "OUTSIDE CLASS",
+        "FRONT-FACING ROOF ENLARGEMENT",
+        "ABOVE THE HIGHEST PART",
+        "ARTICLE 4",
+        "LISTED BUILDING",
+    ])
+    high_risk = "HIGH" in risk_text or "NOT READY" in readiness_text
 
-    if route_label == "PASS" and blockers <= 1 and not high_risk:
-        label = "PASS"
-    elif route_label == "LIKELY PRIOR APPROVAL" and not high_risk:
+    if route_label == "LIKELY PRIOR APPROVAL" and not clear_policy_issue:
         label = "LIKELY PRIOR APPROVAL"
-    elif route_label == "LIKELY PD" and blockers <= 3 and not high_risk:
-        label = "LIKELY PD"
-    elif route_label == "FULL PLANNING ADVISED" or "FULL PLANNING" in combined:
-        label = "FULL PLANNING ADVISED"
-    elif route_label == "FAIL" or high_risk:
-        label = "FAIL"
+    elif route_label == "LIKELY PLANNING PERMISSION REQUIRED" or clear_policy_issue:
+        label = "LIKELY PLANNING PERMISSION REQUIRED"
+    elif route_label == "LIKELY COMPLIANT":
+        label = "LIKELY COMPLIANT" if blockers <= 1 and not high_risk else "LIKELY COMPLIANT SUBJECT TO MINOR CHECKS"
+    elif blockers <= 3 and ("PD / LDC" in combined or "CLASS B" in combined or "PERMITTED DEVELOPMENT" in combined):
+        label = "LIKELY COMPLIANT SUBJECT TO MINOR CHECKS"
     else:
-        label = "MANUAL REVIEW ADVISED"
+        label = "REQUIRES FURTHER REVIEW"
 
     triggers = []
-    if rule_summary:
-        triggers.append("Deterministic PD rule checks were used before AI wording.")
-    if "PRIOR APPROVAL" in combined:
-        triggers.append("Larger Home Extension / prior approval route appears relevant.")
-    if "FULL PLANNING" in combined:
-        triggers.append("One or more items appear outside straightforward PD/PA route.")
+    if "CLASS B" in combined or "DORMER" in combined or "ROOF" in combined:
+        triggers.append("Roof enlargement checks appear to be the main planning route issue.")
+    elif "PRIOR APPROVAL" in combined:
+        triggers.append("Larger home extension / prior approval route appears relevant.")
+    elif "FULL PLANNING" in combined:
+        triggers.append("The proposal may require a householder planning application.")
+    else:
+        triggers.append("Planning route has been assessed using the uploaded drawings and rule checks.")
     if blockers:
-        triggers.append("Some dimensions or constraints still need confirmation from the drawings or site checks.")
-    if not triggers:
-        triggers.append("No major route conflict was identified from the current intake and report sections.")
+        triggers.append("Some standard confirmation items may still need checking before submission.")
+    if "PD / LDC" in combined or "PERMITTED DEVELOPMENT" in combined:
+        triggers.append("A Lawful Development Certificate route may be appropriate where PD criteria are met.")
 
     return {
         "module": "Planning Review",
         "label": label,
-        "basis": "Rule engine + drawing/report checks",
-        "triggers": triggers[:4],
-        "note": "This is a review status, not a guarantee of lawful development or planning approval.",
+        "basis": "Planning rules + drawing review",
+        "triggers": triggers[:3],
+        "note": "Indicative review only. The local authority makes the final decision.",
     }
-
 
 def calculate_building_confidence(sections: Dict[str, str]) -> Dict[str, object]:
     combined = "\n".join(sections.values()).upper()
@@ -639,9 +671,9 @@ def calculate_ai_confidence(module_name: str, sections: Dict[str, str], rule_sum
 
 def confidence_badge_style(label: str) -> str:
     label_u = _normalise_text(label).upper()
-    if label_u in {"PASS", "LIKELY PD", "LIKELY PRIOR APPROVAL", "LIKELY COMPLIANT"}:
+    if label_u in {"LIKELY COMPLIANT", "LIKELY COMPLIANT SUBJECT TO MINOR CHECKS", "LIKELY PRIOR APPROVAL"}:
         return "background:#DDF3E4;color:#14532D;border-color:#B7E4C7;"
-    if label_u in {"FULL PLANNING ADVISED", "PARTIAL INFORMATION", "STRUCTURAL REVIEW REQUIRED", "FIRE STRATEGY REVIEW REQUIRED", "MANUAL REVIEW ADVISED", "BUILDING CONTROL REVIEW ADVISED"}:
+    if label_u in {"LIKELY PLANNING PERMISSION REQUIRED", "REQUIRES FURTHER REVIEW", "PARTIAL INFORMATION", "STRUCTURAL REVIEW REQUIRED", "FIRE STRATEGY REVIEW REQUIRED", "BUILDING CONTROL REVIEW ADVISED"}:
         return "background:#FFF3CD;color:#6B4E00;border-color:#F1D48A;"
     return "background:#F8D7DA;color:#842029;border-color:#F1AEB5;"
 
@@ -655,7 +687,7 @@ def render_ai_confidence_card(confidence):
     st.markdown(
         f"""
         <div class="sy-subtle-card">
-            <div class="sy-section-label">AI Confidence System</div>
+            <div class="sy-section-label">Planning Confidence</div>
             <div style="display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap;">
                 <h3 style="margin:0;">Review Status</h3>
                 <span style="display:inline-block;padding:0.42rem 0.72rem;border-radius:999px;border:1px solid; font-weight:800; letter-spacing:0.02em; {style}">{label}</span>
@@ -713,7 +745,9 @@ def get_verified_plan_and_user() -> Tuple[str, str, bool]:
 
 
 def get_allowed_review_modules(plan: str) -> List[str]:
-    return ["Planning Review", "Building Regulations Review"] if plan == "pro" else ["Planning Review"]
+    # Token system: both modules can be selected by authenticated users.
+    # Downloads are controlled by credits rather than the old monthly plan gate.
+    return ["Planning Review", "Building Regulations Review"]
 
 
 def get_plan_upgrade_message(feature_name: str) -> str:
@@ -724,6 +758,101 @@ def add_saved_project(project_record: Dict):
     filtered = [item for item in saved if item.get("report_id") != project_record.get("report_id")]
     filtered.insert(0, project_record)
     st.session_state["saved_projects"] = filtered[:25]
+
+
+def get_credit_balance() -> int:
+    return int(st.session_state.get("credit_balance", 0) or 0)
+
+
+def add_credit_transaction(amount: int, reason: str, report_id: str = "", balance_after=None):
+    transactions = st.session_state.get("credit_transactions", []) or []
+    transactions.insert(0, {
+        "date": time.strftime("%Y-%m-%d %H:%M"),
+        "amount": int(amount),
+        "reason": reason,
+        "report_id": report_id,
+        "balance_after": get_credit_balance() if balance_after is None else balance_after,
+    })
+    st.session_state["credit_transactions"] = transactions[:100]
+
+
+def grant_credits(amount: int, reason: str = "Credits added"):
+    new_balance = get_credit_balance() + int(amount)
+    st.session_state["credit_balance"] = new_balance
+    add_credit_transaction(int(amount), reason, balance_after=new_balance)
+
+
+def spend_credits(amount: int, reason: str, report_id: str = ""):
+    amount = int(amount)
+    balance = get_credit_balance()
+    if amount <= 0:
+        return True, "No credits required."
+    if balance < amount:
+        return False, f"Not enough credits. You need {amount} credits but only have {balance}."
+    new_balance = balance - amount
+    st.session_state["credit_balance"] = new_balance
+    add_credit_transaction(-amount, reason, report_id=report_id, balance_after=new_balance)
+    return True, f"Unlocked successfully. {amount} credits used."
+
+
+def get_export_credit_cost(module_name: str, export_type: str) -> int:
+    return int(EXPORT_CREDIT_COSTS.get(module_name, {}).get(export_type, 0))
+
+
+def is_report_unlocked(report_id: str, export_type: str) -> bool:
+    unlocked = st.session_state.get("unlocked_reports", {}) or {}
+    return bool(unlocked.get(report_id, {}).get(export_type, False))
+
+
+def mark_report_unlocked(report_id: str, export_type: str, cost: int = 0):
+    unlocked = st.session_state.get("unlocked_reports", {}) or {}
+    unlocked.setdefault(report_id, {})[export_type] = True
+    st.session_state["unlocked_reports"] = unlocked
+    saved = st.session_state.get("saved_projects", []) or []
+    for item in saved:
+        if item.get("report_id") == report_id:
+            item[f"{export_type}_unlocked"] = True
+            item["credits_used"] = int(item.get("credits_used", 0) or 0) + int(cost or 0)
+    st.session_state["saved_projects"] = saved
+
+
+def unlock_report_export(report_id: str, module_name: str, export_type: str):
+    if is_report_unlocked(report_id, export_type):
+        return True, "Already unlocked. You can download again without using more credits."
+    cost = get_export_credit_cost(module_name, export_type)
+    ok, message = spend_credits(cost, f"Unlock {export_type.upper()} export", report_id=report_id)
+    if ok:
+        mark_report_unlocked(report_id, export_type, cost)
+    return ok, message
+
+
+def render_credit_balance_card(compact: bool = False):
+    balance = get_credit_balance()
+    if compact:
+        st.caption(f"Credits: {balance}")
+        return
+    st.markdown(
+        f'''<div class="sy-subtle-card">
+            <div class="sy-section-label">Credits</div>
+            <h3 style="margin:0;">{balance} credits available</h3>
+            <div class="sy-muted" style="margin-top:0.35rem;">{FREE_PREVIEW_NOTE}</div>
+        </div>''',
+        unsafe_allow_html=True,
+    )
+
+
+def render_buy_credits_panel():
+    st.markdown("### Buy Credits")
+    st.caption("Stripe/Wix payment automation is the next phase. These buttons simulate credit top-ups for testing the app flow.")
+    cols = st.columns(len(CREDIT_PACKS))
+    for idx, (pack_name, pack) in enumerate(CREDIT_PACKS.items()):
+        with cols[idx]:
+            st.markdown(f"**{pack_name}**")
+            st.caption(pack["price"])
+            if st.button(f"Add {pack['credits']} credits", key=f"add_credit_pack_{idx}", use_container_width=True):
+                grant_credits(pack["credits"], f"Test top-up: {pack_name}")
+                st.success(f"Added {pack['credits']} credits.")
+                st.rerun()
 
 
 def inject_custom_css():
@@ -1964,6 +2093,7 @@ def render_left_navigation():
         else:
             st.markdown("### ArchLens AI")
         st.caption(f"Plan: {PLAN_LABELS.get(current_plan, 'Solo')}")
+        st.caption(f"Credits: {get_credit_balance()}")
         if current_user_name:
             st.caption(f"User: {current_user_name}")
         page = st.radio(
@@ -1975,8 +2105,7 @@ def render_left_navigation():
         st.session_state["app_page"] = page
         st.markdown("---")
         st.link_button("Return to SY Design Studio", WEBSITE_HOME_URL, use_container_width=True)
-        if current_plan == "starter":
-            st.link_button("Upgrade to Studio", WEBSITE_PRICING_URL, use_container_width=True)
+        st.link_button("Buy Credits", WEBSITE_PRICING_URL, use_container_width=True)
     return page
 
 def intake_items():
@@ -2068,12 +2197,8 @@ def run_archlens_analysis(uploaded_files):
     )
     config = MODULE_CONFIG[review_module]
 
-    if current_plan == "starter" and review_module == "Building Regulations Review":
-        st.warning(get_plan_upgrade_message("Building Regulations Review"))
-        st.stop()
-    if current_plan == "starter" and st.session_state.get("starter_review_count", 0) >= STARTER_MONTHLY_REVIEW_LIMIT:
-        st.error("You have reached your 10 monthly reviews on Solo. Upgrade to Studio for unlimited project reviews.")
-        st.stop()
+    # Token system: module access is no longer blocked by Solo/Studio here.
+    # Keep file-size/page limits below to protect AI/API costs.
     if not uploaded_files:
         st.error("Please upload at least one PDF drawing pack before running the review.")
         st.stop()
@@ -2139,14 +2264,16 @@ def run_archlens_analysis(uploaded_files):
                     if extra_bits:
                         proposal_summary_for_ai = (proposal_summary_for_ai.strip() + " | " + extra_bits + " | Drawing dimensions take priority if different.").strip(" |")
                 if scope_items:
-                    proposal_summary_for_ai = (proposal_summary_for_ai.strip() + " | Selected scope items to cross-check: " + ", ".join(scope_items)).strip(" |")
+                    proposal_summary_for_ai = (proposal_summary_for_ai.strip() + " | Scope noted: " + ", ".join(scope_items)).strip(" |")
                 if review_focus:
                     proposal_summary_for_ai = (proposal_summary_for_ai.strip() + " | Specific review focus / notes: " + review_focus).strip(" |")
-                proposal_summary_for_ai = (proposal_summary_for_ai.strip() + " | " + drawing_priority_instruction).strip(" |")
+                # Do not pass internal drawing-priority instructions into report wording.
+                # The report prompt already includes this rule internally.
+                proposal_summary_for_ai = proposal_summary_for_ai.strip(" |")
                 pd_context = build_pd_context(project_types, property_type, rear_extension_depth_m, rear_extension_height_m, accuracy_answers)
                 accuracy_context = build_accuracy_context(accuracy_answers)
                 if accuracy_context:
-                    proposal_summary_for_ai = (proposal_summary_for_ai.strip() + " | Rule intake answers: " + accuracy_context).strip(" |")
+                    proposal_summary_for_ai = (proposal_summary_for_ai.strip() + " | PD answers: " + accuracy_context).strip(" |")
 
                 # Run deterministic householder PD rule checks before the AI narrative.
                 # AI should explain these results, not replace them.
@@ -2230,6 +2357,9 @@ def run_archlens_analysis(uploaded_files):
             "pdf_bytes": pdf_file.getvalue(),
             "word_bytes": word_file.getvalue(),
             "ai_confidence": ai_confidence,
+            "pdf_unlocked": False,
+            "word_unlocked": False,
+            "credits_used": 0,
         })
         smooth_progress(progress_bar, status_text, 95, 100, "Finalising report...", 0.4)
         status_text.text("Analysis complete. 100%")
@@ -2257,13 +2387,30 @@ def render_report_download_panel(module_name=None, show_sections=True):
     base_filename = (st.session_state.last_filename or "drawing_pack").rsplit(".", 1)[0]
     suffix = "Planning" if module_name == "Planning Review" else "BuildingRegs"
     c1, c2 = st.columns(2)
+    pdf_cost = get_export_credit_cost(module_name, "pdf")
+    word_cost = get_export_credit_cost(module_name, "word")
     with c1:
-        st.download_button("Download Branded PDF Report", st.session_state.pdf_file, file_name=f"{base_filename}_{suffix}_AI_Review_Report.pdf", mime="application/pdf", use_container_width=True)
+        if is_report_unlocked(report_id, "pdf"):
+            st.download_button("Download Branded PDF Report", st.session_state.pdf_file, file_name=f"{base_filename}_{suffix}_AI_Review_Report.pdf", mime="application/pdf", use_container_width=True)
+        else:
+            if st.button(f"Unlock PDF Report — {pdf_cost} credits", use_container_width=True):
+                ok, msg = unlock_report_export(report_id, module_name, "pdf")
+                if ok:
+                    st.success(msg)
+                    st.rerun()
+                else:
+                    st.error(msg)
     with c2:
-        if current_plan == "pro":
+        if is_report_unlocked(report_id, "word"):
             st.download_button("Download Word Report", st.session_state.word_file, file_name=f"{base_filename}_{suffix}_AI_Review_Report.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document", use_container_width=True)
         else:
-            st.button("Download Word Report 🔒 Studio", disabled=True, use_container_width=True)
+            if st.button(f"Unlock Word Report — {word_cost} credit", use_container_width=True):
+                ok, msg = unlock_report_export(report_id, module_name, "word")
+                if ok:
+                    st.success(msg)
+                    st.rerun()
+                else:
+                    st.error(msg)
     if show_sections:
         render_sections(sections, report, module_name)
 
@@ -2277,7 +2424,7 @@ st.markdown(
             <div class="sy-topbar-title">Architect AI Workspace</div>
             <div class="sy-topbar-meta">AI-powered planning and building regulations intelligence for UK projects</div>
         </div>
-        <div class="sy-topbar-meta">Plan: {PLAN_LABELS.get(current_plan, "Solo")}{(" | User: " + current_user_name) if current_user_name else ""}</div>
+        <div class="sy-topbar-meta">Credits: {get_credit_balance()} | Plan: {PLAN_LABELS.get(current_plan, "Solo")}{(" | User: " + current_user_name) if current_user_name else ""}</div>
     </div>
     ''',
     unsafe_allow_html=True,
@@ -2288,8 +2435,8 @@ if page == "Dashboard":
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Saved projects", len(st.session_state.get("saved_projects", [])))
     c2.metric("Reports generated", len(st.session_state.get("saved_projects", [])))
-    c3.metric("Current plan", PLAN_LABELS.get(current_plan, "Solo"))
-    c4.metric("Solo reviews used", f"{st.session_state.get('starter_review_count', 0)} / {STARTER_MONTHLY_REVIEW_LIMIT}" if current_plan == "starter" else "Unlimited")
+    c3.metric("Credits", get_credit_balance())
+    c4.metric("Current plan", PLAN_LABELS.get(current_plan, "Solo"))
     st.markdown("### Recent projects")
     saved_projects = st.session_state.get("saved_projects", [])
     if saved_projects:
@@ -2313,8 +2460,7 @@ elif page == "Projects":
         if step == 1:
             step_header(1, "Choose module", "Select whether this project needs a planning review or a building regulations review.")
             st.session_state["wizard_review_module"] = st.selectbox("Review Module", allowed_review_modules, index=allowed_review_modules.index(st.session_state.get("wizard_review_module", allowed_review_modules[0])))
-            if current_plan == "starter":
-                st.caption("Building Regulations Review is available on Studio.")
+            st.caption("Downloads are unlocked using credits. Planning PDF = 3 credits. Building Regs PDF = 5 credits. Word export = 1 credit.")
             st.session_state["wizard_review_mode"] = st.selectbox("Report Mode", ["Architect / Professional", "Homeowner Summary"], index=["Architect / Professional", "Homeowner Summary"].index(st.session_state.get("wizard_review_mode", "Architect / Professional")))
             wizard_buttons()
         elif step == 2:
@@ -2373,7 +2519,7 @@ elif page == "Projects":
                 st.info("No files attached yet. Upload at least one drawing PDF before generating the report.")
             wizard_buttons()
         elif step == 7:
-            step_header(7, "Generate report", "Run the AI review and download the branded SY Design Studio report.")
+            step_header(7, "Generate report", "Run the AI review first, then unlock PDF or Word exports using credits.")
             uploaded_files = st.session_state.get("wizard_uploaded_files", [])
             if uploaded_files:
                 st.success(f"{len(uploaded_files)} file(s) ready for analysis.")
@@ -2409,16 +2555,34 @@ elif page == "Reports":
             d1, d2 = st.columns(2)
             pdf_bytes = item.get("pdf_bytes")
             word_bytes = item.get("word_bytes")
+            report_id_item = item.get("report_id", "")
+            module_item = item.get("module", "Planning Review")
             with d1:
-                if pdf_bytes:
-                    st.download_button("Download PDF", pdf_bytes, file_name=f"{item.get('report_id', 'report')}_ArchLens_Report.pdf", mime="application/pdf", use_container_width=True, key=f"pdf_{item.get('report_id','')}")
+                if pdf_bytes and item.get("pdf_unlocked"):
+                    st.download_button("Download PDF", pdf_bytes, file_name=f"{report_id_item or 'report'}_ArchLens_Report.pdf", mime="application/pdf", use_container_width=True, key=f"pdf_{report_id_item}")
+                elif pdf_bytes:
+                    cost = get_export_credit_cost(module_item, "pdf")
+                    if st.button(f"Unlock PDF — {cost} credits", use_container_width=True, key=f"unlock_pdf_{report_id_item}"):
+                        ok, msg = unlock_report_export(report_id_item, module_item, "pdf")
+                        if ok:
+                            st.success(msg)
+                            st.rerun()
+                        else:
+                            st.error(msg)
                 else:
                     st.caption("PDF download available for reports generated after this update.")
             with d2:
-                if current_plan == "pro" and word_bytes:
-                    st.download_button("Download Word", word_bytes, file_name=f"{item.get('report_id', 'report')}_ArchLens_Report.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document", use_container_width=True, key=f"docx_{item.get('report_id','')}")
-                elif current_plan != "pro":
-                    st.button("Word Report 🔒 Studio", disabled=True, use_container_width=True, key=f"docx_locked_{item.get('report_id','')}")
+                if word_bytes and item.get("word_unlocked"):
+                    st.download_button("Download Word", word_bytes, file_name=f"{report_id_item or 'report'}_ArchLens_Report.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document", use_container_width=True, key=f"docx_{report_id_item}")
+                elif word_bytes:
+                    cost = get_export_credit_cost(module_item, "word")
+                    if st.button(f"Unlock Word — {cost} credit", use_container_width=True, key=f"unlock_word_{report_id_item}"):
+                        ok, msg = unlock_report_export(report_id_item, module_item, "word")
+                        if ok:
+                            st.success(msg)
+                            st.rerun()
+                        else:
+                            st.error(msg)
                 else:
                     st.caption("Word download available for reports generated after this update.")
             st.markdown('</div>', unsafe_allow_html=True)
@@ -2432,8 +2596,8 @@ elif page == "Settings":
         st.markdown("### Account")
         st.write(f"Current plan: **{PLAN_LABELS.get(current_plan, 'Solo')}**")
         st.write(f"User: **{current_user_name or 'Not shown'}**")
-        if current_plan == "starter":
-            st.write(f"Monthly reviews used: **{st.session_state.get('starter_review_count', 0)} / {STARTER_MONTHLY_REVIEW_LIMIT}**")
+        st.write(f"Credits available: **{get_credit_balance()}**")
+        st.caption("This version uses session-based credits for testing. Live credits should be moved to Supabase/Stripe so balances persist.")
         st.markdown("### Appearance")
         selected_theme = st.radio("App theme", ["Dark", "Light"], index=["Dark", "Light"].index(st.session_state.get("app_theme", "Dark")), horizontal=True)
         if selected_theme != st.session_state.get("app_theme", "Dark"):
@@ -2448,11 +2612,28 @@ elif page == "Settings":
             st.success("SY Design Studio logo is loaded for branded PDF exports.")
         else:
             st.warning("Logo file not found. Add assets/sy_design_studio_logo.png to your project.")
+    st.markdown("---")
+    render_buy_credits_panel()
+
+    st.markdown("---")
+    st.markdown("### Credit Transactions")
+    transactions = st.session_state.get("credit_transactions", []) or []
+    if transactions:
+        for tx in transactions[:8]:
+            sign = "+" if int(tx.get("amount", 0)) > 0 else ""
+            st.caption(f"{tx.get('date')} • {sign}{tx.get('amount')} credits • {tx.get('reason')} • Balance: {tx.get('balance_after')}")
+    else:
+        st.caption("No credit transactions yet.")
+
     if st.button("Clear current project/report"):
+        # Do not reset credit balance, credit transactions, unlocked reports or report library.
+        # Credits are money-related and must persist in the user session.
+        preserve_keys = {"credit_balance", "credit_transactions", "unlocked_reports", "saved_projects", "report_library"}
         for key, value in DEFAULT_STATE.items():
-            st.session_state[key] = value
+            if key not in preserve_keys:
+                st.session_state[key] = value
         for key in list(st.session_state.keys()):
             if key.startswith("wizard_"):
                 st.session_state[key] = WIZARD_DEFAULTS.get(key, "")
         st.session_state["project_step"] = 1
-        st.success("Current project cleared.")
+        st.success("Current project cleared. Credits and previously generated report library were kept.")
