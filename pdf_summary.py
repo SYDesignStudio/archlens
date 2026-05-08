@@ -346,7 +346,7 @@ def infer_submission_readiness_from_context(
     combined = f"{project_types_text} {proposal_summary_text} {text} {page_summary}".lower()
     if "superseded" in combined:
         return (
-            "FURTHER INFORMATION REQUIRED",
+            "FURTHER INFORMATION RECOMMENDED",
             "A current drawing / site plan set should be confirmed before submission because superseded information appears within the pack.",
         )
     if application_type == "PRIOR APPROVAL" and "ground floor rear extension" in combined:
@@ -1239,14 +1239,21 @@ SITE AND PROPOSAL OVERVIEW
 - Only mention a fire statement where it is genuinely relevant.
 
 TOP SUMMARY
-- Do not include "Overall Planning Risk Rating" or "Planning Approval Probability".
-- Add one bullet stating refusal / approval risk using LOW / MEDIUM / HIGH where the PD questionnaire indicates neighbour amenity or PD compliance risk.
+- Keep this section extremely clean and professional.
+- Do not include:
+  - Overall Planning Risk Rating
+  - Planning Approval Probability
+  - Planning Route Confidence Score
+  - AI commentary
+  - Confidence percentages
+  - Backend logic references
 - Include only:
   - Project Summary: {project_summary_value}
-  - Likely Route: {application_type_value}
-  - Compliance Position: likely compliant subject to standard checks where appropriate
+  - Likely Planning Route: {application_type_value}
+  - Overall Planning Position: The proposal appears broadly capable of complying with the relevant planning / permitted development requirements subject to final dimensional confirmation.
   - Local Authority: {authority_value}
-- Present 2 to 4 concise "Key Planning Considerations" bullets only.
+- Add a maximum of 3 concise Key Planning Considerations bullets.
+- Use professional consultant wording only.
 - Do not add informal caveat wording here.
 
 LOCAL AUTHORITY CONTEXT
@@ -1266,11 +1273,21 @@ PD / PRIOR APPROVAL / PLANNING ROUTE
 - State clearly if a larger home extension prior approval route may be relevant.
 
 PLANNING ASSESSMENT
-- Write this as a professional planning assessment, not as an AI or third-party reasoning section.
-- Maximum 4 concise bullets.
-- Avoid legalistic GPDO wording and repeated caveats.
-- Cover only practical planning observations relevant to the proposal.
-- Where street precedent appears evident, say so directly in a professional way, for example: "Several similar roof extensions appear to exist within the surrounding terrace and, on balance, the proposal is likely to read as part of the established roofscape pattern."
+- Write this section like a real UK planning consultant / delegated officer report.
+- Use concise professional wording.
+- Maximum 5 bullets only.
+- No repetitive wording.
+- No AI language.
+- No generic filler.
+- Focus only on:
+  - Design impact
+  - Roof form
+  - Scale and bulk
+  - Streetscene impact
+  - Neighbour amenity
+  - PD compliance logic where relevant
+- Where similar extensions appear nearby, mention this naturally.
+- Example wording style: "The proposed roof enlargement appears subordinate to the existing dwelling and would remain visually contained within the established terrace roofscape."
 - Do not say a Fire Statement has been submitted unless it is actually evident in the pack.
 
 DRAWING-PACK INCONSISTENCIES
@@ -1278,17 +1295,33 @@ DRAWING-PACK INCONSISTENCIES
 - Do not refer to what the client did or did not state.
 
 KEY RISKS
-- HIGH / MEDIUM / LOW risk bullets only.
+- Keep this section short.
+- Only include actual planning risks.
+- Maximum 4 bullets.
+- Categorise every bullet using LOW / MEDIUM / HIGH.
+- Do not include unnecessary warnings.
 
 MISSING INFORMATION
 - Only list specific items needed to confirm route or planning risk.
 
 RECOMMENDED ACTIONS
-- Start each bullet with Provide / Confirm / Revise / Check / Submit.
+- Maximum 5 actions.
+- Start every line with Provide / Confirm / Revise / Check / Submit.
+- Keep actions practical and submission-focused.
 
 SUBMISSION READINESS
+- Replace robotic wording with professional consultant wording.
+- Never use:
+  - NOT READY
+  - AI confidence
+  - system language
+- Use only:
+  - READY TO SUBMIT
+  - LIKELY READY WITH MINOR AMENDMENTS
+  - FURTHER INFORMATION RECOMMENDED
 - Status: use this indicative position unless the drawings strongly justify otherwise: {readiness_status}
 - Reason: use this indicative reason unless the drawings strongly justify otherwise: {readiness_reason}
+- Add one concise professional explanation only.
 - If a similar rear extension / prior approval scheme shows the typical dimensional and policy information clearly and no major contradictions are evident, "READY TO SUBMIT" can be used.
 - In homeowner mode, this should reflect preliminary feasibility readiness rather than formal submission certainty.
 
@@ -1314,15 +1347,15 @@ Detected pages:
             1,
         )
     top_summary_pattern = r"TOP SUMMARY\n([\s\S]*?)(?=\n[A-Z][A-Z /\-]+\n)"
-    compliance_position = "Likely compliant subject to minor checks" if application_type_value == "PD / LDC" else ("Likely prior approval route" if application_type_value == "PRIOR APPROVAL" else "Likely planning permission required")
+    compliance_position = "The proposal appears broadly capable of complying with the relevant planning / permitted development requirements subject to final dimensional confirmation." if application_type_value == "PD / LDC" else ("The proposal appears capable of progressing via the prior approval route subject to final dimensional confirmation and neighbour consultation requirements." if application_type_value == "PRIOR APPROVAL" else "The proposal is likely to require a formal planning application and should be assessed against the relevant local planning policies.")
     if minor_class_b_condition_only:
         application_type_value = "PD / LDC"
         compliance_position = "Likely compliant subject to minor checks"
     top_summary_replacement = (
         "TOP SUMMARY\n"
         f"Project Summary: {project_summary_value}\n"
-        f"Likely Route: {application_type_value}\n"
-        f"Compliance Position: {compliance_position}\n"
+        f"Likely Planning Route: {application_type_value}\n"
+        f"Overall Planning Position: {compliance_position}\n"
         f"Local Authority: {authority_value}\n"
     )
     output_text = re.sub(top_summary_pattern, top_summary_replacement, output_text, count=1)
@@ -1338,15 +1371,15 @@ Detected pages:
         output_text = repaired.output_text
         output_text = polish_planning_report_text(output_text, address_text, fire_status, authority_value)
         top_summary_pattern = r"TOP SUMMARY\n([\s\S]*?)(?=\n[A-Z][A-Z /\-]+\n)"
-        compliance_position = "Likely compliant subject to minor checks" if application_type_value == "PD / LDC" else ("Likely prior approval route" if application_type_value == "PRIOR APPROVAL" else "Likely planning permission required")
+        compliance_position = "The proposal appears broadly capable of complying with the relevant planning / permitted development requirements subject to final dimensional confirmation." if application_type_value == "PD / LDC" else ("The proposal appears capable of progressing via the prior approval route subject to final dimensional confirmation and neighbour consultation requirements." if application_type_value == "PRIOR APPROVAL" else "The proposal is likely to require a formal planning application and should be assessed against the relevant local planning policies.")
     if minor_class_b_condition_only:
         application_type_value = "PD / LDC"
         compliance_position = "Likely compliant subject to minor checks"
         top_summary_replacement = (
             "TOP SUMMARY\n"
             f"Project Summary: {project_summary_value}\n"
-            f"Likely Route: {application_type_value}\n"
-            f"Compliance Position: {compliance_position}\n"
+            f"Likely Planning Route: {application_type_value}\n"
+            f"Overall Planning Position: {compliance_position}\n"
             f"Local Authority: {authority_value}\n"
         )
         output_text = re.sub(top_summary_pattern, top_summary_replacement, output_text, count=1)
@@ -1390,6 +1423,12 @@ def simplify_report_text(report_text: str, max_bullets_per_section: int = 6) -> 
     text = re.sub(r"PD answers\s*:[^\n]*", "", text, flags=re.IGNORECASE)
     text = re.sub(r"Planning Route Confidence Score\s*:[^\n]*\n?", "", text, flags=re.IGNORECASE)
     text = normalise_minor_class_b_route_text(text)
+
+    text = re.sub(r"^.*Overall Planning Risk Rating:.*$\n?", "", text, flags=re.MULTILINE | re.IGNORECASE)
+    text = re.sub(r"^.*Planning Approval Probability:.*$\n?", "", text, flags=re.MULTILINE | re.IGNORECASE)
+    text = re.sub(r"^.*Planning Route Confidence Score:.*$\n?", "", text, flags=re.MULTILINE | re.IGNORECASE)
+    text = re.sub(r"^.*Deterministic engine.*$\n?", "", text, flags=re.MULTILINE | re.IGNORECASE)
+    text = re.sub(r"^.*Backend logic.*$\n?", "", text, flags=re.MULTILINE | re.IGNORECASE)
     text = re.sub(r"Detected proposal label\s*=.*", "", text, flags=re.IGNORECASE)
     text = re.sub(r"Street precedent signal\s*=.*", "", text, flags=re.IGNORECASE)
     text = re.sub(r"^(Actual|Required):.*$\n?", "", text, flags=re.MULTILINE | re.IGNORECASE)
