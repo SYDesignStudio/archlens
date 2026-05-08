@@ -30,6 +30,8 @@ DEFAULT_STATE = {
     "report_id": None,
     "active_module": "Building Regulations Review",
     "saved_projects": [],
+    "report_library": [],
+    "app_theme": "Dark",
     "brand_logo_bytes": None,
 }
 for key, value in DEFAULT_STATE.items():
@@ -173,6 +175,27 @@ CLASS_A_PROJECT_TYPES = {
     "First Floor Rear Extension",
     "First Floor Side Extension",
 }
+
+SCOPE_ITEM_OPTIONS = [
+    "New kitchen",
+    "New bathroom / WC",
+    "New bedroom",
+    "Internal room layout changes",
+    "Staircase changes",
+    "Structural openings",
+    "New steel beams",
+    "Drainage changes",
+    "New external doors / windows",
+    "Roof / loft / dormer works",
+    "Insulation / thermal upgrades",
+    "Heating / boiler / ventilation",
+    "Fire safety upgrades",
+    "Sound insulation",
+    "New foundations",
+    "Basement excavation",
+    "Party wall interface",
+]
+
 
 
 def get_accuracy_question_group(project_types: List[str]) -> str:
@@ -506,318 +529,151 @@ def add_saved_project(project_record: Dict):
 
 
 def inject_custom_css():
+    theme = st.session_state.get("app_theme", "Dark")
+    light_mode = str(theme).lower().startswith("light")
+    if light_mode:
+        bg = "#F7F6F2"
+        surface = "#FFFFFF"
+        surface_2 = "#F1EFE8"
+        text = "#171717"
+        muted = "#5F6368"
+        border = "#D9D6CC"
+        shadow = "0 12px 28px rgba(20,20,20,0.08)"
+        sidebar_bg = "#FFFFFF"
+        input_bg = "#FFFFFF"
+    else:
+        bg = "#0E1117"
+        surface = "#121821"
+        surface_2 = "#172033"
+        text = "#F5F7FA"
+        muted = "#B8C0CC"
+        border = "#2A3140"
+        shadow = "0 14px 32px rgba(0,0,0,0.24)"
+        sidebar_bg = "#0B0F16"
+        input_bg = "#111827"
+
     st.markdown(
-        """
+        f"""
         <style>
-        :root {
-            --sy-bg: var(--background-color);
-            --sy-surface: color-mix(in srgb, var(--secondary-background-color) 88%, transparent);
-            --sy-surface-2: color-mix(in srgb, var(--secondary-background-color) 76%, transparent);
-            --sy-border: color-mix(in srgb, var(--text-color) 14%, transparent);
-            --sy-text: var(--text-color);
-            --sy-muted: color-mix(in srgb, var(--text-color) 76%, transparent);
-            --sy-accent: var(--primary-color);
-            --sy-card-shadow: 0 12px 28px rgba(0,0,0,0.16);
-        }
+        :root {{
+            --sy-bg: {bg};
+            --sy-surface: {surface};
+            --sy-surface-2: {surface_2};
+            --sy-border: {border};
+            --sy-text: {text};
+            --sy-muted: {muted};
+            --sy-accent: #D4C29A;
+            --sy-accent-hover: #C5B183;
+            --sy-card-shadow: {shadow};
+            --sy-input-bg: {input_bg};
+            --sy-sidebar-bg: {sidebar_bg};
+        }}
 
-        .stApp {
-            background: linear-gradient(
-                180deg,
-                color-mix(in srgb, var(--background-color) 96%, #0A1630 4%) 0%,
-                var(--background-color) 100%
-            );
-            color: var(--sy-text);
-        }
+        .stApp {{
+            background: var(--sy-bg) !important;
+            color: var(--sy-text) !important;
+            font-size: 15px;
+        }}
+        header[data-testid="stHeader"], [data-testid="stToolbar"], .stAppDeployButton {{ display:none !important; }}
+        #MainMenu {{ visibility:hidden !important; }}
+        footer {{ visibility:hidden !important; }}
 
-        header[data-testid="stHeader"] { display:none !important; }
-        [data-testid="stToolbar"] { display:none !important; }
-        .stAppDeployButton { display:none !important; }
-        #MainMenu { visibility:hidden !important; }
-        footer { visibility:hidden !important; }
-
-        .block-container {
+        .block-container {{
             padding-top: 1rem !important;
-            padding-bottom: 2rem;
-            max-width: 1600px;
-        }
+            padding-bottom: 2rem !important;
+            max-width: 1420px !important;
+        }}
 
-        [data-testid="stSidebar"] {
-            background: linear-gradient(
-                180deg,
-                color-mix(in srgb, var(--background-color) 92%, #08111F 8%) 0%,
-                color-mix(in srgb, var(--background-color) 98%, black 2%) 100%
-            );
+        [data-testid="stSidebar"] {{
+            background: var(--sy-sidebar-bg) !important;
             border-right: 1px solid var(--sy-border);
-        }
-        [data-testid="stSidebar"] * { color: var(--sy-text); }
+        }}
+        [data-testid="stSidebar"] * {{ color: var(--sy-text); }}
+        [data-testid="stSidebar"] [role="radiogroup"] label {{
+            padding: 0.42rem 0.55rem !important;
+            border-radius: 12px !important;
+            margin-bottom: 0.15rem !important;
+        }}
 
-        .sy-topbar {
-            display:flex;
-            justify-content:space-between;
-            align-items:center;
-            padding:1rem;
-            border:1px solid var(--sy-border);
-            border-radius:18px;
-            background: linear-gradient(
-                90deg,
-                color-mix(in srgb, var(--secondary-background-color) 92%, transparent),
-                color-mix(in srgb, var(--secondary-background-color) 76%, var(--primary-color) 8%)
-            );
-            margin-bottom:1.1rem;
-            box-shadow: var(--sy-card-shadow);
-        }
-        .sy-topbar-title {
-            font-size:0.9rem;
-            text-transform:uppercase;
-            letter-spacing:0.12em;
-            color:var(--sy-muted);
-        }
-        .sy-topbar-meta { font-size:0.9rem; color:var(--sy-text); }
+        h1 {{ font-size: 2.35rem !important; letter-spacing: -0.035em !important; line-height: 1.08 !important; }}
+        h2 {{ font-size: 1.45rem !important; letter-spacing: -0.02em !important; }}
+        h3 {{ font-size: 1.12rem !important; }}
+        p, li, label, .stMarkdown, .stCaption {{ color: var(--sy-text); }}
+        small, .sy-muted {{ color: var(--sy-muted) !important; }}
 
-        .sy-hero {
-            padding:1.65rem 1.4rem 1.4rem 1.4rem;
-            border:1px solid var(--sy-border);
-            border-radius:24px;
-            background:
-                radial-gradient(circle at 8% 18%, color-mix(in srgb, var(--primary-color) 22%, transparent), transparent 30%),
-                radial-gradient(circle at 92% 12%, color-mix(in srgb, var(--primary-color) 14%, #00d4ff 22%), transparent 28%),
-                linear-gradient(
-                    135deg,
-                    color-mix(in srgb, var(--secondary-background-color) 70%, var(--primary-color) 12%) 0%,
-                    color-mix(in srgb, var(--background-color) 92%, transparent) 55%,
-                    color-mix(in srgb, var(--background-color) 98%, black 2%) 100%
-                );
-            margin-bottom:1rem;
-            box-shadow:0 18px 40px rgba(0,0,0,0.18);
-        }
-        .sy-hero-grid { display:grid; grid-template-columns:1.4fr 0.9fr; gap:1rem; align-items:start; }
-        .sy-hero-copy { padding-top:0.25rem; }
-        .sy-hero-copy h1 {
-            margin:0 0 0.55rem 0 !important;
-            line-height:1.06;
-            color:var(--sy-text);
-            font-size:3.05rem;
-            letter-spacing:-0.03em;
-        }
-        .sy-hero-copy .sy-muted { margin-top:0.2rem; line-height:1.7; color:var(--sy-muted); }
+        .sy-topbar {{
+            display:flex; justify-content:space-between; align-items:center; gap: 1rem;
+            padding:0.85rem 1rem; border:1px solid var(--sy-border); border-radius:18px;
+            background: var(--sy-surface); margin-bottom:1rem; box-shadow: var(--sy-card-shadow);
+        }}
+        .sy-topbar-title {{ font-size:0.78rem; text-transform:uppercase; letter-spacing:0.14em; color:var(--sy-muted); font-weight:800; }}
+        .sy-topbar-meta {{ font-size:0.86rem; color:var(--sy-text); }}
 
-        .sy-hero-stat,
-        .sy-step,
-        .sy-card,
-        .sy-mini-card,
-        .sy-upload-item,
-        .sy-sidepanel,
-        .sy-workspace {
-            border:1px solid var(--sy-border);
-            background: linear-gradient(
-                180deg,
-                color-mix(in srgb, var(--secondary-background-color) 86%, transparent),
-                color-mix(in srgb, var(--secondary-background-color) 76%, transparent)
-            );
-            box-shadow: var(--sy-card-shadow);
-            color: var(--sy-text);
-        }
+        .sy-hero {{
+            padding:1.25rem 1.3rem; border:1px solid var(--sy-border); border-radius:24px;
+            background: var(--sy-surface); margin-bottom:1rem; box-shadow: var(--sy-card-shadow);
+        }}
+        .sy-hero-copy h1 {{ margin:0 0 0.45rem 0 !important; }}
+        .sy-hero-copy .sy-muted {{ line-height:1.55; font-size:0.92rem; }}
 
-        .sy-hero-stat { border-radius:18px; padding:1rem; min-height:82px; }
-        .sy-step { border-radius:18px; padding:1rem; min-height:112px; }
-        .sy-card { border-radius:20px; padding:1.05rem; margin-bottom:0.95rem; }
-        .sy-mini-card { border-radius:18px; padding:1rem; min-height:158px; }
-        .sy-sidepanel { border-radius:20px; padding:1rem; position:sticky; top:1rem; }
-        .sy-workspace { border-radius:22px; padding:1rem; }
+        .sy-card, .sy-mini-card, .sy-upload-item, .sy-sidepanel, .sy-workspace, .sy-subtle-card, .sy-option-card, .sy-report-card {{
+            border:1px solid var(--sy-border); background: var(--sy-surface); box-shadow: var(--sy-card-shadow); color: var(--sy-text);
+        }}
+        .sy-card {{ border-radius:20px; padding:1.05rem; margin-bottom:0.95rem; }}
+        .sy-mini-card {{ border-radius:18px; padding:0.9rem; min-height:118px; }}
+        .sy-sidepanel {{ border-radius:20px; padding:0.85rem; position:sticky; top:1rem; font-size:0.86rem; }}
+        .sy-sidepanel .sy-data-row {{ font-size:0.82rem; padding:0.42rem 0; }}
+        .sy-workspace {{ border-radius:22px; padding:1rem; }}
+        .sy-subtle-card {{ border-radius:18px; padding:0.95rem 1rem; margin-bottom:0.85rem; }}
+        .sy-section-label, .sy-panel-title, .sy-kpi {{
+            font-size:0.72rem; text-transform:uppercase; letter-spacing:0.12em; color:var(--sy-muted); margin-bottom:0.35rem; font-weight:800;
+        }}
+        .sy-data-row {{ display:flex; justify-content:space-between; gap:0.8rem; padding:0.52rem 0; border-bottom:1px solid var(--sy-border); color:var(--sy-text); }}
+        .sy-data-row:last-child {{ border-bottom:0; }}
+        .sy-data-row span:first-child {{ color:var(--sy-muted); }}
+        .sy-data-row strong {{ text-align:right; }}
 
-        .sy-panel-title,
-        .sy-kpi {
-            font-size:0.82rem;
-            text-transform:uppercase;
-            letter-spacing:0.1em;
-            color:var(--sy-muted);
-            margin-bottom:0.45rem;
-        }
+        .sy-option-grid {{ display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:0.7rem; margin:0.75rem 0 1rem 0; }}
+        .sy-option-card {{ border-radius:16px; padding:0.65rem 0.8rem; min-height:48px; }}
+        .sy-option-card label {{ font-weight:650 !important; }}
+        .sy-report-card {{ border-radius:18px; padding:1rem; margin-bottom:0.8rem; }}
 
-        .sy-workspace-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:0.8rem; }
-        .sy-workspace-title { font-size:1.08rem; font-weight:700; color:var(--sy-text); }
-        .sy-workspace-meta, .sy-muted { font-size:0.89rem; color:var(--sy-muted); }
+        .sy-preview-shell {{ border:1px solid var(--sy-border); border-radius:18px; overflow:hidden; background: var(--sy-surface); }}
+        .sy-preview-topbar {{ display:flex; justify-content:space-between; align-items:center; padding:0.75rem 0.9rem; border-bottom:1px solid var(--sy-border); background: var(--sy-surface-2); }}
+        .sy-preview-title {{ font-weight:700; font-size:0.94rem; color:var(--sy-text); }}
+        .sy-preview-meta {{ font-size:0.8rem; color:var(--sy-muted); }}
+        .sy-preview-badge {{ padding:0.25rem 0.5rem; border-radius:999px; font-size:0.72rem; font-weight:700; background:rgba(212,194,154,0.18); color:var(--sy-text); border:1px solid var(--sy-border); }}
+        .sy-preview-frame {{ border:0; background:white; }}
+        .sy-empty-preview {{ min-height:240px; display:flex; align-items:center; justify-content:center; text-align:center; border:1px dashed var(--sy-border); border-radius:18px; background:var(--sy-surface-2); padding:1rem; color:var(--sy-muted); }}
+        .sy-upload-item {{ border-radius:14px; padding:0.72rem 0.85rem; margin-bottom:0.5rem; }}
 
-        .sy-preview-shell {
-            border:1px solid var(--sy-border);
-            border-radius:18px;
-            overflow:hidden;
-            background: var(--secondary-background-color);
-        }
-        .sy-preview-topbar {
-            display:flex;
-            justify-content:space-between;
-            align-items:center;
-            padding:0.82rem 0.95rem;
-            border-bottom:1px solid var(--sy-border);
-            background: linear-gradient(
-                90deg,
-                color-mix(in srgb, var(--secondary-background-color) 88%, var(--primary-color) 8%),
-                color-mix(in srgb, var(--secondary-background-color) 94%, transparent)
-            );
-        }
-        .sy-preview-title { font-weight:700; font-size:0.98rem; color:var(--sy-text); }
-        .sy-preview-meta { font-size:0.84rem; color:var(--sy-muted); }
-        .sy-preview-badge {
-            padding:0.28rem 0.58rem;
-            border-radius:999px;
-            font-size:0.76rem;
-            font-weight:700;
-            background:color-mix(in srgb, var(--primary-color) 18%, transparent);
-            color:var(--sy-text);
-            border:1px solid var(--sy-border);
-        }
-        .sy-preview-frame { border:0; background:white; }
-        .sy-empty-preview {
-            min-height:280px;
-            display:flex;
-            align-items:center;
-            justify-content:center;
-            text-align:center;
-            border:1px dashed var(--sy-border);
-            border-radius:18px;
-            background:color-mix(in srgb, var(--secondary-background-color) 72%, transparent);
-            padding:1rem;
-            color:var(--sy-muted);
-        }
+        div[data-testid="stMetric"] {{ background: var(--sy-surface); border:1px solid var(--sy-border); padding:0.72rem 0.85rem; border-radius:16px; }}
+        div[data-testid="stMetric"] * {{ color: var(--sy-text) !important; }}
 
-        .sy-upload-item { border-radius:14px; padding:0.78rem 0.9rem; margin-bottom:0.55rem; }
-        .sy-data-row {
-            display:flex;
-            justify-content:space-between;
-            gap:0.8rem;
-            padding:0.52rem 0;
-            border-bottom:1px solid var(--sy-border);
-            color:var(--sy-text);
-        }
-        .sy-data-row:last-child { border-bottom:0; }
-        .sy-data-row span:first-child { color:var(--sy-muted); }
+        .stDownloadButton button, .stButton button, .stLinkButton a {{ border-radius:14px !important; }}
+        .stButton button, .stDownloadButton button, .stLinkButton a {{
+            background: var(--sy-accent) !important; color: #111111 !important; border: 1px solid var(--sy-accent) !important;
+            box-shadow: 0 10px 24px rgba(212, 194, 154, 0.18) !important; font-weight: 650 !important;
+        }}
+        .stButton button:hover, .stDownloadButton button:hover, .stLinkButton a:hover {{ background: var(--sy-accent-hover) !important; border-color: var(--sy-accent-hover) !important; color: #111111 !important; filter:none !important; }}
 
-        div[data-testid="stMetric"] {
-            background: linear-gradient(
-                180deg,
-                color-mix(in srgb, var(--secondary-background-color) 86%, transparent),
-                color-mix(in srgb, var(--secondary-background-color) 76%, transparent)
-            );
-            border:1px solid var(--sy-border);
-            padding:0.78rem 0.9rem;
-            border-radius:16px;
-        }
-
-        .stDownloadButton button, .stButton button, .stLinkButton a {
-            border-radius:14px !important;
-        }
-        .stButton button, .stDownloadButton button, .stLinkButton a {
-            background: #D4C29A !important;
-            color: #111111 !important;
-            border: 1px solid #D4C29A !important;
-            box-shadow: 0 10px 24px rgba(212, 194, 154, 0.18) !important;
-            font-weight: 600 !important;
-        }
-        .stButton button:hover, .stDownloadButton button:hover, .stLinkButton a:hover {
-            background: #c5b183 !important;
-            border-color: #c5b183 !important;
-            color: #111111 !important;
-            filter:none !important;
-        }
-        .stButton button:focus, .stDownloadButton button:focus, .stLinkButton a:focus {
-            outline: none !important;
-            box-shadow: 0 0 0 2px rgba(212, 194, 154, 0.28) !important;
-        }
-
-        .stTabs [data-baseweb="tab-list"] { gap:0.42rem; }
-        .stTabs [data-baseweb="tab"] {
-            border-radius:12px;
-            padding:0.5rem 0.9rem;
-            background:color-mix(in srgb, var(--secondary-background-color) 80%, transparent);
-            border:1px solid var(--sy-border);
-        }
-        .stTabs [aria-selected="true"] {
-            color:var(--sy-text) !important;
-            border-color:color-mix(in srgb, var(--primary-color) 28%, transparent) !important;
-        }
-
-        .stSelectbox label, .stTextInput label, .stTextArea label, .stNumberInput label, .stDateInput label, .stMultiSelect label {
-            color:var(--sy-text) !important;
-            font-weight:600 !important;
-        }
-        [data-baseweb="select"] > div,
-        [data-baseweb="tag"] {
-            background:color-mix(in srgb, var(--secondary-background-color) 86%, transparent) !important;
-            border:1px solid #5D6472 !important;
-            color:var(--sy-text) !important;
-        }
-        .stTextInput input,
-        .stTextArea textarea,
-        .stNumberInput input,
-        .stDateInput input,
-        div[data-baseweb="base-input"] > input,
-        div[data-baseweb="base-input"] > textarea {
-            background:color-mix(in srgb, var(--secondary-background-color) 86%, transparent) !important;
-            border:1px solid #5D6472 !important;
-            color:var(--sy-text) !important;
-            border-radius:12px !important;
-        }
-        .stTextInput input:focus,
-        .stTextArea textarea:focus,
-        .stNumberInput input:focus,
-        .stDateInput input:focus,
-        div[data-baseweb="base-input"] > input:focus,
-        div[data-baseweb="base-input"] > textarea:focus,
-        [data-baseweb="select"] > div:focus-within {
-            border-color:#D4C29A !important;
-            box-shadow:0 0 0 1px #D4C29A !important;
-        }
-        .stTextArea textarea {
-            min-height: 90px;
-        }
-        .streamlit-expanderHeader {
-            border:1px solid #5D6472 !important;
-            border-radius:12px !important;
-        }
-
-                .sy-topbar { margin-bottom: 0.8rem; }
-        .sy-hero-simple { display:flex; gap:1rem; align-items:flex-start; }
-        .sy-badge-row { display:flex; flex-wrap:wrap; gap:0.5rem; margin-top:0.7rem; }
-        .sy-badge {
-            padding:0.35rem 0.65rem;
-            border:1px solid var(--sy-border);
-            border-radius:999px;
-            background:color-mix(in srgb, var(--secondary-background-color) 86%, transparent);
-            font-size:0.8rem;
-            color:var(--sy-text);
-        }
-        .sy-subtle-card {
-            border:1px solid var(--sy-border);
-            border-radius:18px;
-            background: linear-gradient(
-                180deg,
-                color-mix(in srgb, var(--secondary-background-color) 86%, transparent),
-                color-mix(in srgb, var(--secondary-background-color) 76%, transparent)
-            );
-            box-shadow: var(--sy-card-shadow);
-            padding:0.95rem 1rem;
-            margin-bottom:0.85rem;
-        }
-        .sy-section-label {
-            font-size:0.78rem;
-            text-transform:uppercase;
-            letter-spacing:0.08em;
-            color:var(--sy-muted);
-            margin-bottom:0.35rem;
-        }
-.stProgress > div > div > div > div {
-            background: linear-gradient(
-                90deg,
-                var(--primary-color),
-                color-mix(in srgb, var(--primary-color) 65%, #00D4FF 35%)
-            );
-        }
+        .stSelectbox label, .stTextInput label, .stTextArea label, .stNumberInput label, .stDateInput label, .stMultiSelect label, .stCheckbox label, .stRadio label {{
+            color:var(--sy-text) !important; font-weight:650 !important;
+        }}
+        [data-baseweb="select"] > div, [data-baseweb="tag"] {{ background:var(--sy-input-bg) !important; border:1px solid #5D6472 !important; color:var(--sy-text) !important; }}
+        .stTextInput input, .stTextArea textarea, .stNumberInput input, .stDateInput input, div[data-baseweb="base-input"] > input, div[data-baseweb="base-input"] > textarea {{
+            background:var(--sy-input-bg) !important; border:1px solid #5D6472 !important; color:var(--sy-text) !important; border-radius:12px !important;
+        }}
+        .stTextInput input:focus, .stTextArea textarea:focus, .stNumberInput input:focus, .stDateInput input:focus, div[data-baseweb="base-input"] > input:focus, div[data-baseweb="base-input"] > textarea:focus, [data-baseweb="select"] > div:focus-within {{
+            border-color:#D4C29A !important; box-shadow:0 0 0 1px #D4C29A !important;
+        }}
+        .stTextArea textarea {{ min-height: 90px; }}
+        .streamlit-expanderHeader {{ border:1px solid #5D6472 !important; border-radius:12px !important; }}
+        .stProgress > div > div > div > div {{ background: linear-gradient(90deg, #D4C29A, #c5b183); }}
         </style>
         """,
         unsafe_allow_html=True,
     )
-
 
 def smooth_progress(progress_bar, status_text, start, end, message, duration=0.8):
     steps = max(1, end - start)
@@ -1794,7 +1650,9 @@ WIZARD_DEFAULTS = {
     "wizard_rear_depth": 6.0,
     "wizard_rear_height": 4.0,
     "wizard_uploaded_files": [],
+    "wizard_scope_items": [],
     "wizard_review_focus": "",
+    "wizard_accuracy_answers": {},
 }
 for k, v in WIZARD_DEFAULTS.items():
     if k not in st.session_state:
@@ -1819,6 +1677,71 @@ def app_logo_data_uri():
         return ""
     return "data:image/png;base64," + base64.b64encode(logo_bytes).decode("utf-8")
 
+def checkbox_grid(label, options, state_key, columns=2, help_text=None):
+    st.markdown(f"**{label}**")
+    if help_text:
+        st.caption(help_text)
+    current = set(st.session_state.get(state_key, []))
+    selected = []
+    cols = st.columns(columns)
+    for i, option in enumerate(options):
+        with cols[i % columns]:
+            checked = st.checkbox(option, value=option in current, key=f"{state_key}_{i}")
+            if checked:
+                selected.append(option)
+    st.session_state[state_key] = selected
+    return selected
+
+
+def single_choice_cards(label, options, state_key, columns=2, help_text=None):
+    st.markdown(f"**{label}**")
+    if help_text:
+        st.caption(help_text)
+    current = st.session_state.get(state_key, options[0] if options else "")
+    cols = st.columns(columns)
+    for i, option in enumerate(options):
+        with cols[i % columns]:
+            if st.checkbox(option, value=(current == option), key=f"{state_key}_{i}"):
+                current = option
+    st.session_state[state_key] = current
+    return current
+
+
+def get_required_accuracy_answers(project_types):
+    group = get_accuracy_question_group(project_types)
+    answers = {"pd_question_family": group}
+    st.markdown("**Planning / PD accuracy questions**")
+    st.caption("These answers are part of the project intake and will be used with the uploaded drawings. Where drawing dimensions differ, the uploaded plans take priority.")
+    if group in {"class_a", "class_b", "class_d"}:
+        answers["site_constraints"] = checkbox_grid(
+            "Site constraints",
+            ["None", "Conservation area / Article 2(3) land", "Article 4 direction", "Listed building"],
+            "wizard_acc_site_constraints",
+            columns=2,
+        )
+    if group == "class_b":
+        answers["front_roof_plane_highway"] = st.radio("Does any part project from the front roof slope facing the highway?", ["Not sure", "No", "Yes"], horizontal=True, key="wizard_acc_b_front")
+        answers["roof_volume_band"] = st.radio("Added roof volume", ["Not sure", "Within normal limit", "Over limit"], horizontal=True, key="wizard_acc_b_volume")
+        answers["above_existing_roof_height"] = st.radio("Does it rise above the highest part of the existing roof?", ["Not sure", "No", "Yes"], horizontal=True, key="wizard_acc_b_highest")
+        answers["eaves_setback_0_2m"] = st.radio("Is the enlargement set back at least 200mm from the original eaves?", ["Not sure", "Yes", "No"], horizontal=True, key="wizard_acc_b_eaves")
+        answers["side_windows_obscure_glazed"] = st.radio("Any side windows obscure glazed and non-opening below 1.7m?", ["Not applicable", "Yes", "No", "Not sure"], horizontal=True, key="wizard_acc_b_windows")
+        answers["materials_similar"] = st.radio("Will external materials be similar in appearance to the existing house?", ["Not sure", "Yes", "No"], horizontal=True, key="wizard_acc_b_materials")
+    elif group == "class_a":
+        answers["forward_of_principal_elevation"] = st.radio("Does any part project beyond the principal elevation or a side elevation facing a highway?", ["Not sure", "No", "Yes"], horizontal=True, key="wizard_acc_a_principal")
+        answers["existing_rear_extensions"] = st.radio("Have there been previous rear extensions added to the original house?", ["Not sure", "No", "Yes"], horizontal=True, key="wizard_acc_a_existing")
+        answers["within_2m_of_boundary"] = st.radio("Is any part within 2m of a boundary?", ["Not sure", "No", "Yes"], horizontal=True, key="wizard_acc_a_boundary")
+        answers["eaves_height_within_2m"] = st.radio("If within 2m of a boundary, are the eaves 3.0m or lower?", ["Not applicable", "Yes", "No", "Not sure"], horizontal=True, key="wizard_acc_a_eaves")
+        answers["side_extension_width"] = st.radio("For a side extension, is it more than half the width of the original house?", ["Not applicable", "No", "Yes", "Not sure"], horizontal=True, key="wizard_acc_a_width")
+        answers["materials_similar"] = st.radio("Will external materials be similar in appearance to the existing house?", ["Not sure", "Yes", "No"], horizontal=True, key="wizard_acc_a_materials")
+    elif group == "class_d":
+        answers["porch_ground_area_band"] = st.radio("Is the porch ground area 3m² or less?", ["Not sure", "Yes", "No"], horizontal=True, key="wizard_acc_d_area")
+        answers["porch_height_band"] = st.radio("Is the porch 3.0m high or lower?", ["Not sure", "Yes", "No"], horizontal=True, key="wizard_acc_d_height")
+        answers["porch_within_2m_highway"] = st.radio("Is any part within 2m of a boundary with a highway?", ["Not sure", "No", "Yes"], horizontal=True, key="wizard_acc_d_highway")
+    else:
+        st.info("No specific PD question set has been triggered for this project type. Add any constraints or review focus below.")
+    return answers
+
+
 def render_left_navigation():
     logo_uri = app_logo_data_uri()
     with st.sidebar:
@@ -1826,9 +1749,9 @@ def render_left_navigation():
             st.markdown(
                 f'''
                 <div style="display:flex;align-items:center;gap:0.7rem;margin:0.6rem 0 1.1rem 0;">
-                    <img src="{logo_uri}" style="width:42px;height:42px;object-fit:contain;border-radius:12px;background:#061225;padding:4px;" />
+                    <img src="{logo_uri}" style="width:72px;height:72px;object-fit:contain;border-radius:16px;background:#061225;padding:6px;" />
                     <div>
-                        <div style="font-weight:800;font-size:1rem;">ArchLens AI</div>
+                        <div style="font-weight:800;font-size:1.1rem;">ArchLens AI</div>
                         <div style="font-size:0.75rem;color:#9FB2D8;">SY Design Studio</div>
                     </div>
                 </div>
@@ -1931,6 +1854,14 @@ def run_archlens_analysis(uploaded_files):
     rear_extension_height_m = float(st.session_state.get("wizard_rear_height", 0) or 0)
     local_authority = detect_local_authority_for_display(project_address, proposal_summary, uploaded_files)
     accuracy_answers = st.session_state.get("wizard_accuracy_answers", {}) or {}
+    scope_items = st.session_state.get("wizard_scope_items", []) or []
+    review_focus = st.session_state.get("wizard_review_focus") or ""
+    drawing_priority_instruction = (
+        "Important instruction: cross-check all user-entered project type, scope items and measurements against the uploaded drawing PDF. "
+        "If the uploaded plans show different dimensions or scope, the uploaded plans take priority. "
+        "Only state measurements and conclusions that are supported by the drawings, policy, guidance or Building Regulations. "
+        "If the user gives a specific review focus, concentrate the report on that issue and avoid unsupported assumptions."
+    )
     config = MODULE_CONFIG[review_module]
 
     if current_plan == "starter" and review_module == "Building Regulations Review":
@@ -1983,8 +1914,10 @@ def run_archlens_analysis(uploaded_files):
             if review_module == "Building Regulations Review":
                 context = (
                     "Project type: " + (", ".join(project_types) or "Not stated") +
+                    "\nSelected scope items: " + (", ".join(scope_items) or "Not stated") +
                     "\nProposal summary: " + (proposal_summary or "Not stated") +
-                    "\nOptional review focus: " + (st.session_state.get("wizard_review_focus") or "Not stated")
+                    "\nSpecific review focus / notes: " + (review_focus or "Not stated") +
+                    "\n" + drawing_priority_instruction
                 )
                 report = pdf_summary.analyze_pdf(
                     temp_pdf_path,
@@ -1996,11 +1929,16 @@ def run_archlens_analysis(uploaded_files):
                 smooth_progress(progress_bar, status_text, 25, 40, "Reading drawings and extracting planning data...", 0.8)
                 proposal_summary_for_ai = proposal_summary
                 if "Ground Floor Rear Extension" in project_types:
-                    depth_txt = f"{rear_extension_depth_m:.1f}m depth from original rear wall" if rear_extension_depth_m else ""
-                    height_txt = f"{rear_extension_height_m:.1f}m overall height" if rear_extension_height_m else ""
+                    depth_txt = f"approx. user-entered {rear_extension_depth_m:.1f}m depth from rear wall" if rear_extension_depth_m else ""
+                    height_txt = f"approx. user-entered {rear_extension_height_m:.1f}m overall height" if rear_extension_height_m else ""
                     extra_bits = ", ".join([x for x in [depth_txt, height_txt] if x])
                     if extra_bits:
-                        proposal_summary_for_ai = (proposal_summary_for_ai.strip() + " | " + extra_bits).strip(" |")
+                        proposal_summary_for_ai = (proposal_summary_for_ai.strip() + " | " + extra_bits + " | Drawing dimensions take priority if different.").strip(" |")
+                if scope_items:
+                    proposal_summary_for_ai = (proposal_summary_for_ai.strip() + " | Selected scope items to cross-check: " + ", ".join(scope_items)).strip(" |")
+                if review_focus:
+                    proposal_summary_for_ai = (proposal_summary_for_ai.strip() + " | Specific review focus / notes: " + review_focus).strip(" |")
+                proposal_summary_for_ai = (proposal_summary_for_ai.strip() + " | " + drawing_priority_instruction).strip(" |")
                 pd_context = build_pd_context(project_types, property_type, rear_extension_depth_m, rear_extension_height_m, accuracy_answers)
                 accuracy_context = build_accuracy_context(accuracy_answers)
                 if accuracy_context:
@@ -2063,6 +2001,9 @@ def run_archlens_analysis(uploaded_files):
             "filename": file.name,
             "date": time.strftime("%Y-%m-%d"),
             "plan": PLAN_LABELS.get(current_plan, "Solo"),
+            "local_authority": local_authority,
+            "pdf_bytes": pdf_file.getvalue(),
+            "word_bytes": word_file.getvalue(),
         })
         smooth_progress(progress_bar, status_text, 95, 100, "Finalising report...", 0.4)
         status_text.text("Analysis complete. 100%")
@@ -2076,7 +2017,7 @@ def run_archlens_analysis(uploaded_files):
                 pass
         gc.collect()
 
-def render_report_download_panel(module_name=None):
+def render_report_download_panel(module_name=None, show_sections=True):
     if not st.session_state.get("sections"):
         st.info("No report generated yet.")
         return
@@ -2096,7 +2037,8 @@ def render_report_download_panel(module_name=None):
             st.download_button("Download Word Report", st.session_state.word_file, file_name=f"{base_filename}_{suffix}_AI_Review_Report.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document", use_container_width=True)
         else:
             st.button("Download Word Report 🔒 Studio", disabled=True, use_container_width=True)
-    render_sections(sections, report, module_name)
+    if show_sections:
+        render_sections(sections, report, module_name)
 
 page = render_left_navigation()
 
@@ -2106,7 +2048,7 @@ st.markdown(
     <div class="sy-topbar">
         <div>
             <div class="sy-topbar-title">Architect AI Workspace</div>
-            <div class="sy-topbar-meta">ArchLens AI • Dashboard, project intake, reports and settings</div>
+            <div class="sy-topbar-meta">AI-powered planning and building regulations intelligence for UK projects</div>
         </div>
         <div class="sy-topbar-meta">Plan: {PLAN_LABELS.get(current_plan, "Solo")}{(" | User: " + current_user_name) if current_user_name else ""}</div>
     </div>
@@ -2132,7 +2074,7 @@ if page == "Dashboard":
         st.info("No projects yet. Go to Projects to start a new intake.")
 
 elif page == "Projects":
-    st.markdown('<div class="sy-hero"><div class="sy-hero-copy"><h1>Projects</h1><div class="sy-muted">Create a project in ordered steps, then generate the Planning or Building Regulations report.</div></div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="sy-hero"><div class="sy-hero-copy"><h1>Projects</h1><div class="sy-muted">Create a structured project intake, upload drawings, and generate a professional AI review report.</div></div></div>', unsafe_allow_html=True)
     step = int(st.session_state.get("project_step", 1))
     steps = ["Module", "Details", "Type", "Scope", "Specifics", "Upload", "Report"]
     st.progress(step / len(steps))
@@ -2154,42 +2096,41 @@ elif page == "Projects":
             st.session_state["wizard_proposal_summary"] = st.text_area("Proposal description", value=st.session_state.get("wizard_proposal_summary", ""), height=120, placeholder="Briefly describe the proposal.")
             wizard_buttons()
         elif step == 3:
-            step_header(3, "Project type", "Choose the project type and property type so the correct planning/building rules can be assessed.")
-            st.session_state["wizard_project_types"] = st.multiselect("Project Type", PROJECT_TYPE_OPTIONS, default=st.session_state.get("wizard_project_types", []))
+            step_header(3, "Project type", "Select the relevant project and property type using clear check boxes.")
+            checkbox_grid("Project Type", PROJECT_TYPE_OPTIONS, "wizard_project_types", columns=2)
             if st.session_state.get("wizard_review_module") == "Planning Review":
-                st.session_state["wizard_property_type"] = st.selectbox("Property Type", PROPERTY_TYPE_OPTIONS, index=PROPERTY_TYPE_OPTIONS.index(st.session_state.get("wizard_property_type", "Not stated")) if st.session_state.get("wizard_property_type", "Not stated") in PROPERTY_TYPE_OPTIONS else 0)
+                single_choice_cards("Property Type", PROPERTY_TYPE_OPTIONS, "wizard_property_type", columns=2)
             else:
                 st.session_state["wizard_property_type"] = "Not stated"
-                st.info("Property type is mainly used for Planning Review. Building Regulations will focus on technical compliance.")
+                st.info("Property type is mainly used for Planning Review. Building Regulations will focus on technical compliance and uploaded drawings.")
             wizard_buttons()
         elif step == 4:
-            step_header(4, "Project scope", "Select every element included in the works. This helps the AI choose the correct UK rules to evaluate.")
-            scope_options = [
-                "New stairs", "New bedrooms", "New bathroom / WC", "New kitchen", "Drainage changes",
-                "Structural openings", "New steel beams", "Basement excavation", "Roof extension / dormer",
-                "New external doors / windows", "Electrical work", "New insulation", "New heating / boiler / ventilation",
-                "Fire safety upgrades", "Sound insulation", "New foundations", "Party wall interface",
-            ]
-            st.session_state["wizard_scope_items"] = st.multiselect("Scope items", scope_options, default=st.session_state.get("wizard_scope_items", []))
+            step_header(4, "Project scope", "Tick the works included. The AI will cross-check these selections against the uploaded plans and only rely on confirmed drawing information where there is a conflict.")
+            checkbox_grid("Scope items", SCOPE_ITEM_OPTIONS, "wizard_scope_items", columns=2)
             if st.session_state.get("wizard_scope_items"):
-                extra = " | Scope: " + ", ".join(st.session_state["wizard_scope_items"])
-                if extra not in st.session_state.get("wizard_proposal_summary", ""):
-                    st.caption("Scope will be passed into the AI context.")
+                st.caption("Selected scope will be passed into the AI context and checked against the uploaded drawings.")
             wizard_buttons()
         elif step == 5:
-            step_header(5, "Project specifics", "Quick follow-up questions based on the selected project type.")
+            step_header(5, "Project specifics", "Enter the key follow-up information. User-entered measurements are reference only; if the uploaded plans show different dimensions, the plans take priority in the report.")
             project_types = st.session_state.get("wizard_project_types", [])
             if st.session_state.get("wizard_review_module") == "Planning Review" and "Ground Floor Rear Extension" in project_types:
                 c1, c2 = st.columns(2)
                 with c1:
-                    st.session_state["wizard_rear_depth"] = st.number_input("Depth from rear wall (metres)", min_value=0.0, max_value=12.0, value=float(st.session_state.get("wizard_rear_depth", 6.0)), step=0.1)
+                    st.session_state["wizard_rear_depth"] = st.number_input("Approx. depth from rear wall (metres)", min_value=0.0, max_value=12.0, value=float(st.session_state.get("wizard_rear_depth", 6.0)), step=0.1)
                 with c2:
-                    st.session_state["wizard_rear_height"] = st.number_input("Maximum height (metres)", min_value=0.0, max_value=6.0, value=float(st.session_state.get("wizard_rear_height", 4.0)), step=0.1)
-            client_tmp, date_tmp, accuracy_answers = render_improve_accuracy_section(project_types)
-            st.session_state["wizard_accuracy_answers"] = accuracy_answers
-            if client_tmp:
-                st.session_state["wizard_client_name"] = client_tmp
-            st.session_state["wizard_review_focus"] = st.text_area("Optional review focus for the AI", value=st.session_state.get("wizard_review_focus", ""), height=90, placeholder="e.g. Focus on Part M accessibility, Part K stair geometry, PD Class A limits, or officer risk points.")
+                    st.session_state["wizard_rear_height"] = st.number_input("Approx. maximum height (metres)", min_value=0.0, max_value=6.0, value=float(st.session_state.get("wizard_rear_height", 4.0)), step=0.1)
+                st.caption("These dimensions help the initial route check. The uploaded plan measurements take priority if there is any difference.")
+            if st.session_state.get("wizard_review_module") == "Planning Review":
+                st.session_state["wizard_accuracy_answers"] = get_required_accuracy_answers(project_types)
+            else:
+                st.session_state["wizard_accuracy_answers"] = {}
+                st.info("Building Regulations mode will use the uploaded plans, specification notes and selected scope to focus the compliance review.")
+            st.session_state["wizard_review_focus"] = st.text_area(
+                "Specific review focus / planning notes",
+                value=st.session_state.get("wizard_review_focus", ""),
+                height=115,
+                placeholder="Example: Focus on PD Class A limits, prior approval risk, Part K stair geometry, Part M accessibility, fire escape strategy, or any specific issue the report should concentrate on."
+            )
             wizard_buttons()
         elif step == 6:
             step_header(6, "Upload files", "Upload drawings and supporting information. PDF drawing packs work best for the live review.")
@@ -2218,20 +2159,42 @@ elif page == "Projects":
         render_intake_panel()
 
 elif page == "Reports":
-    st.markdown('<div class="sy-hero"><div class="sy-hero-copy"><h1>Reports</h1><div class="sy-muted">View the latest report and saved project history.</div></div></div>', unsafe_allow_html=True)
-    render_report_download_panel(st.session_state.get("active_module", "Planning Review"))
-    st.markdown("### Saved Projects History")
+    st.markdown('<div class="sy-hero"><div class="sy-hero-copy"><h1>Reports</h1><div class="sy-muted">Your generated report library. Download previous Planning and Building Regulations reports again without showing the full report output.</div></div></div>', unsafe_allow_html=True)
     saved_projects = st.session_state.get("saved_projects", [])
     if saved_projects:
         for item in saved_projects:
-            st.write(item.get("project_address", "Not provided"))
-            st.caption(f"Report ID: {item.get('report_id', '')} | Module: {item.get('module', '')} | File: {item.get('filename', '')} | Date: {item.get('date', '')}")
-            st.markdown("---")
+            st.markdown('<div class="sy-report-card">', unsafe_allow_html=True)
+            c1, c2, c3 = st.columns([1.4, 0.9, 0.9])
+            with c1:
+                st.markdown(f"**{item.get('project_address', 'Not provided')}**")
+                st.caption(f"Report ID: {item.get('report_id', '')} • {item.get('filename', '')}")
+            with c2:
+                st.write(item.get("module", ""))
+                st.caption(f"Council: {item.get('local_authority', 'Not detected')}")
+            with c3:
+                st.write(item.get("date", ""))
+                st.caption(item.get("plan", ""))
+            d1, d2 = st.columns(2)
+            pdf_bytes = item.get("pdf_bytes")
+            word_bytes = item.get("word_bytes")
+            with d1:
+                if pdf_bytes:
+                    st.download_button("Download PDF", pdf_bytes, file_name=f"{item.get('report_id', 'report')}_ArchLens_Report.pdf", mime="application/pdf", use_container_width=True, key=f"pdf_{item.get('report_id','')}")
+                else:
+                    st.caption("PDF download available for reports generated after this update.")
+            with d2:
+                if current_plan == "pro" and word_bytes:
+                    st.download_button("Download Word", word_bytes, file_name=f"{item.get('report_id', 'report')}_ArchLens_Report.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document", use_container_width=True, key=f"docx_{item.get('report_id','')}")
+                elif current_plan != "pro":
+                    st.button("Word Report 🔒 Studio", disabled=True, use_container_width=True, key=f"docx_locked_{item.get('report_id','')}")
+                else:
+                    st.caption("Word download available for reports generated after this update.")
+            st.markdown('</div>', unsafe_allow_html=True)
     else:
-        st.info("No saved projects yet.")
+        st.info("No reports generated yet. Go to Projects and run your first review.")
 
 elif page == "Settings":
-    st.markdown('<div class="sy-hero"><div class="sy-hero-copy"><h1>Settings</h1><div class="sy-muted">Branding, account and app preferences.</div></div></div>', unsafe_allow_html=True)
+    st.markdown('<div class="sy-hero"><div class="sy-hero-copy"><h1>Settings</h1><div class="sy-muted">Control your account, branding and app appearance.</div></div></div>', unsafe_allow_html=True)
     c1, c2 = st.columns(2)
     with c1:
         st.markdown("### Account")
@@ -2239,11 +2202,17 @@ elif page == "Settings":
         st.write(f"User: **{current_user_name or 'Not shown'}**")
         if current_plan == "starter":
             st.write(f"Monthly reviews used: **{st.session_state.get('starter_review_count', 0)} / {STARTER_MONTHLY_REVIEW_LIMIT}**")
+        st.markdown("### Appearance")
+        selected_theme = st.radio("App theme", ["Dark", "Light"], index=["Dark", "Light"].index(st.session_state.get("app_theme", "Dark")), horizontal=True)
+        if selected_theme != st.session_state.get("app_theme", "Dark"):
+            st.session_state["app_theme"] = selected_theme
+            st.rerun()
+        st.caption("Light mode uses dark text on light surfaces. Dark mode uses light text on dark surfaces for readability.")
     with c2:
         st.markdown("### Branding")
         logo_bytes = get_brand_logo_bytes_for_ui()
         if logo_bytes:
-            st.image(logo_bytes, width=180)
+            st.image(logo_bytes, width=220)
             st.success("SY Design Studio logo is loaded for branded PDF exports.")
         else:
             st.warning("Logo file not found. Add assets/sy_design_studio_logo.png to your project.")

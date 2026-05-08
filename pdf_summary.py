@@ -261,16 +261,47 @@ def infer_fire_statement_status(text: str, page_summary: str) -> str:
 
 
 
+def clean_user_context_text(value: str) -> str:
+    """Remove app/UI helper text from user supplied context before it appears in reports."""
+    text = (value or "").strip()
+    if not text:
+        return ""
+    text = text.replace("_", " ")
+    text = re.sub(r"\|\s*Improve Accuracy\s*:\s*.*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"Improve Accuracy\s*:\s*.*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"Optional review focus\s*:\s*Not stated", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s+,", ",", text)
+    text = re.sub(r",\s*,+", ",", text)
+    text = re.sub(r"\s{2,}", " ", text).strip(" ,;|.")
+    return text
+
+
+def sentence_case_project_text(text: str) -> str:
+    text = clean_user_context_text(text)
+    if not text:
+        return text
+    replacements = {
+        "GROUND FLOOR": "ground floor",
+        "REAR EXTENSION": "rear extension",
+        "SIDE EXTENSION": "side extension",
+        "LOFT EXTENSION": "loft extension",
+        "PRIOR APPROVAL": "prior approval",
+    }
+    for a, b in replacements.items():
+        text = text.replace(a, b)
+    return text[:1].upper() + text[1:]
+
+
 def build_project_summary_from_inputs(project_types_text: str, proposal_summary_text: str, property_type_text: str) -> str:
     base = proposal_summary_text if proposal_summary_text and proposal_summary_text.lower() != "not stated" else project_types_text
-    text = (base or "").strip()
+    text = sentence_case_project_text(base)
     if not text or text.lower() == "not stated":
-        return "Residential development works to the host property as shown on the submitted drawings."
+        return "Residential works to the property as shown on the submitted drawings."
     text = re.sub(r"\|", ", ", text)
     text = re.sub(r"\s{2,}", " ", text).strip(" ,")
     lowered = text.lower()
     if lowered.startswith("proposed "):
-        sentence = text[0].upper() + text[1:]
+        sentence = text
     else:
         sentence = "Proposed " + text[0].lower() + text[1:]
     if not sentence.endswith("."):
@@ -428,8 +459,8 @@ def infer_route_from_pd_context(
         if any(term in project_lower for term in ["first floor rear extension", "first floor side extension", "ground floor side extension", "ground floor infill extension"]):
             return "FULL PLANNING", "The selected project type includes side, infill, or first-floor enlargement works that commonly fall outside the simplest Class A routes and normally need fuller planning assessment.", "HIGH"
 
-        detached = "detached" in property_lower
-        terrace_or_other = any(term in property_lower for term in ["terraced", "terrace", "semi-detached", "semi detached", "end of terrace"]) or not detached
+        detached = property_lower in {"detached", "detached house"} or property_lower.startswith("detached ")
+        terrace_or_other = any(term in property_lower for term in ["terraced", "terrace", "semi-detached", "semi detached", "end of terrace", "semi"]) or not detached
 
         if "ground floor rear extension" in project_lower and depth > 0:
             if detached:
@@ -816,6 +847,11 @@ Check for coordination issues including:
 - contradictory references between GA, Fire Plans, details, schedules, and specification sheets
 
 GENERAL RULES
+- Keep the report SIMPLE, SHORT and decision-focused.
+- Remove unnecessary background commentary.
+- Use short bullets and only mention items relevant to the uploaded project.
+- User-entered measurements are supporting context only. If drawings show different dimensions, drawing dimensions take priority.
+- If the user asks for a specific review focus, focus the report on that issue and keep unrelated commentary minimal.
 - Write in plain professional English.
 - Keep sentences short and easy to understand.
 - Use bullet points under every heading.
@@ -866,6 +902,7 @@ Report to repair:
         repaired = _call_responses_api("gpt-5", repair_prompt)
         output_text = repaired.output_text
 
+    output_text = simplify_report_text(output_text, max_bullets_per_section=6)
     gc.collect()
     return output_text
 
@@ -965,6 +1002,14 @@ Structured PD questionnaire answers:
 {format_pd_context_for_prompt(pd_context)}
 
 Planning reasoning requirements:
+- Keep the report SIMPLE, SHORT and decision-focused. Do not include background commentary that does not help the reader decide what to do next.
+- Use short bullets. Maximum 3 bullets in overview/route sections and maximum 5 bullets in assessment/risk/action sections unless essential.
+- Do not repeat the same caveat in multiple sections.
+- Do not include "In simple terms" sections.
+- Do not include user questionnaire labels such as "Improve Accuracy" in the final report.
+- User-entered measurements are supporting context only. If the drawings show different dimensions, drawing dimensions take priority. If dimensions cannot be verified from the drawings, say "Not clearly dimensioned on the drawings".
+- If the user asks for a specific review focus, focus the report on that issue and keep unrelated commentary minimal.
+- Only give factual conclusions supported by the uploaded drawings, structured user inputs, or relevant planning policy/PD rules.
 - First identify the proposal accurately from the drawing pack and text. Recognise whether the scheme includes a side gable, rear dormer, rooflights, single-storey extension, side extension, wraparound form or mixed works.
 - If the drawings indicate a roof extension to side to form gable, rear dormer and front rooflights, describe that exact combination rather than only referring to a loft extension.
 - Include officer-style reasoning using concise delegated report language.
@@ -1012,7 +1057,7 @@ PROJECT CLASSIFICATION
 - Do not include any system-style commentary such as "Comparison with client-stated description" or "Aligned".
 
 SITE AND PROPOSAL OVERVIEW
-- Summarise the apparent proposal and affected parts of the property in 2 to 4 clean bullets.
+- Summarise the apparent proposal and affected parts of the property in 2 to 3 clean bullets.
 - If a Fire Statement is not evident in the pack, do not say one has been submitted.
 - Only mention a fire statement where it is genuinely relevant.
 
@@ -1024,7 +1069,7 @@ TOP SUMMARY
   - Application Type: {application_type_value}
   - Planning Route Confidence Score: {route_confidence_score}%
   - {authority_value}
-- Present 3 to 6 concise "Key Planning Considerations" bullets only.
+- Present 2 to 4 concise "Key Planning Considerations" bullets only.
 - Do not add informal caveat wording here.
 
 LOCAL AUTHORITY CONTEXT
@@ -1043,15 +1088,11 @@ PD / PRIOR APPROVAL / PLANNING ROUTE
 
 PLANNING ASSESSMENT
 - Write this as a professional planning assessment, not as an AI or third-party reasoning section.
-- Use concise delegated-report style bullets or short paragraphs covering:
-  - Site / proposal
+- Use concise delegated-report style bullets only. Cover only matters that are relevant to this project:
   - Design, scale and massing
-  - Street precedent / surrounding roofscape
-  - Neighbouring amenity
-  - Privacy / overlooking
+  - Neighbour amenity
   - Character and appearance
-  - Fire safety where relevant
-  - Overall planning balance
+  - Route/compliance balance
 - Where street precedent appears evident, say so directly in a professional way, for example: "Several similar roof extensions appear to exist within the surrounding terrace and, on balance, the proposal is likely to read as part of the established roofscape pattern."
 - Do not say a Fire Statement has been submitted unless it is actually evident in the pack.
 
@@ -1125,10 +1166,58 @@ Detected pages:
         output_text = re.sub(top_summary_pattern, top_summary_replacement, output_text, count=1)
         output_text = re.sub(r"^.*Overall Planning Risk Rating:.*$\n?", "", output_text, flags=re.MULTILINE)
         output_text = re.sub(r"^.*Planning Approval Probability:.*$\n?", "", output_text, flags=re.MULTILINE)
+    output_text = simplify_report_text(output_text, max_bullets_per_section=5)
     gc.collect()
     return output_text
 
 
+
+
+def simplify_report_text(report_text: str, max_bullets_per_section: int = 6) -> str:
+    """Keep generated reports concise, remove filler, and preserve required headings."""
+    if not report_text:
+        return report_text
+    text = report_text
+    remove_phrases = [
+        "This note is an initial feasibility opinion only and does not guarantee planning approval.",
+        "This is an initial feasibility opinion only based on the drawing pack and client inputs; it is not a guarantee of planning approval.",
+        "IN SIMPLE TERMS",
+        "In simple terms",
+    ]
+    for phrase in remove_phrases:
+        text = text.replace(phrase, "")
+    text = re.sub(r"Proposed gROUND", "Proposed ground", text)
+    text = re.sub(r"gROUND", "ground", text)
+    text = re.sub(r"^Not provided$\n?", "", text, flags=re.MULTILINE)
+    text = re.sub(r"Improve Accuracy\s*:\s*[^\n.]+[.]?", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s+,", ",", text)
+    text = re.sub(r",\s*\.", ".", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+
+    headings = PLANNING_REQUIRED_HEADINGS + REQUIRED_HEADINGS
+    heading_pattern = r"^(" + "|".join(re.escape(h) for h in sorted(set(headings), key=len, reverse=True)) + r")$"
+    lines = text.splitlines()
+    out = []
+    current_heading = None
+    item_count = 0
+    trim_sections = {"PLANNING ASSESSMENT", "RECOMMENDED ACTIONS", "MISSING INFORMATION", "KEY RISKS", "DRAWING-PACK INCONSISTENCIES"}
+    for line in lines:
+        stripped = line.strip()
+        if re.match(heading_pattern, stripped, flags=re.IGNORECASE):
+            current_heading = stripped.upper()
+            item_count = 0
+            out.append(stripped)
+            continue
+        if current_heading in trim_sections:
+            is_item = bool(stripped) and (stripped.startswith("-") or stripped.startswith("•") or ":" in stripped or len(stripped) > 18)
+            if is_item:
+                item_count += 1
+            if item_count > max_bullets_per_section:
+                continue
+        out.append(line)
+    text = "\n".join(out)
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+    return text
 
 
 def infer_planning_statement_mode(report_text: str, sections: Optional[Dict[str, str]] = None) -> str:
