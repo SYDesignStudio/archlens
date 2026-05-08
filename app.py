@@ -1092,31 +1092,31 @@ def inject_custom_css():
         .stProgress > div > div > div > div {{ background: linear-gradient(90deg, #D4C29A, #c5b183); }}
 
         /* ArchLens Hub premium shell */
-        .stApp { background: radial-gradient(circle at top left, rgba(212,194,154,0.10), transparent 28%), var(--sy-bg) !important; }
-        .sy-brand-block { display:flex; align-items:center; gap:0.85rem; margin:1rem 0 1.1rem 0; }
-        .sy-brand-logo { width:62px; height:62px; object-fit:contain; border-radius:14px; }
-        .sy-brand-title { font-weight:850; font-size:1.08rem; letter-spacing:-0.02em; }
-        .sy-brand-subtitle { font-size:0.82rem; color:var(--sy-muted); margin-top:0.18rem; }
-        .sy-sidebar-account-card { border:1px solid var(--sy-border); border-radius:14px; padding:0.85rem; margin:0.65rem 0 1rem 0; background:rgba(255,255,255,0.025); }
-        .sy-sidebar-account-card div { display:flex; justify-content:space-between; gap:0.55rem; font-size:0.83rem; padding:0.22rem 0; }
-        .sy-sidebar-account-card span { color:var(--sy-muted); }
-        .sy-sidebar-account-card strong { overflow-wrap:anywhere; text-align:right; }
-        .sy-sidebar-separator { height:1px; background:var(--sy-border); margin:1rem 0; }
-        .sy-help-card { border:1px solid var(--sy-border); border-radius:14px; padding:0.85rem; color:var(--sy-muted); margin-top:13rem; font-size:0.82rem; }
-        .sy-hub-header { display:flex; justify-content:space-between; align-items:center; gap:1rem; margin:0.25rem 0 1.1rem 0; }
-        .sy-hub-title { color:var(--sy-accent); font-weight:900; letter-spacing:0.24em; font-size:0.86rem; }
-        .sy-hub-subtitle { color:var(--sy-muted); font-size:0.86rem; margin-top:0.25rem; }
-        .sy-hub-meta { color:var(--sy-text); font-size:0.84rem; display:flex; align-items:center; gap:0.7rem; flex-wrap:wrap; }
-        .sy-avatar { display:inline-flex; align-items:center; justify-content:center; width:34px; height:34px; border-radius:999px; background:rgba(212,194,154,0.16); color:var(--sy-accent); font-weight:800; }
-        .sy-step-row { display:grid; grid-template-columns: repeat(auto-fit, minmax(135px, 1fr)); gap:0.75rem; margin:0.45rem 0 0.7rem 0; border-top:1px solid var(--sy-border); border-bottom:1px solid var(--sy-border); padding:0.85rem 0; }
-        .sy-step-item { display:flex; flex-direction:column; gap:0.12rem; color:var(--sy-muted); position:relative; padding-left:2.2rem; min-height:38px; }
-        .sy-step-item:before { content:""; position:absolute; left:0; top:0.15rem; width:24px; height:24px; border-radius:999px; border:1px solid var(--sy-border); background:rgba(255,255,255,0.03); }
-        .sy-step-item.active:before { background:rgba(212,194,154,0.16); border-color:var(--sy-accent); box-shadow:0 0 0 4px rgba(212,194,154,0.06); }
-        .sy-step-item span { color:var(--sy-text); font-weight:750; font-size:0.88rem; }
-        .sy-step-item.active span { color:var(--sy-accent); }
-        .sy-step-item small { color:var(--sy-muted); font-size:0.72rem; }
-        .sy-download-row { border-bottom:1px solid var(--sy-border); padding:0.52rem 0; font-size:0.78rem; }
-        .sy-download-row span { overflow-wrap:anywhere; }
+        .stApp {{ background: radial-gradient(circle at top left, rgba(212,194,154,0.10), transparent 28%), var(--sy-bg) !important; }}
+        .sy-brand-block {{ display:flex; align-items:center; gap:0.85rem; margin:1rem 0 1.1rem 0; }}
+        .sy-brand-logo {{ width:62px; height:62px; object-fit:contain; border-radius:14px; }}
+        .sy-brand-title {{ font-weight:850; font-size:1.08rem; letter-spacing:-0.02em; }}
+        .sy-brand-subtitle {{ font-size:0.82rem; color:var(--sy-muted); margin-top:0.18rem; }}
+        .sy-sidebar-account-card {{ border:1px solid var(--sy-border); border-radius:14px; padding:0.85rem; margin:0.65rem 0 1rem 0; background:rgba(255,255,255,0.025); }}
+        .sy-sidebar-account-card div {{ display:flex; justify-content:space-between; gap:0.55rem; font-size:0.83rem; padding:0.22rem 0; }}
+        .sy-sidebar-account-card span {{ color:var(--sy-muted); }}
+        .sy-sidebar-account-card strong {{ overflow-wrap:anywhere; text-align:right; }}
+        .sy-sidebar-separator {{ height:1px; background:var(--sy-border); margin:1rem 0; }}
+        .sy-help-card {{ border:1px solid var(--sy-border); border-radius:14px; padding:0.85rem; color:var(--sy-muted); margin-top:13rem; font-size:0.82rem; }}
+        .sy-hub-header {{ display:flex; justify-content:space-between; align-items:center; gap:1rem; margin:0.25rem 0 1.1rem 0; }}
+        .sy-hub-title {{ color:var(--sy-accent); font-weight:900; letter-spacing:0.24em; font-size:0.86rem; }}
+        .sy-hub-subtitle {{ color:var(--sy-muted); font-size:0.86rem; margin-top:0.25rem; }}
+        .sy-hub-meta {{ color:var(--sy-text); font-size:0.84rem; display:flex; align-items:center; gap:0.7rem; flex-wrap:wrap; }}
+        .sy-avatar {{ display:inline-flex; align-items:center; justify-content:center; width:34px; height:34px; border-radius:999px; background:rgba(212,194,154,0.16); color:var(--sy-accent); font-weight:800; }}
+        .sy-step-row {{ display:grid; grid-template-columns: repeat(auto-fit, minmax(135px, 1fr)); gap:0.75rem; margin:0.45rem 0 0.7rem 0; border-top:1px solid var(--sy-border); border-bottom:1px solid var(--sy-border); padding:0.85rem 0; }}
+        .sy-step-item {{ display:flex; flex-direction:column; gap:0.12rem; color:var(--sy-muted); position:relative; padding-left:2.2rem; min-height:38px; }}
+        .sy-step-item:before {{ content:""; position:absolute; left:0; top:0.15rem; width:24px; height:24px; border-radius:999px; border:1px solid var(--sy-border); background:rgba(255,255,255,0.03); }}
+        .sy-step-item.active:before {{ background:rgba(212,194,154,0.16); border-color:var(--sy-accent); box-shadow:0 0 0 4px rgba(212,194,154,0.06); }}
+        .sy-step-item span {{ color:var(--sy-text); font-weight:750; font-size:0.88rem; }}
+        .sy-step-item.active span {{ color:var(--sy-accent); }}
+        .sy-step-item small {{ color:var(--sy-muted); font-size:0.72rem; }}
+        .sy-download-row {{ border-bottom:1px solid var(--sy-border); padding:0.52rem 0; font-size:0.78rem; }}
+        .sy-download-row span {{ overflow-wrap:anywhere; }}
 
         </style>
         """,
