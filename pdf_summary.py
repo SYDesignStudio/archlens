@@ -10,6 +10,8 @@ import pdfplumber
 from dotenv import load_dotenv
 from openai import OpenAI
 
+import planning_rules
+
 load_dotenv()
 
 LIVE_ANALYSIS_MAX_PAGES = 12
@@ -36,13 +38,11 @@ PLANNING_REQUIRED_HEADINGS = [
     "TOP SUMMARY",
     "LOCAL AUTHORITY CONTEXT",
     "PD / PRIOR APPROVAL / PLANNING ROUTE",
-    "COMPLIANCE SNAPSHOT",
     "PLANNING ASSESSMENT",
     "DRAWING-PACK INCONSISTENCIES",
     "KEY RISKS",
     "MISSING INFORMATION",
     "RECOMMENDED ACTIONS",
-    "PROFESSIONAL CONCLUSION",
     "SUBMISSION READINESS",
 ]
 
@@ -263,16 +263,60 @@ def infer_fire_statement_status(text: str, page_summary: str) -> str:
 
 
 
+def clean_user_context_text(value: str) -> str:
+    """Remove app/UI helper text from user supplied context before it appears in reports."""
+    text = (value or "").strip()
+    if not text:
+        return ""
+    text = text.replace("_", " ")
+    text = re.sub(r"\|\s*Improve Accuracy\s*:\s*.*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"Improve Accuracy\s*:\s*.*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"Optional review focus\s*:\s*Not stated", "", text, flags=re.IGNORECASE)
+    # Remove internal app/control text that must never appear in client-facing reports.
+    cleanup_patterns = [
+        r"Selected scope items to cross-check\s*:[^|.]*[|.]?",
+        r"Scope noted\s*:[^|.]*[|.]?",
+        r"Important instruction\s*:[^|]*",
+        r"Rule intake answers\s*:[^|]*",
+        r"PD answers\s*:[^|]*",
+        r"Specific review focus / notes\s*:\s*Not stated",
+        r"Drawing dimensions take priority if different\.?",
+    ]
+    for pattern in cleanup_patterns:
+        text = re.sub(pattern, "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s+,", ",", text)
+    text = re.sub(r",\s*,+", ",", text)
+    text = re.sub(r"\s*\|\s*", ", ", text)
+    text = re.sub(r"\s{2,}", " ", text).strip(" ,;|.")
+    return text
+
+
+def sentence_case_project_text(text: str) -> str:
+    text = clean_user_context_text(text)
+    if not text:
+        return text
+    replacements = {
+        "GROUND FLOOR": "ground floor",
+        "REAR EXTENSION": "rear extension",
+        "SIDE EXTENSION": "side extension",
+        "LOFT EXTENSION": "loft extension",
+        "PRIOR APPROVAL": "prior approval",
+    }
+    for a, b in replacements.items():
+        text = text.replace(a, b)
+    return text[:1].upper() + text[1:]
+
+
 def build_project_summary_from_inputs(project_types_text: str, proposal_summary_text: str, property_type_text: str) -> str:
     base = proposal_summary_text if proposal_summary_text and proposal_summary_text.lower() != "not stated" else project_types_text
-    text = (base or "").strip()
+    text = sentence_case_project_text(base)
     if not text or text.lower() == "not stated":
-        return "Residential development works to the host property as shown on the submitted drawings."
+        return "Residential works to the property as shown on the submitted drawings."
     text = re.sub(r"\|", ", ", text)
     text = re.sub(r"\s{2,}", " ", text).strip(" ,")
     lowered = text.lower()
     if lowered.startswith("proposed "):
-        sentence = text[0].upper() + text[1:]
+        sentence = text
     else:
         sentence = "Proposed " + text[0].lower() + text[1:]
     if not sentence.endswith("."):
@@ -284,12 +328,13 @@ def infer_application_type(project_types_text: str, proposal_summary_text: str, 
     combined = f"{project_types_text} {proposal_summary_text} {property_type_text}".lower()
     if property_type_text.lower() in {"flat", "maisonette"}:
         return "FULL PLANNING"
+    if any(term in combined for term in ["loft", "dormer", "rooflight", "roof light", "gable"]):
+        return "PD / LDC"
     if "ground floor rear extension" in combined and not any(term in combined for term in ["side extension", "wraparound", "first floor", "loft", "dormer", "gable"]):
         return "PRIOR APPROVAL"
-    if any(term in combined for term in ["loft", "dormer", "gable", "first floor", "conversion", "side extension", "wraparound", "rooflight", "roof light"]):
+    if any(term in combined for term in ["first floor", "conversion", "side extension", "wraparound"]):
         return "FULL PLANNING"
     return "FULL PLANNING"
-
 
 def infer_submission_readiness_from_context(
     application_type: str,
@@ -324,18 +369,32 @@ def infer_submission_readiness_from_context(
 
 def detect_proposal_features(project_types_text: str, proposal_summary_text: str, text: str, page_summary: str) -> Dict[str, bool]:
     combined = f"{project_types_text}\n{proposal_summary_text}\n{text}\n{page_summary}".lower()
+    has_loft = any(term in combined for term in ["loft", "dormer", "rooflight", "roof light", "roof enlargement"])
+    has_extension = any(term in combined for term in ["ground floor rear extension", "single-storey rear extension", "single storey rear extension", "side extension", "wraparound", "wrap around", "first floor extension"])
+    is_loft_only = has_loft and not has_extension
+    if is_loft_only:
+        return {
+            "gable": any(term in combined for term in ["gable", "hip to gable", "side gable"]),
+            "rear_dormer": any(term in combined for term in ["rear dormer", "dormer", "rear roof enlargement"]),
+            "front_rooflights": any(term in combined for term in ["front rooflight", "front rooflights", "rooflight", "rooflights"]),
+            "single_storey_rear_extension": False,
+            "first_floor_extension": False,
+            "side_extension": False,
+            "wraparound": False,
+            "loft_extension": True,
+            "flat_or_maisonette": any(term in combined for term in ["flat", "maisonette"]),
+        }
     return {
         "gable": any(term in combined for term in ["gable", "hip to gable", "side gable"]),
         "rear_dormer": any(term in combined for term in ["rear dormer", "dormer", "rear roof enlargement"]),
         "front_rooflights": any(term in combined for term in ["front rooflight", "front rooflights", "rooflight", "rooflights"]),
         "single_storey_rear_extension": "ground floor rear extension" in combined or "single-storey rear extension" in combined or "single storey rear extension" in combined,
-        "first_floor_extension": "first floor" in combined,
+        "first_floor_extension": "first floor extension" in combined,
         "side_extension": "side extension" in combined,
         "wraparound": "wraparound" in combined or "wrap around" in combined,
-        "loft_extension": "loft extension" in combined or "loft conversion" in combined or "rear dormer" in combined or "dormer" in combined,
+        "loft_extension": has_loft,
         "flat_or_maisonette": any(term in combined for term in ["flat", "maisonette"]),
     }
-
 
 def build_detected_proposal_label(features: Dict[str, bool], fallback_project_types: str) -> str:
     labels = []
@@ -430,8 +489,8 @@ def infer_route_from_pd_context(
         if any(term in project_lower for term in ["first floor rear extension", "first floor side extension", "ground floor side extension", "ground floor infill extension"]):
             return "FULL PLANNING", "The selected project type includes side, infill, or first-floor enlargement works that commonly fall outside the simplest Class A routes and normally need fuller planning assessment.", "HIGH"
 
-        detached = "detached" in property_lower
-        terrace_or_other = any(term in property_lower for term in ["terraced", "terrace", "semi-detached", "semi detached", "end of terrace"]) or not detached
+        detached = property_lower in {"detached", "detached house"} or property_lower.startswith("detached ")
+        terrace_or_other = any(term in property_lower for term in ["terraced", "terrace", "semi-detached", "semi detached", "end of terrace", "semi"]) or not detached
 
         if "ground floor rear extension" in project_lower and depth > 0:
             if detached:
@@ -461,19 +520,54 @@ def infer_route_from_pd_context(
 
     if pd_family == "class_b" or any(term in project_lower for term in ["loft", "dormer"]):
         roof_volume = _ctx_value(pd_context, "roof_volume_band").lower()
+
         if has_article_23:
-            return "FULL PLANNING", "Class B roof enlargements are not normally permitted development on article 2(3) land such as conservation areas.", "HIGH"
+            return (
+                "FULL PLANNING",
+                "The property appears to be within a constrained designation area where Class B roof enlargements may not apply.",
+                "HIGH",
+            )
+
         if _ctx_yes(pd_context, "front_roof_plane_highway"):
-            return "FULL PLANNING", "An enlargement on the roof slope forming the principal elevation and fronting a highway would normally fall outside Class B.", "HIGH"
+            return (
+                "FULL PLANNING",
+                "Front-facing roof enlargements are unlikely to comply with Class B permitted development rules.",
+                "HIGH",
+            )
+
         if _ctx_yes(pd_context, "above_existing_roof_height"):
-            return "FULL PLANNING", "The questionnaire indicates part of the roof enlargement would rise above the highest part of the existing roof, which would fall outside Class B.", "HIGH"
+            return (
+                "FULL PLANNING",
+                "The proposal appears to extend above the existing roof ridge which falls outside Class B.",
+                "HIGH",
+            )
+
         if "over limit" in roof_volume:
-            return "FULL PLANNING", "The stated additional roof volume exceeds the normal Class B allowance.", "HIGH"
+            return (
+                "FULL PLANNING",
+                "The additional roof volume appears to exceed normal Class B allowances.",
+                "HIGH",
+            )
+
         if _ctx_value(pd_context, "materials_similar").lower() == "no":
-            return "PD / LDC", "The roof enlargement may be capable of Class B permitted development, but similar-appearance materials should be confirmed.", "MEDIUM"
+            return (
+                "PD / LDC",
+                "The proposal appears broadly capable of Class B permitted development; external materials should match the existing dwelling.",
+                "MEDIUM",
+            )
+
         if _ctx_value(pd_context, "eaves_setback_0_2m").lower() == "no":
-            return "PD / LDC", "The roof enlargement may be capable of Class B permitted development, but the usual 200mm eaves setback should be checked and justified.", "MEDIUM"
-        return "PD / LDC", "The stated roof enlargement appears broadly capable of Class B permitted development, subject to final checks on volume, front-facing changes, materials, eaves setback, and local restrictions.", "MEDIUM"
+            return (
+                "PD / LDC",
+                "The proposal appears broadly capable of Class B permitted development; the typical 200mm eaves setback should be confirmed.",
+                "MEDIUM",
+            )
+
+        return (
+            "PD / LDC",
+            "The roof enlargement appears likely to comply with Class B permitted development requirements subject to standard dimensional confirmation.",
+            "LOW",
+        )
 
     if pd_family == "class_d" or "porch" in project_lower:
         if _ctx_value(pd_context, "porch_ground_area_band").lower() == "no":
@@ -607,6 +701,9 @@ Extracted text from full PDF:
 def build_checks(text: str) -> List[str]:
     lower_text = text.lower()
     checks = []
+    has_loft = any(word in lower_text for word in ["dormer", "rooflight", "roof plan", "loft", "roof enlargement"])
+    has_extension = any(word in lower_text for word in ["rear extension", "side extension", "wraparound", "wrap around", "single storey extension", "single-storey extension"])
+    is_loft_only = has_loft and not has_extension
 
     if "stair" in lower_text:
         checks.append("Check Part K: stair pitch, rise/going, headroom, landings, guarding")
@@ -614,9 +711,9 @@ def build_checks(text: str) -> List[str]:
         checks.append("Check Part B: protected route, fire doors, alarms, escape provisions")
     if any(word in lower_text for word in ["wc", "bathroom", "ensuite", "shower room", "kitchen", "utility"]):
         checks.append("Check Part F: ventilation requirements to wet rooms and affected habitable rooms")
-    if any(word in lower_text for word in ["extension", "rear extension", "side extension", "wraparound"]):
+    if has_extension and not is_loft_only:
         checks.append("Check extension-related requirements: structure, thermal performance, ventilation, drainage")
-    if any(word in lower_text for word in ["dormer", "rooflight", "roof plan", "loft"]):
+    if has_loft:
         checks.append("Check roof / loft-related requirements where truly relevant")
     if any(word in lower_text for word in ["beam", "steel", "padstone", "lintel", "bearing"]):
         checks.append("Check structural engineer calculations and support details")
@@ -625,7 +722,6 @@ def build_checks(text: str) -> List[str]:
     if any(word in lower_text for word in ["drain", "svp", "rwp", "soil stack", "gully", "waste pipe"]):
         checks.append("Check Part H: drainage and rainwater coordination")
     return checks
-
 
 def estimate_confidence(page_data: List[Dict[str, str]], text: str) -> str:
     sheet_types = {p["sheet_type"] for p in page_data}
@@ -818,6 +914,11 @@ Check for coordination issues including:
 - contradictory references between GA, Fire Plans, details, schedules, and specification sheets
 
 GENERAL RULES
+- Keep the report SIMPLE, SHORT and decision-focused.
+- Remove unnecessary background commentary.
+- Use short bullets and only mention items relevant to the uploaded project.
+- User-entered measurements are supporting context only. If drawings show different dimensions, drawing dimensions take priority.
+- If the user asks for a specific review focus, focus the report on that issue and keep unrelated commentary minimal.
 - Write in plain professional English.
 - Keep sentences short and easy to understand.
 - Use bullet points under every heading.
@@ -868,6 +969,7 @@ Report to repair:
         repaired = _call_responses_api("gpt-5", repair_prompt)
         output_text = repaired.output_text
 
+    output_text = simplify_report_text(output_text, max_bullets_per_section=6)
     gc.collect()
     return output_text
 
@@ -899,88 +1001,68 @@ def polish_planning_report_text(report_text: str, address_text: str, fire_status
     return text
 
 
-def derive_professional_planning_position(application_type: str) -> str:
-    route = (application_type or "").upper()
-    if "PD" in route or "LDC" in route:
-        return "The proposal appears broadly capable of proceeding under permitted development, subject to confirmation of the relevant GPDO criteria and final drawing annotations."
-    if "PRIOR" in route:
-        return "The proposal appears capable of being considered through the prior approval route, subject to neighbour consultation and confirmation of the relevant dimensional limits."
-    return "Planning permission is likely to be required and the proposal should be assessed against the relevant local plan, design and amenity policies."
+
+def is_minor_class_b_condition_issue(rule_engine_summary: str, pd_context: Optional[Dict[str, str]] = None, project_types_text: str = "", proposal_summary_text: str = "") -> bool:
+    """Return True where a loft/dormer scheme is broadly Class B/C capable but the
+    rule engine has escalated a minor condition/annotation issue too harshly.
+
+    Example: side-facing roof window not yet annotated as obscure glazed and
+    non-opening below 1.7m should be treated as a minor PD condition/check, not
+    as an automatic full-planning route where all core Class B criteria pass.
+    """
+    combined_project = f"{project_types_text} {proposal_summary_text}".lower()
+    summary_u = (rule_engine_summary or "").upper()
+    ctx = pd_context or {}
+    family = str(ctx.get("pd_question_family", "")).lower()
+    is_roof_project = family == "class_b" or any(t in combined_project for t in ["loft", "dormer", "rooflight", "roof light", "roof enlargement"])
+    if not is_roof_project:
+        return False
+
+    side_issue = any(t in summary_u for t in ["SIDE WINDOWS", "SIDE-FACING", "SIDE ROOF WINDOWS", "OBSCURE", "1.7M"])
+    if not side_issue:
+        return False
+
+    hard_fail_terms = [
+        "FRONT-FACING ROOF ENLARGEMENT",
+        "PRINCIPAL ELEVATION AND FRONTS A HIGHWAY",
+        "ABOVE THE HIGHEST PART",
+        "EXCEEDS HIGHEST ROOF",
+        "OVER LIMIT",
+        "EXCEEDS NORMAL CLASS B ALLOWANCE",
+        "ROOF VOLUME EXCEEDS",
+        "BALCONY",
+        "VERANDAH",
+        "RAISED PLATFORM",
+        "ARTICLE 4",
+        "LISTED BUILDING",
+        "FLAT OR MAISONETTE",
+        "NOT A SINGLE DWELLINGHOUSE",
+        "CONSERVATION AREA / ARTICLE 2(3)",
+    ]
+    if any(term in summary_u for term in hard_fail_terms):
+        return False
+
+    front_ok = str(ctx.get("front_roof_plane_highway", "")).lower() in {"no", "not applicable", ""}
+    highest_ok = str(ctx.get("above_existing_roof_height", "")).lower() in {"no", "not applicable", ""}
+    volume_ok = "over limit" not in str(ctx.get("roof_volume_band", "")).lower()
+    return front_ok and highest_ok and volume_ok
 
 
-def build_policy_context(authority_value: str, application_type: str, project_types_text: str) -> str:
-    authority = authority_value or "the Local Planning Authority"
-    project = (project_types_text or "").lower()
-    route = (application_type or "").upper()
-    refs = ["GPDO Schedule 2, Part 1 householder permitted development provisions where relevant"]
-    if "PD" in route or "LDC" in route or any(t in project for t in ["loft", "dormer", "roof"]):
-        refs.append("Class B / Class C roof enlargement and roof alteration criteria where relevant")
-    if any(t in project for t in ["rear extension", "side extension", "infill", "first floor"]):
-        refs.append("Class A enlargement, improvement or alteration criteria where relevant")
-    if "porch" in project:
-        refs.append("Class D porch criteria where relevant")
-    refs.append(f"{authority} local plan / residential extensions SPD design and amenity guidance where applicable")
-    refs.append("National Design Guide principles on context, character and amenity")
-    return "\n".join(f"- {r}" for r in refs)
-
-
-def ensure_planning_report_sections(report_text: str, application_type: str, project_summary: str, authority: str) -> str:
-    """Make sure the clean report sections exist even if the model omits one."""
-    if not report_text:
-        return report_text
-    text = report_text
-
-    def has_heading(heading: str) -> bool:
-        return re.search(rf"(^|\n){re.escape(heading)}\n", text, flags=re.IGNORECASE) is not None
-
-    def insert_before(target_heading: str, block: str) -> None:
-        nonlocal text
-        heading = block.split("\n", 1)[0].upper()
-        if has_heading(heading):
-            return
-        m = re.search(rf"\n{re.escape(target_heading)}\n", text)
-        if m:
-            text = text[:m.start()+1] + block.strip() + "\n" + text[m.start()+1:]
-        else:
-            text = text.rstrip() + "\n\n" + block.strip() + "\n"
-
-    route_upper = (application_type or "").upper()
-    if "PD" in route_upper or "LDC" in route_upper:
-        snapshot_rows = [
-            "- Relevant GPDO route: Appears capable subject to confirmation",
-            "- Dimensional limits: Requires final confirmation from drawings",
-            "- Materials and detailing: Matching / sympathetic materials should be annotated",
-            "- Neighbour amenity: No unacceptable impact identified from the information reviewed, subject to final checks",
-            "- Recommended application route: Lawful Development Certificate (Proposed)",
-        ]
-    elif "PRIOR" in route_upper:
-        snapshot_rows = [
-            "- Relevant route: Larger Home Extension Prior Approval",
-            "- Rear projection and height: Requires confirmation from the submitted drawings",
-            "- Neighbour consultation: Required as part of the prior approval process",
-            "- Amenity considerations: Outlook, light and neighbouring impact should be clearly reviewed",
-            "- Recommended application route: Prior Approval",
-        ]
-    else:
-        snapshot_rows = [
-            "- Relevant route: Full householder planning permission",
-            "- Design and scale: To be assessed against local residential extension guidance",
-            "- Streetscene impact: Requires assessment against local character and design policies",
-            "- Neighbour amenity: Outlook, privacy and light impacts should be reviewed",
-            "- Recommended application route: Householder Planning Application",
-        ]
-
-    insert_before("PLANNING ASSESSMENT", "COMPLIANCE SNAPSHOT\n" + "\n".join(snapshot_rows) + "\n")
-
-    conclusion = (
-        "PROFESSIONAL CONCLUSION\n"
-        f"Based on the submitted information, {project_summary.rstrip('.').lower()} has been reviewed against the relevant planning route and policy considerations. "
-        f"{derive_professional_planning_position(application_type)} "
-        "The drawings should be checked and annotated to address the outstanding matters before formal submission.\n"
-    )
-    insert_before("SUBMISSION READINESS", conclusion)
+def normalise_minor_class_b_route_text(text: str) -> str:
+    """Clean AI wording where minor Class B condition issues have been wrongly
+    phrased as a full planning trigger.
+    """
+    if not text:
+        return text
+    replacements = [
+        (r"Planning permission likely required as currently shown due to side-facing roof window\(s\)[^\n.]*[.]?", "PD/LDC appears likely subject to adding a clear note that any side-facing roof window is obscure-glazed and non-opening below 1.7m."),
+        (r"Likely planning permission required as currently shown due to side-facing roof window\(s\)[^\n.]*[.]?", "Likely compliant subject to minor drawing notes for any side-facing roof window."),
+        (r"full planning is likely required due to side-facing roof window\(s\)[^\n.]*[.]?", "a Lawful Development Certificate route appears likely, subject to side-facing roof window notes."),
+        (r"FULL PLANNING\s*\n\s*COMPLIANCE POSITION\s*\n\s*Likely planning permission required", "PD / LDC\nCOMPLIANCE POSITION\nLikely compliant subject to minor checks"),
+    ]
+    for pattern, repl in replacements:
+        text = re.sub(pattern, repl, text, flags=re.IGNORECASE)
     return text
-
 
 def analyze_planning_pdf(
     pdf_path: str,
@@ -991,6 +1073,8 @@ def analyze_planning_pdf(
     local_authority: str = "",
     review_mode: str = "Architect / Professional",
     pd_context: Optional[Dict[str, str]] = None,
+    scope_items: Optional[List[str]] = None,
+    rule_engine_summary: str = "",
 ) -> str:
     text = extract_text_from_pdf(pdf_path)
     page_data = extract_text_by_page(pdf_path)
@@ -1027,6 +1111,40 @@ def analyze_planning_pdf(
     if pd_route:
         application_type_value = pd_route
 
+    # Deterministic PD rule engine. This runs before the AI narrative so PASS / FAIL /
+    # NEEDS CONFIRMATION decisions are based on rules, not free-form AI wording.
+    try:
+        if not rule_engine_summary:
+            rule_facts = planning_rules.facts_from_app_context(
+                project_types=client_project_types or [],
+                property_type=property_type_text,
+                proposal_summary=proposal_summary_text,
+                pd_context=pd_context or {},
+                scope_items=scope_items or [],
+            )
+            rule_result = planning_rules.run_householder_pd_rules(rule_facts)
+            rule_engine_summary = planning_rules.format_rule_result_for_prompt(rule_result)
+        else:
+            rule_result = None
+    except Exception as rule_error:
+        rule_result = None
+        rule_engine_summary = f"DETERMINISTIC RULE ENGINE RESULT: NEEDS CONFIRMATION\nSUMMARY: Rule engine could not complete: {rule_error}"
+
+    rule_summary_upper = (rule_engine_summary or "").upper()
+    minor_class_b_condition_only = is_minor_class_b_condition_issue(
+        rule_engine_summary, pd_context, project_types_text, proposal_summary_text
+    )
+    if minor_class_b_condition_only:
+        application_type_value = "PD / LDC"
+        pd_refusal_risk = "LOW"
+    elif "FULL PLANNING REQUIRED" in rule_summary_upper:
+        application_type_value = "FULL PLANNING"
+        pd_refusal_risk = "HIGH"
+    elif "PRIOR APPROVAL POSSIBLE" in rule_summary_upper or "LARGER HOME EXTENSION PRIOR APPROVAL" in rule_summary_upper:
+        application_type_value = "PRIOR APPROVAL"
+    elif "PD POSSIBLE" in rule_summary_upper or "PERMITTED DEVELOPMENT / LDC POSSIBLE" in rule_summary_upper:
+        application_type_value = "PD / LDC"
+
     prompt = f"""
 You are reviewing a UK residential planning drawing pack.
 
@@ -1050,12 +1168,29 @@ Local authority input:
 Structured PD questionnaire answers:
 {format_pd_context_for_prompt(pd_context)}
 
+Deterministic rule engine result:
+{rule_engine_summary}
+
+Route-check instructions:
+- Use the structured rule result to guide the likely planning route, but write the outcome in professional consultant language.
+- Do not use harsh PASS / FAIL wording in the report unless there is a clear policy breach.
+- For typical dormer/rooflight LDC schemes, use "likely compliant subject to minor checks" where only standard confirmations are outstanding.
+- Explain the route briefly and avoid backend rule-engine wording.
+
 Planning reasoning requirements:
+- Keep the report SIMPLE, SHORT and decision-focused. Do not include background commentary that does not help the reader decide what to do next.
+- Use short bullets. Maximum 3 bullets in overview/route sections and maximum 5 bullets in assessment/risk/action sections unless essential.
+- Do not repeat the same caveat in multiple sections.
+- Do not include "In simple terms" sections.
+- Do not include user questionnaire labels such as "Improve Accuracy" in the final report.
+- User-entered measurements are supporting context only. If the drawings show different dimensions, drawing dimensions take priority. If dimensions cannot be verified from the drawings, say "Not clearly dimensioned on the drawings".
+- If the user asks for a specific review focus, focus the report on that issue and keep unrelated commentary minimal.
+- Only give factual conclusions supported by the uploaded drawings, structured user inputs, or relevant planning policy/PD rules.
 - First identify the proposal accurately from the drawing pack and text. Recognise whether the scheme includes a side gable, rear dormer, rooflights, single-storey extension, side extension, wraparound form or mixed works.
 - If the drawings indicate a roof extension to side to form gable, rear dormer and front rooflights, describe that exact combination rather than only referring to a loft extension.
 - Include officer-style reasoning using concise delegated report language.
 - Include a short street precedent conclusion where the pack suggests similar roof forms, terraced context, repeated dormer patterns, 3D views or wider roofscape context.
-- Use the following detected inputs to stabilise the assessment: Detected proposal label = {detected_proposal_label}; Street precedent signal = {street_precedent_signal}; Planning route confidence score = {route_confidence_score}%.
+- Use the detected proposal and street precedent only to stabilise the assessment. Do not mention internal detection labels or confidence scores in the final report.
 - If review mode is Homeowner Summary, the report should work as a preliminary planning feasibility review based on a simple sketch, basic PDF, or drawing pack.
 - Make clear that the output is an initial feasibility opinion only and does not guarantee planning approval.
 - Where the sketch or drawing lacks enough information, state the likely route and the main items that still need confirming.
@@ -1072,6 +1207,7 @@ Planning reasoning requirements:
 Important route logic:
 - If PD criteria appear clearly met, say PD may be available subject to full dimensional confirmation.
 - If PD criteria are not met, are uncertain, or mixed works go beyond PD, state that full planning is likely required.
+- For Class B loft/dormer schemes, side-facing window obscurity/non-opening wording is normally a minor PD condition/drawing-note issue, not a full planning trigger, where the core roof volume, ridge height, front roof slope and eaves setback tests are otherwise acceptable.
 - For larger home extensions, distinguish between standard PD and prior approval larger home extension.
 - If the scheme appears to include side extension, wraparound form, roof changes beyond PD limits, front-facing changes, flats, or other non-PD triggers, explain why full planning is likely required.
 
@@ -1081,13 +1217,11 @@ SITE AND PROPOSAL OVERVIEW
 TOP SUMMARY
 LOCAL AUTHORITY CONTEXT
 PD / PRIOR APPROVAL / PLANNING ROUTE
-COMPLIANCE SNAPSHOT
 PLANNING ASSESSMENT
 DRAWING-PACK INCONSISTENCIES
 KEY RISKS
 MISSING INFORMATION
 RECOMMENDED ACTIONS
-PROFESSIONAL CONCLUSION
 SUBMISSION READINESS
 
 Section guidance:
@@ -1100,54 +1234,42 @@ PROJECT CLASSIFICATION
 - Do not include any system-style commentary such as "Comparison with client-stated description" or "Aligned".
 
 SITE AND PROPOSAL OVERVIEW
-- Summarise the apparent proposal and affected parts of the property in 2 to 4 clean bullets.
+- Summarise the apparent proposal and affected parts of the property in 2 to 3 clean bullets.
 - If a Fire Statement is not evident in the pack, do not say one has been submitted.
 - Only mention a fire statement where it is genuinely relevant.
 
 TOP SUMMARY
-- Keep this section very clean and client-ready.
-- Do not include risk ratings, confidence scores, planning approval probabilities, AI wording, or backend rule language.
-- Include only these key-value lines, followed by no more than 3 short planning consideration bullets:
+- Do not include "Overall Planning Risk Rating" or "Planning Approval Probability".
+- Add one bullet stating refusal / approval risk using LOW / MEDIUM / HIGH where the PD questionnaire indicates neighbour amenity or PD compliance risk.
+- Include only:
   - Project Summary: {project_summary_value}
-  - Likely Planning Route: {application_type_value}
-  - Overall Planning Position: {derive_professional_planning_position(application_type_value)}
+  - Likely Route: {application_type_value}
+  - Compliance Position: likely compliant subject to standard checks where appropriate
   - Local Authority: {authority_value}
-- Use professional consultant wording only.
+- Present 2 to 4 concise "Key Planning Considerations" bullets only.
+- Do not add informal caveat wording here.
 
 LOCAL AUTHORITY CONTEXT
 - State the local authority professionally, e.g. "This review has been prepared against the policy framework of the London Borough of Hounslow."
 - Do not say whether the authority was user-entered or inferred.
-- Refer to relevant policy sources only, using this policy reference context:
-{build_policy_context(authority_value, application_type_value, project_types_text)}
+- Refer to the relevant local plan / SPD / London Plan policies only.
 - Where constraints mapping is not available, state that conservation area, Article 4 and other site constraints should still be confirmed.
 
 PD / PRIOR APPROVAL / PLANNING ROUTE
-- State the most likely route.
-- If the structured PD questionnaire provides a clearer route basis than the drawing text, explain that clearly and use it.
+- Start with a short professional route position.
+- Use wording such as "Likely compliant subject to minor checks", "Requires further review", or "Planning permission likely required".
+- Do not show backend rule codes, deterministic engine wording, or long GPDO checklists.
+- If minor confirmation items are missing, do not treat the proposal as failed.
 - Give a short route explanation in formal professional wording.
 - For homeowner mode, explain the likely route in simple plain English.
 - State clearly if PD rules do not appear to be met and full planning is likely required.
 - State clearly if a larger home extension prior approval route may be relevant.
 
-COMPLIANCE SNAPSHOT
-- Provide 4 to 6 concise status bullets only.
-- Each line must follow this format: Requirement: Status / comment.
-- Use statuses such as Appears compliant, Requires confirmation, Not clearly shown, or Not applicable.
-- For loft/dormer schemes include roof volume, ridge height, eaves setback, front roof slope, materials, and side-facing glazing where relevant.
-- For rear extensions include projection, height, eaves/boundary relationship, materials, and neighbour amenity where relevant.
-- Do not include long policy explanation in this section.
-
 PLANNING ASSESSMENT
 - Write this as a professional planning assessment, not as an AI or third-party reasoning section.
-- Use concise delegated-report style bullets or short paragraphs covering:
-  - Site / proposal
-  - Design, scale and massing
-  - Street precedent / surrounding roofscape
-  - Neighbouring amenity
-  - Privacy / overlooking
-  - Character and appearance
-  - Fire safety where relevant
-  - Overall planning balance
+- Maximum 4 concise bullets.
+- Avoid legalistic GPDO wording and repeated caveats.
+- Cover only practical planning observations relevant to the proposal.
 - Where street precedent appears evident, say so directly in a professional way, for example: "Several similar roof extensions appear to exist within the surrounding terrace and, on balance, the proposal is likely to read as part of the established roofscape pattern."
 - Do not say a Fire Statement has been submitted unless it is actually evident in the pack.
 
@@ -1156,25 +1278,13 @@ DRAWING-PACK INCONSISTENCIES
 - Do not refer to what the client did or did not state.
 
 KEY RISKS
-- Keep this short and specific.
-- Only include actual planning risks.
-- Maximum 4 bullets.
-- Categorise every bullet using LOW / MEDIUM / HIGH.
-- Avoid generic warnings and do not repeat missing-information points unless they affect the route.
+- HIGH / MEDIUM / LOW risk bullets only.
 
 MISSING INFORMATION
 - Only list specific items needed to confirm route or planning risk.
 
 RECOMMENDED ACTIONS
-- Maximum 5 actions.
 - Start each bullet with Provide / Confirm / Revise / Check / Submit.
-- Keep actions practical and submission-focused.
-
-PROFESSIONAL CONCLUSION
-- Add one short professional conclusion paragraph.
-- Confirm the likely route and next step.
-- Do not repeat the full report.
-- Do not use AI wording.
 
 SUBMISSION READINESS
 - Status: use this indicative position unless the drawings strongly justify otherwise: {readiness_status}
@@ -1193,31 +1303,31 @@ Detected pages:
     output_text = response.output_text
     fire_status = infer_fire_statement_status(text, page_summary)
     output_text = polish_planning_report_text(output_text, address_text, fire_status, authority_value)
+    if minor_class_b_condition_only:
+        output_text = normalise_minor_class_b_route_text(output_text)
 
-    if pd_route_reason and "PD / PRIOR APPROVAL / PLANNING ROUTE" in output_text:
+    if "PD / PRIOR APPROVAL / PLANNING ROUTE" in output_text and pd_route_reason:
+        route_insert = "Route position:\n" + pd_route_reason + "\n\n"
         output_text = output_text.replace(
             "PD / PRIOR APPROVAL / PLANNING ROUTE\n",
-            "PD / PRIOR APPROVAL / PLANNING ROUTE\nRoute position:\n"
-            + pd_route_reason + "\n\n",
+            "PD / PRIOR APPROVAL / PLANNING ROUTE\n" + route_insert,
             1,
         )
     top_summary_pattern = r"TOP SUMMARY\n([\s\S]*?)(?=\n[A-Z][A-Z /\-]+\n)"
-    compliance_position = "The proposal appears broadly capable of complying with the relevant planning / permitted development requirements subject to final dimensional confirmation." if application_type_value == "PD / LDC" else ("The proposal appears capable of progressing via the prior approval route subject to final dimensional confirmation and neighbour consultation requirements." if application_type_value == "PRIOR APPROVAL" else "The proposal is likely to require a formal planning application and should be assessed against the relevant local planning policies.")
+    compliance_position = "Likely compliant subject to minor checks" if application_type_value == "PD / LDC" else ("Likely prior approval route" if application_type_value == "PRIOR APPROVAL" else "Likely planning permission required")
     if minor_class_b_condition_only:
         application_type_value = "PD / LDC"
-        compliance_position = "The proposal appears likely capable of proceeding via a Lawful Development Certificate route, subject to minor drawing annotations and final dimensional confirmation."
+        compliance_position = "Likely compliant subject to minor checks"
     top_summary_replacement = (
         "TOP SUMMARY\n"
         f"Project Summary: {project_summary_value}\n"
-        f"Likely Planning Route: {application_type_value}\n"
-        f"Overall Planning Position: {compliance_position}\n"
+        f"Likely Route: {application_type_value}\n"
+        f"Compliance Position: {compliance_position}\n"
         f"Local Authority: {authority_value}\n"
     )
     output_text = re.sub(top_summary_pattern, top_summary_replacement, output_text, count=1)
     output_text = re.sub(r"^.*Overall Planning Risk Rating:.*$\n?", "", output_text, flags=re.MULTILINE)
     output_text = re.sub(r"^.*Planning Approval Probability:.*$\n?", "", output_text, flags=re.MULTILINE)
-    output_text = re.sub(r"^.*Planning Route Confidence Score:.*$\n?", "", output_text, flags=re.MULTILINE)
-    output_text = re.sub(r"^.*Refusal / Approval Risk:.*$\n?", "", output_text, flags=re.MULTILINE)
 
     missing = [h for h in PLANNING_REQUIRED_HEADINGS if h not in output_text.upper()]
     if missing:
@@ -1228,22 +1338,90 @@ Detected pages:
         output_text = repaired.output_text
         output_text = polish_planning_report_text(output_text, address_text, fire_status, authority_value)
         top_summary_pattern = r"TOP SUMMARY\n([\s\S]*?)(?=\n[A-Z][A-Z /\-]+\n)"
+        compliance_position = "Likely compliant subject to minor checks" if application_type_value == "PD / LDC" else ("Likely prior approval route" if application_type_value == "PRIOR APPROVAL" else "Likely planning permission required")
+    if minor_class_b_condition_only:
+        application_type_value = "PD / LDC"
+        compliance_position = "Likely compliant subject to minor checks"
         top_summary_replacement = (
             "TOP SUMMARY\n"
             f"Project Summary: {project_summary_value}\n"
-            f"Likely Planning Route: {application_type_value}\n"
-            f"Overall Planning Position: {compliance_position}\n"
+            f"Likely Route: {application_type_value}\n"
+            f"Compliance Position: {compliance_position}\n"
             f"Local Authority: {authority_value}\n"
         )
         output_text = re.sub(top_summary_pattern, top_summary_replacement, output_text, count=1)
         output_text = re.sub(r"^.*Overall Planning Risk Rating:.*$\n?", "", output_text, flags=re.MULTILINE)
         output_text = re.sub(r"^.*Planning Approval Probability:.*$\n?", "", output_text, flags=re.MULTILINE)
-    output_text = re.sub(r"^.*Planning Route Confidence Score:.*$\n?", "", output_text, flags=re.MULTILINE)
-    output_text = re.sub(r"^.*Refusal / Approval Risk:.*$\n?", "", output_text, flags=re.MULTILINE)
+    output_text = simplify_report_text(output_text, max_bullets_per_section=5)
     gc.collect()
     return output_text
 
 
+
+
+def simplify_report_text(report_text: str, max_bullets_per_section: int = 6) -> str:
+    """Keep generated reports concise, remove filler, and preserve required headings."""
+    if not report_text:
+        return report_text
+    text = report_text
+    remove_phrases = [
+        "This note is an initial feasibility opinion only and does not guarantee planning approval.",
+        "This is an initial feasibility opinion only based on the drawing pack and client inputs; it is not a guarantee of planning approval.",
+        "IN SIMPLE TERMS",
+        "In simple terms",
+        "Selected scope items to cross-check:",
+        "Deterministic rule engine result:",
+        "Rule-based PD check:",
+        "Structured PD route logic:",
+        "Important route logic:",
+        "Rule engine instructions:",
+        "Structured PD questionnaire answers:",
+        "PASS / FAIL / NEEDS CONFIRMATION",
+    ]
+    for phrase in remove_phrases:
+        text = text.replace(phrase, "")
+    text = re.sub(r"Proposed gROUND", "Proposed ground", text)
+    text = re.sub(r"gROUND", "ground", text)
+    text = re.sub(r"^Not provided$\n?", "", text, flags=re.MULTILINE)
+    text = re.sub(r"Improve Accuracy\s*:\s*[^\n.]+[.]?", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"Selected scope items to cross-check\s*:[^\n.]*[.]?", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"Important instruction\s*:[^\n]*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"Rule intake answers\s*:[^\n]*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"PD answers\s*:[^\n]*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"Planning Route Confidence Score\s*:[^\n]*\n?", "", text, flags=re.IGNORECASE)
+    text = normalise_minor_class_b_route_text(text)
+    text = re.sub(r"Detected proposal label\s*=.*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"Street precedent signal\s*=.*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"^(Actual|Required):.*$\n?", "", text, flags=re.MULTILINE | re.IGNORECASE)
+    text = re.sub(r"^.*Class [A-H]\.\d[^\n]*$\n?", "", text, flags=re.MULTILINE | re.IGNORECASE)
+    text = re.sub(r"\s+,", ",", text)
+    text = re.sub(r",\s*\.", ".", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+
+    headings = PLANNING_REQUIRED_HEADINGS + REQUIRED_HEADINGS
+    heading_pattern = r"^(" + "|".join(re.escape(h) for h in sorted(set(headings), key=len, reverse=True)) + r")$"
+    lines = text.splitlines()
+    out = []
+    current_heading = None
+    item_count = 0
+    trim_sections = {"PLANNING ASSESSMENT", "RECOMMENDED ACTIONS", "MISSING INFORMATION", "KEY RISKS", "DRAWING-PACK INCONSISTENCIES"}
+    for line in lines:
+        stripped = line.strip()
+        if re.match(heading_pattern, stripped, flags=re.IGNORECASE):
+            current_heading = stripped.upper()
+            item_count = 0
+            out.append(stripped)
+            continue
+        if current_heading in trim_sections:
+            is_item = bool(stripped) and (stripped.startswith("-") or stripped.startswith("•") or ":" in stripped or len(stripped) > 18)
+            if is_item:
+                item_count += 1
+            if item_count > max_bullets_per_section:
+                continue
+        out.append(line)
+    text = "\n".join(out)
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+    return text
 
 
 def infer_planning_statement_mode(report_text: str, sections: Optional[Dict[str, str]] = None) -> str:
