@@ -1197,22 +1197,27 @@ Detected pages:
     if pd_route_reason and "PD / PRIOR APPROVAL / PLANNING ROUTE" in output_text:
         output_text = output_text.replace(
             "PD / PRIOR APPROVAL / PLANNING ROUTE\n",
-            "PD / PRIOR APPROVAL / PLANNING ROUTE\nStructured PD route logic:\n"
-            + pd_route_reason + "\nRefusal / approval risk from questionnaire: " + pd_refusal_risk + "\n\n",
+            "PD / PRIOR APPROVAL / PLANNING ROUTE\nRoute position:\n"
+            + pd_route_reason + "\n\n",
             1,
         )
     top_summary_pattern = r"TOP SUMMARY\n([\s\S]*?)(?=\n[A-Z][A-Z /\-]+\n)"
+    compliance_position = "The proposal appears broadly capable of complying with the relevant planning / permitted development requirements subject to final dimensional confirmation." if application_type_value == "PD / LDC" else ("The proposal appears capable of progressing via the prior approval route subject to final dimensional confirmation and neighbour consultation requirements." if application_type_value == "PRIOR APPROVAL" else "The proposal is likely to require a formal planning application and should be assessed against the relevant local planning policies.")
+    if minor_class_b_condition_only:
+        application_type_value = "PD / LDC"
+        compliance_position = "The proposal appears likely capable of proceeding via a Lawful Development Certificate route, subject to minor drawing annotations and final dimensional confirmation."
     top_summary_replacement = (
         "TOP SUMMARY\n"
         f"Project Summary: {project_summary_value}\n"
-        f"Application Type: {application_type_value}\n"
-        f"Planning Route Confidence Score: {route_confidence_score}%\n"
-        f"{authority_value}\n"
-        f"Refusal / Approval Risk: {pd_refusal_risk}\n"
+        f"Likely Planning Route: {application_type_value}\n"
+        f"Overall Planning Position: {compliance_position}\n"
+        f"Local Authority: {authority_value}\n"
     )
     output_text = re.sub(top_summary_pattern, top_summary_replacement, output_text, count=1)
     output_text = re.sub(r"^.*Overall Planning Risk Rating:.*$\n?", "", output_text, flags=re.MULTILINE)
     output_text = re.sub(r"^.*Planning Approval Probability:.*$\n?", "", output_text, flags=re.MULTILINE)
+    output_text = re.sub(r"^.*Planning Route Confidence Score:.*$\n?", "", output_text, flags=re.MULTILINE)
+    output_text = re.sub(r"^.*Refusal / Approval Risk:.*$\n?", "", output_text, flags=re.MULTILINE)
 
     missing = [h for h in PLANNING_REQUIRED_HEADINGS if h not in output_text.upper()]
     if missing:
@@ -1226,13 +1231,15 @@ Detected pages:
         top_summary_replacement = (
             "TOP SUMMARY\n"
             f"Project Summary: {project_summary_value}\n"
-            f"Application Type: {application_type_value}\n"
-            f"Planning Route Confidence Score: {route_confidence_score}%\n"
-            f"{authority_value}\n"
+            f"Likely Planning Route: {application_type_value}\n"
+            f"Overall Planning Position: {compliance_position}\n"
+            f"Local Authority: {authority_value}\n"
         )
         output_text = re.sub(top_summary_pattern, top_summary_replacement, output_text, count=1)
         output_text = re.sub(r"^.*Overall Planning Risk Rating:.*$\n?", "", output_text, flags=re.MULTILINE)
         output_text = re.sub(r"^.*Planning Approval Probability:.*$\n?", "", output_text, flags=re.MULTILINE)
+    output_text = re.sub(r"^.*Planning Route Confidence Score:.*$\n?", "", output_text, flags=re.MULTILINE)
+    output_text = re.sub(r"^.*Refusal / Approval Risk:.*$\n?", "", output_text, flags=re.MULTILINE)
     gc.collect()
     return output_text
 

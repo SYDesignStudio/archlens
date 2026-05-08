@@ -1,38 +1,44 @@
 """
-ArchLens AI - Planning Rules Engine
-SY Design Studio
+planning_rules.py
 
-Purpose:
-- Deterministic pass / fail / needs-confirmation checks for common UK householder
-  permitted development and prior approval routes.
-- Based on the MHCLG / DLUHC 'Permitted development rights for householders'
-  Technical Guidance and GPDO Schedule 2, Part 1.
+ArchLens AI deterministic planning rule engine.
 
-Important:
-- This is not a legal decision engine.
-- It should be used to stabilise AI output, reduce hallucination, and provide
-  clear rule-based checks before the report is written.
-- Where data is missing, the rule returns NEEDS_CONFIRMATION rather than guessing.
+Purpose
+-------
+This module checks householder permitted development rules before the AI writes
+the narrative report. It is designed to reduce reliance on generative AI for
+PASS / FAIL / NEEDS CONFIRMATION decisions.
 
-Recommended integration:
-    from planning_rules import run_planning_rule_checks, format_rule_checks_for_prompt
+Source basis
+------------
+Permitted development rights for householders: Technical Guidance, September 2019
+and GPDO Schedule 2, Part 1 Classes A-H.
 
-    rule_result = run_planning_rule_checks(
-        project_types=["Ground Floor Rear Extension"],
-        property_type="Semi-Detached House",
-        measurements={"rear_depth_m": 6.0, "overall_height_m": 4.0, "eaves_height_m": 3.0},
-        pd_answers={"within_2m_boundary": "yes", "materials_similar": "yes"},
-        detected_features={"single_storey_rear_extension": True},
-    )
+Important
+---------
+This module does not replace professional planning judgement. It performs
+structured checks against known rule thresholds using supplied/extracted data.
+Where data is missing, it returns NEEDS_CONFIRMATION rather than guessing.
 
-    prompt_context = format_rule_checks_for_prompt(rule_result)
+Recommended workflow
+--------------------
+1. Extract facts from drawings/user intake into a ProjectFacts object.
+2. Run run_householder_pd_rules(facts).
+3. Pass the rule_result_summary into pdf_summary.py.
+4. Let AI explain the deterministic result in simple wording, without changing
+   PASS / FAIL outcomes unless a human updates the facts.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field, asdict
 from enum import Enum
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+
+
+# -----------------------------------------------------------------------------
+# Status model
+# -----------------------------------------------------------------------------
 
 
 class RuleStatus(str, Enum):
@@ -43,48 +49,198 @@ class RuleStatus(str, Enum):
 
 
 class RouteStatus(str, Enum):
-    PD_POSSIBLE = "PD / LDC possible"
-    PRIOR_APPROVAL_POSSIBLE = "Prior Approval possible"
-    FULL_PLANNING_LIKELY = "Full Planning likely"
-    NEEDS_CONFIRMATION = "Needs confirmation"
+    PD_POSSIBLE = "PD POSSIBLE"
+    PRIOR_APPROVAL_POSSIBLE = "PRIOR APPROVAL POSSIBLE"
+    FULL_PLANNING_REQUIRED = "FULL PLANNING REQUIRED"
+    NEEDS_CONFIRMATION = "NEEDS CONFIRMATION"
+    NOT_APPLICABLE = "NOT APPLICABLE"
 
 
 @dataclass
 class RuleCheck:
-    code: str
+    class_ref: str
+    rule_ref: str
     title: str
     status: RuleStatus
-    rule: str
-    evidence: str = ""
-    action: str = ""
-    source: str = "Permitted development rights for householders Technical Guidance, GPDO Schedule 2 Part 1"
+    reason: str
+    required: str = ""
+    actual: str = ""
+    source: str = "Householder Technical Guidance / GPDO Part 1"
+    severity: str = "MEDIUM"
 
     def to_dict(self) -> Dict[str, Any]:
-        data = asdict(self)
-        data["status"] = self.status.value
-        return data
+        return asdict(self)
+
+
+@dataclass
+class ClassResult:
+    class_ref: str
+    title: str
+    status: RouteStatus
+    checks: List[RuleCheck] = field(default_factory=list)
+    summary: str = ""
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "class_ref": self.class_ref,
+            "title": self.title,
+            "status": self.status.value,
+            "summary": self.summary,
+            "checks": [c.to_dict() for c in self.checks],
+        }
 
 
 @dataclass
 class RuleEngineResult:
-    likely_route: RouteStatus
-    confidence: str
+    overall_status: RouteStatus
+    likely_route: str
     summary: str
-    checks: List[RuleCheck] = field(default_factory=list)
-    failed_checks: List[RuleCheck] = field(default_factory=list)
-    needs_confirmation: List[RuleCheck] = field(default_factory=list)
-    passed_checks: List[RuleCheck] = field(default_factory=list)
+    class_results: List[ClassResult] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
-            "likely_route": self.likely_route.value,
-            "confidence": self.confidence,
+            "overall_status": self.overall_status.value,
+            "likely_route": self.likely_route,
             "summary": self.summary,
-            "checks": [c.to_dict() for c in self.checks],
-            "failed_checks": [c.to_dict() for c in self.failed_checks],
-            "needs_confirmation": [c.to_dict() for c in self.needs_confirmation],
-            "passed_checks": [c.to_dict() for c in self.passed_checks],
+            "class_results": [r.to_dict() for r in self.class_results],
         }
+
+
+# -----------------------------------------------------------------------------
+# Input facts
+# -----------------------------------------------------------------------------
+# Most fields are Optional because the app may not extract everything from the
+# drawings. Unknown information should produce NEEDS CONFIRMATION, not a guess.
+# Units:
+# - metres for lengths/heights/depths
+# - square metres for areas
+# - cubic metres for roof volume
+# - litres for container capacity
+# -----------------------------------------------------------------------------
+
+
+@dataclass
+class ProjectFacts:
+    # Basic property/context
+    property_type: str = ""  # detached, semi-detached, terraced, end terrace, flat, maisonette, bungalow
+    is_single_dwellinghouse: Optional[bool] = None
+    created_by_part3_change_of_use_mnp_pa_q: Optional[bool] = None
+    is_flat_or_maisonette: Optional[bool] = None
+    is_listed_building_or_within_curtilage: Optional[bool] = None
+    article_2_3_land: Optional[bool] = None
+    article_4_direction: Optional[bool] = None
+    pd_rights_removed_by_condition: Optional[bool] = None
+    sssi: Optional[bool] = None
+    conservation_area: Optional[bool] = None
+    world_heritage_site: Optional[bool] = None
+    national_park_broads_aonb: Optional[bool] = None
+
+    # Proposal flags
+    includes_class_a_extension_or_alteration: bool = False
+    includes_single_storey_rear_extension: bool = False
+    includes_larger_home_extension: bool = False
+    includes_side_extension: bool = False
+    includes_rear_and_side_extension: bool = False
+    includes_more_than_one_storey_extension: bool = False
+    includes_roof_enlargement_class_b: bool = False
+    includes_roof_alteration_class_c: bool = False
+    includes_porch_class_d: bool = False
+    includes_outbuilding_pool_container_class_e: bool = False
+    includes_hard_surface_class_f: bool = False
+    includes_chimney_flue_svp_class_g: bool = False
+    includes_antenna_class_h: bool = False
+
+    # Class A dimensions/facts
+    curtilage_coverage_percent_excluding_original_house: Optional[float] = None
+    extension_height_m: Optional[float] = None
+    extension_eaves_height_m: Optional[float] = None
+    existing_house_highest_roof_height_m: Optional[float] = None
+    existing_house_eaves_height_m: Optional[float] = None
+    projects_beyond_principal_elevation: Optional[bool] = None
+    projects_beyond_side_elevation_fronting_highway: Optional[bool] = None
+    rear_projection_m: Optional[float] = None
+    rear_projection_from_original_wall_m: Optional[float] = None
+    total_rear_projection_joined_enlargement_m: Optional[float] = None
+    within_2m_boundary: Optional[bool] = None
+    side_extension_height_m: Optional[float] = None
+    side_extension_width_m: Optional[float] = None
+    original_house_width_m: Optional[float] = None
+    side_extension_single_storey: Optional[bool] = None
+    rear_boundary_distance_m: Optional[float] = None  # for multi-storey extension: boundary opposite rear wall
+    includes_verandah_balcony_or_raised_platform: Optional[bool] = None
+    includes_microwave_antenna: Optional[bool] = None
+    includes_chimney_flue_or_svp: Optional[bool] = None
+    alters_roof_under_class_a: Optional[bool] = None
+    external_materials_similar: Optional[bool] = None
+    upper_floor_side_windows_obscure_and_non_opening_1_7m: Optional[bool] = None
+    roof_pitch_matches_original_for_multi_storey: Optional[bool] = None
+    includes_external_cladding_article_2_3: Optional[bool] = None
+
+    # Class B roof enlargement
+    roof_enlargement_exceeds_highest_roof: Optional[bool] = None
+    roof_enlargement_on_principal_roof_slope_fronting_highway: Optional[bool] = None
+    added_roof_volume_m3: Optional[float] = None
+    includes_roof_balcony_verandah_platform: Optional[bool] = None
+    roof_materials_similar: Optional[bool] = None
+    original_roof_eaves_maintained_or_reinstated: Optional[bool] = None
+    roof_enlargement_eaves_setback_m: Optional[float] = None
+    roof_enlargement_is_hip_to_gable: Optional[bool] = None
+    roof_enlargement_joins_original_to_rear_or_side_extension_roof: Optional[bool] = None
+    roof_enlargement_extends_beyond_outer_wall_face: Optional[bool] = None
+    roof_side_windows_obscure_and_non_opening_1_7m: Optional[bool] = None
+
+    # Class C roof alteration / rooflights
+    rooflight_projection_m: Optional[float] = None
+    roof_alteration_higher_than_original_roof: Optional[bool] = None
+    class_c_includes_chimney_flue_svp: Optional[bool] = None
+    class_c_includes_solar_equipment: Optional[bool] = None
+    class_c_side_windows_obscure_and_non_opening_1_7m: Optional[bool] = None
+
+    # Class D porch
+    porch_ground_area_m2: Optional[float] = None
+    porch_height_m: Optional[float] = None
+    porch_distance_to_highway_boundary_m: Optional[float] = None
+
+    # Class E outbuildings etc
+    outbuilding_attached_to_house: Optional[bool] = None
+    outbuilding_purpose_incidental: Optional[bool] = None
+    outbuilding_forward_of_principal_elevation: Optional[bool] = None
+    outbuilding_more_than_one_storey: Optional[bool] = None
+    outbuilding_height_m: Optional[float] = None
+    outbuilding_eaves_height_m: Optional[float] = None
+    outbuilding_within_2m_boundary: Optional[bool] = None
+    outbuilding_roof_type: str = ""  # dual-pitched, hipped, flat, mono-pitched, other
+    outbuilding_within_curtilage_of_listed_building: Optional[bool] = None
+    outbuilding_includes_verandah_balcony_raised_platform: Optional[bool] = None
+    outbuilding_raised_platform_height_m: Optional[float] = None
+    outbuilding_related_to_dwelling_or_antenna: Optional[bool] = None
+    container_capacity_litres: Optional[float] = None
+    outbuilding_more_than_20m_from_house: Optional[bool] = None
+    outbuilding_area_more_than_20m_from_house_m2: Optional[float] = None
+    outbuilding_between_side_wall_and_boundary_on_article_2_3_land: Optional[bool] = None
+
+    # Class F hard surfaces
+    hard_surface_forward_of_principal_elevation_and_highway: Optional[bool] = None
+    hard_surface_area_m2: Optional[float] = None
+    hard_surface_porous_or_drains_to_permeable_area: Optional[bool] = None
+
+    # Class G chimney/flue/SVP
+    chimney_flue_svp_height_above_highest_roof_m: Optional[float] = None
+    chimney_flue_svp_on_principal_or_side_elevation_fronting_highway_article_2_3: Optional[bool] = None
+
+    # Class H antenna
+    number_of_antennas: Optional[int] = None
+    antenna_lengths_m: Optional[List[float]] = None
+    antenna_on_chimney: Optional[bool] = None
+    antenna_installed_on_roof_without_chimney: Optional[bool] = None
+    antenna_installed_on_roof_with_chimney: Optional[bool] = None
+    antenna_protrudes_above_chimney: Optional[bool] = None
+    antenna_cubic_capacity_litres: Optional[float] = None
+    antenna_highest_part_higher_than_roof: Optional[bool] = None
+    antenna_highest_part_higher_than_chimney_or_0_6m_above_ridge: Optional[bool] = None
+    antenna_on_visible_highway_elevation_article_2_3: Optional[bool] = None
+    building_height_m: Optional[float] = None
+    antenna_sited_to_minimise_visual_impact: Optional[bool] = None
 
 
 # -----------------------------------------------------------------------------
@@ -92,917 +248,862 @@ class RuleEngineResult:
 # -----------------------------------------------------------------------------
 
 
-def _normalise(value: Any) -> str:
-    return str(value or "").strip().lower().replace("_", "-")
+def _norm(value: str) -> str:
+    return (value or "").strip().lower().replace("_", " ")
 
 
-def _contains_any(text: str, needles: Iterable[str]) -> bool:
-    text_l = _normalise(text)
-    return any(n.lower() in text_l for n in needles)
+def is_detached(facts: ProjectFacts) -> bool:
+    p = _norm(facts.property_type)
+    return "detached" in p and "semi" not in p
 
 
-def _as_float(value: Any) -> Optional[float]:
-    if value is None:
-        return None
-    if isinstance(value, (int, float)):
-        return float(value)
-    text = str(value).strip().lower().replace("metres", "m").replace("meter", "m")
-    text = text.replace(",", "")
-    for suffix in ["mm", "m"]:
-        if text.endswith(suffix):
-            text = text[: -len(suffix)].strip()
-            try:
-                number = float(text)
-                return number / 1000 if suffix == "mm" else number
-            except Exception:
-                return None
-    try:
-        return float(text)
-    except Exception:
-        return None
+def is_terrace(facts: ProjectFacts) -> bool:
+    p = _norm(facts.property_type)
+    return "terrace" in p or "terraced" in p
 
 
-def _get_measure(measurements: Dict[str, Any], *keys: str) -> Optional[float]:
-    for key in keys:
-        if key in measurements:
-            value = _as_float(measurements.get(key))
-            if value is not None:
-                return value
-    return None
+def is_non_detached_house(facts: ProjectFacts) -> bool:
+    return not is_detached(facts)
 
 
-def _get_answer(pd_answers: Dict[str, Any], *keys: str) -> str:
-    for key in keys:
-        if key in pd_answers and pd_answers.get(key) not in [None, ""]:
-            return _normalise(pd_answers.get(key))
-    return ""
+def is_flat_or_maisonette(facts: ProjectFacts) -> bool:
+    if facts.is_flat_or_maisonette is not None:
+        return facts.is_flat_or_maisonette
+    p = _norm(facts.property_type)
+    return "flat" in p or "maisonette" in p
 
 
-def _is_yes(value: str) -> bool:
-    return value in {"yes", "y", "true", "1"}
-
-
-def _is_no(value: str) -> bool:
-    return value in {"no", "n", "false", "0"}
-
-
-def _property_category(property_type: str) -> str:
-    p = _normalise(property_type)
-    if "flat" in p or "maisonette" in p:
-        return "flat_or_maisonette"
-    if "detached" in p and "semi" not in p:
-        return "detached"
-    if "semi" in p:
-        return "semi"
-    if "terrace" in p or "terraced" in p:
-        return "terrace"
-    if "bungalow" in p:
-        return "bungalow"
-    return "other"
-
-
-def _project_text(project_types: List[str], detected_features: Optional[Dict[str, Any]] = None) -> str:
-    features = detected_features or {}
-    active_features = [k for k, v in features.items() if bool(v)]
-    return " ".join(project_types or []) + " " + " ".join(active_features)
-
-
-def _make_check(
-    code: str,
+def _check_bool(
+    class_ref: str,
+    rule_ref: str,
     title: str,
-    status: RuleStatus,
-    rule: str,
-    evidence: str = "",
-    action: str = "",
+    value: Optional[bool],
+    pass_when: bool,
+    fail_reason: str,
+    pass_reason: str = "Requirement satisfied.",
+    unknown_reason: str = "Not clearly confirmed from the submitted information.",
+    required: str = "",
+    severity: str = "MEDIUM",
 ) -> RuleCheck:
-    return RuleCheck(code=code, title=title, status=status, rule=rule, evidence=evidence, action=action)
+    if value is None:
+        return RuleCheck(class_ref, rule_ref, title, RuleStatus.NEEDS_CONFIRMATION, unknown_reason, required=required, severity=severity)
+    if value == pass_when:
+        return RuleCheck(class_ref, rule_ref, title, RuleStatus.PASS, pass_reason, required=required, actual=str(value), severity="LOW")
+    return RuleCheck(class_ref, rule_ref, title, RuleStatus.FAIL, fail_reason, required=required, actual=str(value), severity=severity)
+
+
+def _check_max(
+    class_ref: str,
+    rule_ref: str,
+    title: str,
+    value: Optional[float],
+    max_value: float,
+    unit: str = "m",
+    unknown_reason: str = "Dimension not clearly confirmed from the submitted information.",
+    fail_reason: Optional[str] = None,
+    pass_reason: Optional[str] = None,
+    severity: str = "HIGH",
+) -> RuleCheck:
+    required = f"≤ {max_value:g}{unit}"
+    if value is None:
+        return RuleCheck(class_ref, rule_ref, title, RuleStatus.NEEDS_CONFIRMATION, unknown_reason, required=required, severity="MEDIUM")
+    actual = f"{value:g}{unit}"
+    if value <= max_value:
+        return RuleCheck(class_ref, rule_ref, title, RuleStatus.PASS, pass_reason or f"{actual} is within the {required} limit.", required=required, actual=actual, severity="LOW")
+    return RuleCheck(class_ref, rule_ref, title, RuleStatus.FAIL, fail_reason or f"{actual} exceeds the {required} limit.", required=required, actual=actual, severity=severity)
+
+
+def _check_min(
+    class_ref: str,
+    rule_ref: str,
+    title: str,
+    value: Optional[float],
+    min_value: float,
+    unit: str = "m",
+    unknown_reason: str = "Dimension not clearly confirmed from the submitted information.",
+    fail_reason: Optional[str] = None,
+    pass_reason: Optional[str] = None,
+    severity: str = "HIGH",
+) -> RuleCheck:
+    required = f"≥ {min_value:g}{unit}"
+    if value is None:
+        return RuleCheck(class_ref, rule_ref, title, RuleStatus.NEEDS_CONFIRMATION, unknown_reason, required=required, severity="MEDIUM")
+    actual = f"{value:g}{unit}"
+    if value >= min_value:
+        return RuleCheck(class_ref, rule_ref, title, RuleStatus.PASS, pass_reason or f"{actual} meets the {required} minimum.", required=required, actual=actual, severity="LOW")
+    return RuleCheck(class_ref, rule_ref, title, RuleStatus.FAIL, fail_reason or f"{actual} is below the {required} minimum.", required=required, actual=actual, severity=severity)
+
+
+def _class_status_from_checks(checks: Sequence[RuleCheck], prior_approval_candidate: bool = False) -> RouteStatus:
+    active = [c for c in checks if c.status != RuleStatus.NOT_APPLICABLE]
+    if not active:
+        return RouteStatus.NOT_APPLICABLE
+    if any(c.status == RuleStatus.FAIL for c in active):
+        return RouteStatus.FULL_PLANNING_REQUIRED
+    if any(c.status == RuleStatus.NEEDS_CONFIRMATION for c in active):
+        return RouteStatus.NEEDS_CONFIRMATION
+    if prior_approval_candidate:
+        return RouteStatus.PRIOR_APPROVAL_POSSIBLE
+    return RouteStatus.PD_POSSIBLE
+
+
+def _summary_for_status(status: RouteStatus) -> str:
+    if status == RouteStatus.PD_POSSIBLE:
+        return "The supplied facts pass the applicable permitted development checks for this Class."
+    if status == RouteStatus.PRIOR_APPROVAL_POSSIBLE:
+        return "The supplied facts indicate the larger home extension prior approval route may be available, subject to neighbour consultation and all Class A conditions."
+    if status == RouteStatus.FULL_PLANNING_REQUIRED:
+        return "One or more mandatory permitted development limits appear to fail. Planning permission is likely required unless the facts are corrected."
+    if status == RouteStatus.NEEDS_CONFIRMATION:
+        return "The route cannot be confirmed because one or more key facts or dimensions are missing."
+    return "This Class does not appear to be triggered by the supplied facts."
 
 
 # -----------------------------------------------------------------------------
-# General checks applying to householder PD
+# General exclusions
 # -----------------------------------------------------------------------------
 
 
-def check_general_pd_eligibility(property_type: str, pd_answers: Dict[str, Any]) -> List[RuleCheck]:
-    checks: List[RuleCheck] = []
-    category = _property_category(property_type)
-
-    if category == "flat_or_maisonette":
-        checks.append(
-            _make_check(
-                "GEN-01",
-                "Dwellinghouse eligibility",
-                RuleStatus.FAIL,
-                "Householder permitted development rights do not normally apply to flats or maisonettes.",
-                f"Property type: {property_type}",
-                "Use full planning route unless a separate lawful route is confirmed.",
-            )
-        )
-    elif not property_type or _normalise(property_type) in {"not stated", "unknown"}:
-        checks.append(
-            _make_check(
-                "GEN-01",
-                "Dwellinghouse eligibility",
-                RuleStatus.NEEDS_CONFIRMATION,
-                "Householder PD rights apply to dwellinghouses, not flats/maisonettes.",
-                "Property type not confirmed.",
-                "Confirm whether the site is a single dwellinghouse, flat, maisonette or converted property.",
-            )
-        )
-    else:
-        checks.append(
-            _make_check(
-                "GEN-01",
-                "Dwellinghouse eligibility",
-                RuleStatus.PASS,
-                "Householder PD rights may apply to a single dwellinghouse, subject to restrictions.",
-                f"Property type: {property_type}",
-            )
-        )
-
-    constraints = _get_answer(pd_answers, "site_constraints", "constraints")
-    if any(x in constraints for x in ["listed", "article 4"]):
-        checks.append(
-            _make_check(
-                "GEN-02",
-                "PD rights restrictions",
-                RuleStatus.FAIL,
-                "Listed status, Article 4 Directions, or planning conditions may remove/restrict PD rights.",
-                f"Constraint input: {constraints}",
-                "Confirm constraints and use full planning route if PD rights are removed.",
-            )
-        )
-    elif any(x in constraints for x in ["conservation", "article 2", "aonb", "national park", "world heritage"]):
-        checks.append(
-            _make_check(
-                "GEN-02",
-                "Article 2(3) land / conservation constraint",
-                RuleStatus.NEEDS_CONFIRMATION,
-                "Article 2(3) land restricts several PD classes including side extensions and roof enlargements.",
-                f"Constraint input: {constraints}",
-                "Confirm conservation area / Article 2(3) status before relying on PD.",
-            )
-        )
-    elif constraints:
-        checks.append(
-            _make_check(
-                "GEN-02",
-                "PD rights restrictions",
-                RuleStatus.PASS,
-                "No PD-rights restriction has been identified from the provided answers.",
-                f"Constraint input: {constraints}",
-            )
-        )
-    else:
-        checks.append(
-            _make_check(
-                "GEN-02",
-                "PD rights restrictions",
-                RuleStatus.NEEDS_CONFIRMATION,
-                "Article 4 Directions, conservation area status and planning conditions must be checked before relying on PD.",
-                "No constraint answer provided.",
-                "Check planning history and constraints map.",
-            )
-        )
-
-    change_use_origin = _get_answer(pd_answers, "created_by_pd_change_of_use", "class_m_n_p_pa_q")
-    if _is_yes(change_use_origin):
-        checks.append(
-            _make_check(
-                "GEN-03",
-                "House created through Part 3 change of use",
-                RuleStatus.FAIL,
-                "PD rights under Part 1 do not apply where the dwellinghouse was created under Classes M, N, P, PA or Q of Part 3.",
-                "User indicated the dwelling may have been created through a Part 3 change of use.",
-                "Use full planning route unless lawful PD eligibility is confirmed.",
-            )
-        )
-    elif _is_no(change_use_origin):
-        checks.append(
-            _make_check(
-                "GEN-03",
-                "House created through Part 3 change of use",
-                RuleStatus.PASS,
-                "No Part 3 change-of-use origin has been identified.",
-                "User indicated no.",
-            )
-        )
-    else:
-        checks.append(
-            _make_check(
-                "GEN-03",
-                "House created through Part 3 change of use",
-                RuleStatus.NEEDS_CONFIRMATION,
-                "PD rights under Part 1 may not apply to houses created under Classes M, N, P, PA or Q of Part 3.",
-                "Not confirmed.",
-                "Confirm planning history / original use.",
-            )
-        )
+def check_general_pd_exclusions(facts: ProjectFacts) -> List[RuleCheck]:
+    checks = [
+        _check_bool(
+            "GENERAL",
+            "Flats / maisonettes",
+            "Householder PD rights",
+            not is_flat_or_maisonette(facts),
+            True,
+            "Flats and maisonettes do not normally benefit from standard householder permitted development rights.",
+            "The property is not identified as a flat or maisonette.",
+            required="Single dwellinghouse, not a flat/maisonette",
+            severity="HIGH",
+        ),
+        _check_bool(
+            "GENERAL",
+            "Single dwellinghouse",
+            "Property must be a single dwellinghouse",
+            facts.is_single_dwellinghouse,
+            True,
+            "The property is not confirmed as a single dwellinghouse.",
+            "The property is confirmed as a single dwellinghouse.",
+            required="Single dwellinghouse",
+            severity="HIGH",
+        ),
+        _check_bool(
+            "GENERAL",
+            "Part 3 change of use exclusion",
+            "House not created by Classes M/N/P/PA/Q",
+            facts.created_by_part3_change_of_use_mnp_pa_q,
+            False,
+            "PD rights under Part 1 do not apply where the house was created only by specified Part 3 change of use rights.",
+            "No Part 3 M/N/P/PA/Q creation issue identified.",
+            required="Not created solely under Classes M/N/P/PA/Q",
+            severity="HIGH",
+        ),
+        _check_bool(
+            "GENERAL",
+            "Article 4 / condition",
+            "PD rights not removed",
+            bool(facts.article_4_direction or facts.pd_rights_removed_by_condition),
+            False,
+            "PD rights may have been removed by Article 4 Direction or planning condition.",
+            "No Article 4 Direction or PD removal condition identified from supplied facts.",
+            required="No Article 4 / no PD removal condition",
+            severity="HIGH",
+        ),
+    ]
     return checks
 
 
 # -----------------------------------------------------------------------------
-# Class A - extensions / enlargements
+# Class A – enlargement, improvement or alteration
 # -----------------------------------------------------------------------------
 
 
-def check_class_a_extension(
-    project_types: List[str],
-    property_type: str,
-    measurements: Dict[str, Any],
-    pd_answers: Dict[str, Any],
-    detected_features: Optional[Dict[str, Any]] = None,
-) -> List[RuleCheck]:
-    checks: List[RuleCheck] = []
-    text = _project_text(project_types, detected_features)
-    category = _property_category(property_type)
+def check_class_a(facts: ProjectFacts) -> ClassResult:
+    if not facts.includes_class_a_extension_or_alteration:
+        return ClassResult("Class A", "Enlargement, improvement or alteration", RouteStatus.NOT_APPLICABLE, [], _summary_for_status(RouteStatus.NOT_APPLICABLE))
 
-    class_a_relevant = _contains_any(
-        text,
-        [
-            "rear extension",
-            "side extension",
-            "infill extension",
-            "wraparound",
-            "wrap around",
-            "first floor extension",
-            "single-storey rear extension",
-            "single_storey_rear_extension",
-        ],
+    checks: List[RuleCheck] = []
+
+    # A.1(a) Part 3 change of use exclusion
+    checks.append(
+        _check_bool(
+            "Class A",
+            "A.1(a)",
+            "Not created by specified Part 3 change of use rights",
+            facts.created_by_part3_change_of_use_mnp_pa_q,
+            False,
+            "Class A does not apply where the house was created only by specified Part 3 change of use rights.",
+            "No Part 3 M/N/P/PA/Q creation issue identified.",
+            required="False",
+            severity="HIGH",
+        )
     )
-    if not class_a_relevant:
-        return [
-            _make_check(
-                "A-00",
-                "Class A relevance",
-                RuleStatus.NOT_APPLICABLE,
-                "Class A applies to enlargement, improvement or alteration to a house.",
-                "No Class A extension feature identified.",
-            )
-        ]
 
-    # Forward of principal elevation / side elevation fronting highway
-    forward = _get_answer(pd_answers, "forward_of_principal_elevation", "projects_forward_principal")
-    if _is_yes(forward):
-        checks.append(
-            _make_check(
-                "A-01",
-                "Principal elevation / highway side elevation",
-                RuleStatus.FAIL,
-                "Class A does not permit enlargement beyond the principal elevation or a side elevation fronting a highway.",
-                "User/plans indicate projection beyond the principal elevation or highway-facing side elevation.",
-                "Full planning permission is likely required.",
-            )
+    # A.1(b) 50% curtilage coverage
+    checks.append(
+        _check_max(
+            "Class A",
+            "A.1(b)",
+            "Total ground covered by buildings within curtilage",
+            facts.curtilage_coverage_percent_excluding_original_house,
+            50,
+            "%",
+            "Curtilage coverage calculation not confirmed.",
+            "The 50% curtilage coverage limit appears to be exceeded.",
         )
-    elif _is_no(forward):
+    )
+
+    # A.1(c) height not above highest roof
+    if facts.extension_height_m is not None and facts.existing_house_highest_roof_height_m is not None:
         checks.append(
-            _make_check(
-                "A-01",
-                "Principal elevation / highway side elevation",
-                RuleStatus.PASS,
-                "The works must not project beyond the principal elevation or a highway-facing side elevation.",
-                "No forward/highway-side projection indicated.",
+            _check_max(
+                "Class A",
+                "A.1(c)",
+                "Height of enlarged part below highest existing roof",
+                facts.extension_height_m,
+                facts.existing_house_highest_roof_height_m,
+                "m",
+                fail_reason="The enlarged part would exceed the highest part of the existing roof.",
             )
         )
     else:
-        checks.append(
-            _make_check(
-                "A-01",
-                "Principal elevation / highway side elevation",
-                RuleStatus.NEEDS_CONFIRMATION,
-                "The works must not project beyond the principal elevation or a highway-facing side elevation.",
-                "Not confirmed from inputs.",
-                "Check proposed site/block plan and elevations.",
-            )
-        )
+        checks.append(RuleCheck("Class A", "A.1(c)", "Height of enlarged part below highest existing roof", RuleStatus.NEEDS_CONFIRMATION, "Extension height and/or existing roof height not confirmed.", required="Extension height ≤ highest existing roof"))
 
-    overall_height = _get_measure(measurements, "overall_height_m", "height_m", "maximum_height_m")
-    if overall_height is None:
+    # A.1(d) eaves not above existing eaves
+    if facts.extension_eaves_height_m is not None and facts.existing_house_eaves_height_m is not None:
         checks.append(
-            _make_check(
-                "A-02",
-                "Overall height",
-                RuleStatus.NEEDS_CONFIRMATION,
-                "Single-storey Class A rear/side extensions must not exceed 4.0m in height.",
-                "Overall height not confirmed.",
-                "Confirm height from proposed elevations/sections.",
-            )
-        )
-    elif overall_height <= 4.0:
-        checks.append(
-            _make_check(
-                "A-02",
-                "Overall height",
-                RuleStatus.PASS,
-                "Single-storey Class A rear/side extensions must not exceed 4.0m in height.",
-                f"Overall height: {overall_height:.2f}m.",
+            _check_max(
+                "Class A",
+                "A.1(d)",
+                "Eaves height not above existing eaves",
+                facts.extension_eaves_height_m,
+                facts.existing_house_eaves_height_m,
+                "m",
+                fail_reason="The extension eaves would exceed the eaves height of the existing house.",
             )
         )
     else:
+        checks.append(RuleCheck("Class A", "A.1(d)", "Eaves height not above existing eaves", RuleStatus.NEEDS_CONFIRMATION, "Extension eaves height and/or existing eaves height not confirmed.", required="Extension eaves ≤ existing eaves"))
+
+    # A.1(e)
+    checks.append(
+        _check_bool(
+            "Class A",
+            "A.1(e)(i)",
+            "Does not project beyond principal elevation",
+            facts.projects_beyond_principal_elevation,
+            False,
+            "Development forward of the principal elevation is not permitted by Class A.",
+            "No projection beyond the principal elevation identified.",
+            required="False",
+            severity="HIGH",
+        )
+    )
+    checks.append(
+        _check_bool(
+            "Class A",
+            "A.1(e)(ii)",
+            "Does not project beyond side elevation fronting highway",
+            facts.projects_beyond_side_elevation_fronting_highway,
+            False,
+            "Development forward of a side elevation fronting a highway is not permitted by Class A.",
+            "No projection beyond a side elevation fronting a highway identified.",
+            required="False",
+            severity="HIGH",
+        )
+    )
+
+    # A.1(f)/(g) single-storey rear extension and larger home extension
+    prior_approval_candidate = False
+    if facts.includes_single_storey_rear_extension:
+        depth = facts.total_rear_projection_joined_enlargement_m or facts.rear_projection_from_original_wall_m or facts.rear_projection_m
+        standard_limit = 4.0 if is_detached(facts) else 3.0
+        larger_limit = 8.0 if is_detached(facts) else 6.0
         checks.append(
-            _make_check(
-                "A-02",
-                "Overall height",
-                RuleStatus.FAIL,
-                "Single-storey Class A rear/side extensions must not exceed 4.0m in height.",
-                f"Overall height: {overall_height:.2f}m.",
-                "Reduce height or use full planning route.",
+            _check_max(
+                "Class A",
+                "A.1(f)(ii) / A.1(g)(ii)",
+                "Single-storey rear extension overall height",
+                facts.extension_height_m,
+                4.0,
+                "m",
+                fail_reason="Single-storey rear extension exceeds 4.0m overall height.",
             )
         )
 
-    # Eaves where within 2m boundary
-    within_2m = _get_answer(pd_answers, "within_2m_boundary", "within_2m_of_boundary")
-    eaves_height = _get_measure(measurements, "eaves_height_m", "boundary_eaves_height_m")
-    if _is_yes(within_2m):
-        if eaves_height is None:
-            checks.append(
-                _make_check(
-                    "A-03",
-                    "Eaves height within 2m of boundary",
-                    RuleStatus.NEEDS_CONFIRMATION,
-                    "If any part of the extension is within 2m of the boundary, eaves must not exceed 3.0m.",
-                    "Within 2m of boundary indicated, but eaves height not confirmed.",
-                    "Confirm eaves height from section/elevation.",
-                )
-            )
-        elif eaves_height <= 3.0:
-            checks.append(
-                _make_check(
-                    "A-03",
-                    "Eaves height within 2m of boundary",
-                    RuleStatus.PASS,
-                    "If any part of the extension is within 2m of the boundary, eaves must not exceed 3.0m.",
-                    f"Boundary eaves height: {eaves_height:.2f}m.",
-                )
-            )
-        else:
-            checks.append(
-                _make_check(
-                    "A-03",
-                    "Eaves height within 2m of boundary",
-                    RuleStatus.FAIL,
-                    "If any part of the extension is within 2m of the boundary, eaves must not exceed 3.0m.",
-                    f"Boundary eaves height: {eaves_height:.2f}m.",
-                    "Reduce eaves height or use full planning route.",
-                )
-            )
-    elif _is_no(within_2m):
-        checks.append(
-            _make_check(
-                "A-03",
-                "Eaves height within 2m of boundary",
-                RuleStatus.NOT_APPLICABLE,
-                "The 3.0m boundary eaves limit applies where the extension is within 2m of the boundary.",
-                "Extension not indicated within 2m of boundary.",
-            )
-        )
-    else:
-        checks.append(
-            _make_check(
-                "A-03",
-                "Eaves height within 2m of boundary",
-                RuleStatus.NEEDS_CONFIRMATION,
-                "If any part of the extension is within 2m of the boundary, eaves must not exceed 3.0m.",
-                "Boundary relationship not confirmed.",
-                "Confirm boundary distances and eaves height.",
-            )
-        )
-
-    # Rear extension depth / prior approval
-    rear_relevant = _contains_any(text, ["rear extension", "single-storey rear extension", "single_storey_rear_extension"])
-    if rear_relevant:
-        depth = _get_measure(measurements, "rear_depth_m", "depth_m", "projection_m")
-        if category == "detached":
-            standard_limit, prior_limit = 4.0, 8.0
-            prop_label = "detached"
-        else:
-            standard_limit, prior_limit = 3.0, 6.0
-            prop_label = "non-detached"
         if depth is None:
-            checks.append(
-                _make_check(
-                    "A-04",
-                    "Single-storey rear extension depth",
-                    RuleStatus.NEEDS_CONFIRMATION,
-                    f"For a {prop_label} house, standard Class A rear extension depth is {standard_limit:.0f}m; larger home extension prior approval may allow up to {prior_limit:.0f}m.",
-                    "Rear extension depth not confirmed.",
-                    "Confirm depth from original rear wall, not from existing extension unless it is original.",
-                )
-            )
+            checks.append(RuleCheck("Class A", "A.1(f)/(g)", "Rear projection from original rear wall", RuleStatus.NEEDS_CONFIRMATION, "Rear projection from the original rear wall is not confirmed.", required=f"≤ {standard_limit:g}m standard PD or ≤ {larger_limit:g}m prior approval"))
         elif depth <= standard_limit:
-            checks.append(
-                _make_check(
-                    "A-04",
-                    "Single-storey rear extension depth",
-                    RuleStatus.PASS,
-                    f"For a {prop_label} house, standard Class A rear extension depth must not exceed {standard_limit:.0f}m.",
-                    f"Rear projection: {depth:.2f}m.",
-                )
-            )
-        elif depth <= prior_limit:
-            checks.append(
-                _make_check(
-                    "A-04",
-                    "Larger home extension prior approval depth",
-                    RuleStatus.PASS,
-                    f"For a {prop_label} house, larger home extension prior approval may allow rear projection up to {prior_limit:.0f}m, subject to neighbour consultation and Class A conditions.",
-                    f"Rear projection: {depth:.2f}m.",
-                    "Prior approval route likely required rather than standard PD/LDC.",
-                )
-            )
-        else:
-            checks.append(
-                _make_check(
-                    "A-04",
-                    "Single-storey rear extension depth",
-                    RuleStatus.FAIL,
-                    f"For a {prop_label} house, the larger home extension prior approval depth limit is {prior_limit:.0f}m.",
-                    f"Rear projection: {depth:.2f}m.",
-                    "Full planning permission is likely required.",
-                )
-            )
-
-    # Side extension width/height/storey
-    side_relevant = _contains_any(text, ["side extension", "infill extension", "wraparound", "wrap around"])
-    if side_relevant:
-        side_width_ratio = _get_measure(measurements, "side_width_ratio", "side_width_fraction")
-        side_more_than_half = _get_answer(pd_answers, "side_extension_width", "side_more_than_half_width")
-        if side_width_ratio is not None:
-            if side_width_ratio <= 0.5:
-                status = RuleStatus.PASS
-                evidence = f"Side extension width ratio: {side_width_ratio:.2f} of original house width."
-                action = ""
+            checks.append(RuleCheck("Class A", "A.1(f)", "Rear projection from original rear wall", RuleStatus.PASS, f"{depth:g}m is within standard Class A rear extension depth.", required=f"≤ {standard_limit:g}m", actual=f"{depth:g}m", severity="LOW"))
+        elif depth <= larger_limit:
+            prior_approval_candidate = True
+            if facts.article_2_3_land or facts.sssi:
+                checks.append(RuleCheck("Class A", "A.1(g)", "Larger home extension eligibility", RuleStatus.FAIL, "The larger home extension prior approval route is not available on Article 2(3) land or SSSI land.", required="Not Article 2(3) land / not SSSI", actual="Constrained land", severity="HIGH"))
+            elif facts.article_2_3_land is None or facts.sssi is None:
+                checks.append(RuleCheck("Class A", "A.1(g)", "Larger home extension eligibility", RuleStatus.NEEDS_CONFIRMATION, "Article 2(3) land / SSSI status must be confirmed for larger home extension prior approval.", required="Not Article 2(3) land / not SSSI", actual=f"{depth:g}m"))
             else:
-                status = RuleStatus.FAIL
-                evidence = f"Side extension width ratio: {side_width_ratio:.2f} of original house width."
-                action = "Reduce width or use full planning route."
-        elif _is_yes(side_more_than_half):
-            status = RuleStatus.FAIL
-            evidence = "Input indicates side extension is more than half the width of the original house."
-            action = "Full planning permission is likely required."
-        elif _is_no(side_more_than_half):
-            status = RuleStatus.PASS
-            evidence = "Input indicates side extension is not more than half the original house width."
-            action = ""
+                checks.append(RuleCheck("Class A", "A.1(g)", "Rear projection within larger home extension limit", RuleStatus.PASS, f"{depth:g}m is within the larger home extension prior approval depth limit.", required=f"> {standard_limit:g}m and ≤ {larger_limit:g}m", actual=f"{depth:g}m", severity="LOW"))
         else:
-            status = RuleStatus.NEEDS_CONFIRMATION
-            evidence = "Side extension width not confirmed."
-            action = "Confirm original house width and proposed side extension width."
-        checks.append(
-            _make_check(
-                "A-05",
-                "Side extension width",
-                status,
-                "A side extension must not be wider than half the width of the original dwellinghouse.",
-                evidence,
-                action,
-            )
-        )
+            checks.append(RuleCheck("Class A", "A.1(f)/(g)", "Rear projection from original rear wall", RuleStatus.FAIL, f"{depth:g}m exceeds the maximum larger home extension depth limit.", required=f"≤ {larger_limit:g}m", actual=f"{depth:g}m", severity="HIGH"))
 
-        more_than_single_storey = _get_answer(pd_answers, "side_more_than_single_storey", "side_extension_more_than_single_storey")
-        if _is_yes(more_than_single_storey):
-            checks.append(
-                _make_check(
-                    "A-06",
-                    "Side extension storey limit",
-                    RuleStatus.FAIL,
-                    "A side extension under Class A must be single storey.",
-                    "Input indicates more than single storey.",
-                    "Full planning permission is likely required.",
-                )
-            )
-        elif _is_no(more_than_single_storey):
-            checks.append(
-                _make_check(
-                    "A-06",
-                    "Side extension storey limit",
-                    RuleStatus.PASS,
-                    "A side extension under Class A must be single storey.",
-                    "Input indicates single storey.",
-                )
-            )
-        else:
-            checks.append(
-                _make_check(
-                    "A-06",
-                    "Side extension storey limit",
-                    RuleStatus.NEEDS_CONFIRMATION,
-                    "A side extension under Class A must be single storey.",
-                    "Storey height not confirmed.",
-                    "Confirm from plans/elevations.",
-                )
-            )
+    # A.1(h) multi-storey rear
+    if facts.includes_more_than_one_storey_extension:
+        depth = facts.total_rear_projection_joined_enlargement_m or facts.rear_projection_from_original_wall_m or facts.rear_projection_m
+        checks.append(_check_max("Class A", "A.1(h)(i)", "Multi-storey rear projection", depth, 3.0, "m", fail_reason="More-than-one-storey enlargement projects beyond rear wall by more than 3m."))
+        checks.append(_check_min("Class A", "A.1(h)(ii)", "Distance to rear boundary opposite rear wall", facts.rear_boundary_distance_m, 7.0, "m", fail_reason="More-than-one-storey enlargement is within 7m of the rear boundary opposite the rear wall."))
 
-    # More than one storey rear / first floor
-    first_floor_relevant = _contains_any(text, ["first floor extension", "two storey", "2 storey", "upper storey"])
-    if first_floor_relevant:
-        rear_depth = _get_measure(measurements, "rear_depth_m", "depth_m", "projection_m")
-        rear_boundary_distance = _get_measure(measurements, "rear_boundary_distance_m", "distance_to_rear_boundary_m")
-        if rear_depth is None:
-            depth_status = RuleStatus.NEEDS_CONFIRMATION
-            depth_ev = "Upper-storey rear projection not confirmed."
-            depth_action = "Confirm projection from original rear wall."
-        elif rear_depth <= 3.0:
-            depth_status = RuleStatus.PASS
-            depth_ev = f"Upper-storey rear projection: {rear_depth:.2f}m."
-            depth_action = ""
-        else:
-            depth_status = RuleStatus.FAIL
-            depth_ev = f"Upper-storey rear projection: {rear_depth:.2f}m."
-            depth_action = "Full planning permission is likely required."
-        checks.append(
-            _make_check(
-                "A-07",
-                "More than single-storey rear projection",
-                depth_status,
-                "A rear enlargement with more than one storey must not extend beyond the original rear wall by more than 3.0m.",
-                depth_ev,
-                depth_action,
-            )
-        )
-        if rear_boundary_distance is None:
-            status = RuleStatus.NEEDS_CONFIRMATION
-            evidence = "Distance to rear boundary not confirmed."
-            action = "Confirm distance to rear boundary opposite rear wall."
-        elif rear_boundary_distance >= 7.0:
-            status = RuleStatus.PASS
-            evidence = f"Distance to rear boundary: {rear_boundary_distance:.2f}m."
-            action = ""
-        else:
-            status = RuleStatus.FAIL
-            evidence = f"Distance to rear boundary: {rear_boundary_distance:.2f}m."
-            action = "Full planning permission is likely required."
-        checks.append(
-            _make_check(
-                "A-08",
-                "More than single-storey rear boundary distance",
-                status,
-                "A rear enlargement with more than one storey must be at least 7.0m from the rear boundary opposite the rear wall.",
-                evidence,
-                action,
-            )
-        )
-
-    # Materials
-    materials = _get_answer(pd_answers, "materials_similar", "similar_materials")
-    if _is_yes(materials):
-        checks.append(
-            _make_check(
-                "A-09",
-                "Materials similar appearance",
-                RuleStatus.PASS,
-                "Class A requires exterior materials to be of similar appearance to the existing dwellinghouse.",
-                "Similar materials indicated.",
-            )
-        )
-    elif _is_no(materials):
-        checks.append(
-            _make_check(
-                "A-09",
-                "Materials similar appearance",
-                RuleStatus.FAIL,
-                "Class A requires exterior materials to be of similar appearance to the existing dwellinghouse.",
-                "Similar materials not confirmed / indicated no.",
-                "Revise materials or use full planning route.",
-            )
-        )
+    # A.1(i) eaves within 2m boundary
+    if facts.within_2m_boundary is True:
+        checks.append(_check_max("Class A", "A.1(i)", "Eaves height within 2m of boundary", facts.extension_eaves_height_m, 3.0, "m", fail_reason="Eaves exceed 3.0m within 2m of a boundary."))
+    elif facts.within_2m_boundary is None:
+        checks.append(RuleCheck("Class A", "A.1(i)", "Eaves height within 2m of boundary", RuleStatus.NEEDS_CONFIRMATION, "Whether the extension is within 2m of a boundary is not confirmed.", required="If within 2m, eaves ≤ 3.0m"))
     else:
-        checks.append(
-            _make_check(
-                "A-09",
-                "Materials similar appearance",
-                RuleStatus.NEEDS_CONFIRMATION,
-                "Class A requires exterior materials to be of similar appearance to the existing dwellinghouse.",
-                "Materials not confirmed.",
-                "Add materials note to drawings.",
-            )
-        )
+        checks.append(RuleCheck("Class A", "A.1(i)", "Eaves height within 2m of boundary", RuleStatus.NOT_APPLICABLE, "Extension is not within 2m of a boundary.", required="If within 2m, eaves ≤ 3.0m", severity="LOW"))
 
-    # 50% curtilage coverage
-    coverage = _get_measure(measurements, "curtilage_coverage_percent", "coverage_percent")
-    if coverage is None:
+    # A.1(j) side extension
+    if facts.includes_side_extension or facts.includes_rear_and_side_extension:
+        checks.append(_check_max("Class A", "A.1(j)(i)", "Side extension height", facts.side_extension_height_m or facts.extension_height_m, 4.0, "m", fail_reason="Side extension exceeds 4.0m height."))
         checks.append(
-            _make_check(
-                "A-10",
-                "50% curtilage coverage",
-                RuleStatus.NEEDS_CONFIRMATION,
-                "The total area of ground covered by buildings within the curtilage, excluding the original house, must not exceed 50% of the curtilage.",
-                "Curtilage coverage not confirmed.",
-                "Provide garden/curtilage coverage calculation if relying on PD.",
+            _check_bool(
+                "Class A",
+                "A.1(j)(ii)",
+                "Side extension single storey only",
+                facts.side_extension_single_storey,
+                True,
+                "Side extension has more than one storey.",
+                "Side extension is single storey.",
+                required="Single storey",
+                severity="HIGH",
             )
         )
-    elif coverage <= 50:
-        checks.append(
-            _make_check(
-                "A-10",
-                "50% curtilage coverage",
-                RuleStatus.PASS,
-                "The total area of ground covered by buildings within the curtilage, excluding the original house, must not exceed 50% of the curtilage.",
-                f"Coverage: {coverage:.1f}%.",
-            )
-        )
+        if facts.side_extension_width_m is not None and facts.original_house_width_m:
+            half_width = facts.original_house_width_m / 2
+            checks.append(_check_max("Class A", "A.1(j)(iii)", "Side extension width", facts.side_extension_width_m, half_width, "m", fail_reason="Side extension width is greater than half the width of the original house."))
+        else:
+            checks.append(RuleCheck("Class A", "A.1(j)(iii)", "Side extension width", RuleStatus.NEEDS_CONFIRMATION, "Side extension width and/or original house width not confirmed.", required="≤ half width of original house"))
+
+    # A.1(ja) total enlargement
+    if facts.total_rear_projection_joined_enlargement_m is not None:
+        checks.append(RuleCheck("Class A", "A.1(ja)", "Total enlargement joined to existing enlargement", RuleStatus.PASS, "Total enlargement value supplied and included in relevant checks.", actual=f"{facts.total_rear_projection_joined_enlargement_m:g}m", severity="LOW"))
     else:
-        checks.append(
-            _make_check(
-                "A-10",
-                "50% curtilage coverage",
-                RuleStatus.FAIL,
-                "The total area of ground covered by buildings within the curtilage, excluding the original house, must not exceed 50% of the curtilage.",
-                f"Coverage: {coverage:.1f}%.",
-                "Full planning permission is likely required.",
-            )
-        )
+        checks.append(RuleCheck("Class A", "A.1(ja)", "Total enlargement joined to existing enlargement", RuleStatus.NEEDS_CONFIRMATION, "Confirm whether the proposal joins any existing enlargement; if so, total enlargement limits apply.", required="Total enlargement must meet A.1(e)-(j)"))
 
-    return checks
+    # A.1(k)
+    checks.append(_check_bool("Class A", "A.1(k)(i)", "No verandah, balcony or raised platform", facts.includes_verandah_balcony_or_raised_platform, False, "Class A does not permit verandahs, balconies or raised platforms.", "No verandah, balcony or raised platform identified.", required="False", severity="HIGH"))
+    checks.append(_check_bool("Class A", "A.1(k)(ii)", "No microwave antenna under Class A", facts.includes_microwave_antenna, False, "Microwave antennas are not permitted under Class A; consider Class H.", "No microwave antenna included under Class A.", required="False"))
+    checks.append(_check_bool("Class A", "A.1(k)(iii)", "No chimney/flue/SVP under Class A", facts.includes_chimney_flue_or_svp, False, "Chimneys, flues and soil vent pipes are not permitted under Class A; consider Class G.", "No chimney/flue/SVP included under Class A.", required="False"))
+    checks.append(_check_bool("Class A", "A.1(k)(iv)", "No alteration to roof under Class A", facts.alters_roof_under_class_a, False, "Roof alterations are not permitted under Class A; consider Class B or Class C.", "No Class A roof alteration identified.", required="False"))
+
+    # A.2 Article 2(3) land additional restrictions
+    if facts.article_2_3_land is True:
+        checks.append(_check_bool("Class A", "A.2(a)", "No exterior cladding on Article 2(3) land", facts.includes_external_cladding_article_2_3, False, "Exterior cladding is not permitted development on Article 2(3) land.", "No exterior cladding identified.", required="False", severity="HIGH"))
+        checks.append(_check_bool("Class A", "A.2(b)", "No side extension on Article 2(3) land", facts.includes_side_extension or facts.includes_rear_and_side_extension, False, "Extensions beyond a side wall are not permitted development on Article 2(3) land.", "No side extension on Article 2(3) land.", required="False", severity="HIGH"))
+        checks.append(_check_bool("Class A", "A.2(c)", "No multi-storey rear extension on Article 2(3) land", facts.includes_more_than_one_storey_extension, False, "Multi-storey rear extensions are not permitted development on Article 2(3) land.", "No multi-storey rear extension on Article 2(3) land.", required="False", severity="HIGH"))
+
+    # A.3 conditions
+    checks.append(_check_bool("Class A", "A.3(a)", "External materials similar", facts.external_materials_similar, True, "External materials are not confirmed as similar in appearance.", "External materials are confirmed as similar.", required="Similar appearance"))
+    if facts.includes_more_than_one_storey_extension:
+        checks.append(_check_bool("Class A", "A.3(b)", "Upper-floor side windows obscure/non-opening", facts.upper_floor_side_windows_obscure_and_non_opening_1_7m, True, "Upper-floor side windows must be obscure-glazed and non-opening below 1.7m.", "Upper-floor side windows comply.", required="Obscure glazed and non-opening below 1.7m"))
+        checks.append(_check_bool("Class A", "A.3(c)", "Roof pitch matches original", facts.roof_pitch_matches_original_for_multi_storey, True, "Roof pitch of multi-storey enlargement must match original so far as practicable.", "Roof pitch condition satisfied.", required="Match original so far as practicable"))
+
+    status = _class_status_from_checks(checks, prior_approval_candidate=prior_approval_candidate)
+    return ClassResult("Class A", "Enlargement, improvement or alteration", status, checks, _summary_for_status(status))
 
 
 # -----------------------------------------------------------------------------
-# Class B - loft / dormer / roof enlargement
+# Class B – roof enlargement
 # -----------------------------------------------------------------------------
 
 
-def check_class_b_roof_enlargement(
-    project_types: List[str],
-    property_type: str,
-    measurements: Dict[str, Any],
-    pd_answers: Dict[str, Any],
-    detected_features: Optional[Dict[str, Any]] = None,
-) -> List[RuleCheck]:
+def check_class_b(facts: ProjectFacts) -> ClassResult:
+    if not facts.includes_roof_enlargement_class_b:
+        return ClassResult("Class B", "Additions etc. to the roof", RouteStatus.NOT_APPLICABLE, [], _summary_for_status(RouteStatus.NOT_APPLICABLE))
+
     checks: List[RuleCheck] = []
-    text = _project_text(project_types, detected_features)
-    relevant = _contains_any(text, ["loft", "dormer", "roof enlargement", "rear_dormer", "gable", "hip to gable"])
-    if not relevant:
-        return [
-            _make_check("B-00", "Class B relevance", RuleStatus.NOT_APPLICABLE, "Class B applies to roof enlargements such as dormers.", "No Class B feature identified.")
-        ]
+    checks.append(_check_bool("Class B", "B.1(a)", "Not created by specified Part 3 change of use rights", facts.created_by_part3_change_of_use_mnp_pa_q, False, "Class B does not apply where the house was created only by specified Part 3 change of use rights.", "No Part 3 M/N/P/PA/Q creation issue identified.", required="False", severity="HIGH"))
+    checks.append(_check_bool("Class B", "B.1(b)", "Does not exceed highest existing roof", facts.roof_enlargement_exceeds_highest_roof, False, "Roof enlargement exceeds the highest part of the existing roof.", "Roof enlargement does not exceed the highest existing roof.", required="False", severity="HIGH"))
+    checks.append(_check_bool("Class B", "B.1(c)", "No enlargement beyond principal roof slope fronting highway", facts.roof_enlargement_on_principal_roof_slope_fronting_highway, False, "Roof enlargement on the principal roof slope fronting a highway is not permitted under Class B.", "No principal highway-facing roof enlargement identified.", required="False", severity="HIGH"))
 
-    constraints = _get_answer(pd_answers, "site_constraints", "constraints")
-    if any(x in constraints for x in ["conservation", "article 2", "aonb", "national park", "world heritage"]):
-        checks.append(
-            _make_check(
-                "B-01",
-                "Article 2(3) land",
-                RuleStatus.FAIL,
-                "Class B roof enlargements are not permitted development on Article 2(3) land.",
-                f"Constraint input: {constraints}",
-                "Use full planning route if confirmed.",
-            )
-        )
-    elif constraints:
-        checks.append(_make_check("B-01", "Article 2(3) land", RuleStatus.PASS, "Class B is restricted on Article 2(3) land.", f"Constraint input: {constraints}"))
+    volume_limit = 40.0 if is_terrace(facts) else 50.0
+    checks.append(_check_max("Class B", "B.1(d)", "Additional roof volume", facts.added_roof_volume_m3, volume_limit, "m³", fail_reason=f"Additional roof volume exceeds the {volume_limit:g}m³ Class B allowance."))
+
+    checks.append(_check_bool("Class B", "B.1(e)(i)", "No roof balcony/verandah/raised platform", facts.includes_roof_balcony_verandah_platform, False, "Class B does not permit balconies, verandahs or raised platforms.", "No roof balcony/verandah/platform identified.", required="False", severity="HIGH"))
+    checks.append(_check_bool("Class B", "B.1(e)(ii)", "No chimney/flue/SVP under Class B", facts.includes_chimney_flue_or_svp, False, "Chimneys, flues and SVPs are not permitted under Class B; consider Class G.", "No chimney/flue/SVP included under Class B.", required="False"))
+    checks.append(_check_bool("Class B", "B.1(f)", "Not on Article 2(3) land", facts.article_2_3_land, False, "Class B roof enlargements are not permitted development on Article 2(3) land.", "Not identified as Article 2(3) land.", required="False", severity="HIGH"))
+
+    # Conditions B.2
+    checks.append(_check_bool("Class B", "B.2(a)", "Roof materials similar", facts.roof_materials_similar, True, "Roof enlargement materials are not confirmed as similar in appearance.", "Roof materials are confirmed as similar.", required="Similar appearance"))
+
+    setback_exempt = bool(facts.roof_enlargement_is_hip_to_gable or facts.roof_enlargement_joins_original_to_rear_or_side_extension_roof)
+    if not setback_exempt:
+        checks.append(_check_bool("Class B", "B.2(b)(i)(aa)", "Original eaves maintained or reinstated", facts.original_roof_eaves_maintained_or_reinstated, True, "Original roof eaves must be maintained or reinstated.", "Original eaves maintained/reinstated.", required="True"))
+        checks.append(_check_min("Class B", "B.2(b)(i)(bb)", "Eaves setback", facts.roof_enlargement_eaves_setback_m, 0.2, "m", fail_reason="Roof enlargement is less than 0.2m from the eaves where the setback condition applies."))
+        checks.append(_check_bool("Class B", "B.2(b)(ii)", "Does not extend beyond outside wall face", facts.roof_enlargement_extends_beyond_outer_wall_face, False, "Roof enlargement must not extend beyond the outside face of any external wall of the original house.", "No extension beyond outside wall face identified.", required="False", severity="HIGH"))
     else:
-        checks.append(_make_check("B-01", "Article 2(3) land", RuleStatus.NEEDS_CONFIRMATION, "Class B is restricted on Article 2(3) land.", "Constraint status not confirmed.", "Check conservation / Article 2(3) status."))
+        checks.append(RuleCheck("Class B", "B.2(b)", "Hip-to-gable / roof-joining exception", RuleStatus.NOT_APPLICABLE, "The 0.2m eaves setback / wall-face condition may be exempt or modified for hip-to-gable or roof-joining enlargements.", severity="LOW"))
 
-    front_roof = _get_answer(pd_answers, "front_roof_plane_highway", "front_roof_slope_highway")
-    if _is_yes(front_roof):
-        checks.append(_make_check("B-02", "Principal roof slope facing highway", RuleStatus.FAIL, "Class B does not permit roof enlargement extending beyond the plane of the principal roof slope facing a highway.", "Front/highway roof projection indicated.", "Full planning permission is likely required."))
-    elif _is_no(front_roof):
-        checks.append(_make_check("B-02", "Principal roof slope facing highway", RuleStatus.PASS, "Class B does not permit roof enlargement extending beyond the plane of the principal roof slope facing a highway.", "No front/highway roof projection indicated."))
-    else:
-        checks.append(_make_check("B-02", "Principal roof slope facing highway", RuleStatus.NEEDS_CONFIRMATION, "Class B does not permit roof enlargement extending beyond the plane of the principal roof slope facing a highway.", "Not confirmed.", "Confirm dormer/roof enlargement is to rear/acceptable roof plane only."))
+    checks.append(_check_bool("Class B", "B.2(c)", "Side windows obscure/non-opening", facts.roof_side_windows_obscure_and_non_opening_1_7m, True, "Side windows must be obscure-glazed and non-opening below 1.7m.", "Side windows comply or are not proposed.", required="Obscure glazed and non-opening below 1.7m"))
 
-    above_roof = _get_answer(pd_answers, "above_existing_roof_height", "above_highest_roof")
-    if _is_yes(above_roof):
-        checks.append(_make_check("B-03", "Highest roof height", RuleStatus.FAIL, "Class B roof enlargement must not exceed the highest part of the existing roof.", "Input indicates it exceeds the highest roof.", "Full planning permission is likely required."))
-    elif _is_no(above_roof):
-        checks.append(_make_check("B-03", "Highest roof height", RuleStatus.PASS, "Class B roof enlargement must not exceed the highest part of the existing roof.", "Input indicates it stays below/within the highest roof."))
-    else:
-        checks.append(_make_check("B-03", "Highest roof height", RuleStatus.NEEDS_CONFIRMATION, "Class B roof enlargement must not exceed the highest part of the existing roof.", "Not confirmed.", "Confirm ridge/highest roof relationship on elevations/sections."))
-
-    roof_volume = _get_measure(measurements, "roof_volume_added_m3", "added_roof_volume_m3")
-    category = _property_category(property_type)
-    volume_limit = 40.0 if category == "terrace" else 50.0
-    if roof_volume is None:
-        checks.append(_make_check("B-04", "Roof volume allowance", RuleStatus.NEEDS_CONFIRMATION, f"Class B roof volume allowance is 40m³ for terrace houses and 50m³ for other houses. Applicable limit appears to be {volume_limit:.0f}m³.", "Added roof volume not confirmed.", "Provide roof volume calculation."))
-    elif roof_volume <= volume_limit:
-        checks.append(_make_check("B-04", "Roof volume allowance", RuleStatus.PASS, f"Class B roof volume allowance appears to be {volume_limit:.0f}m³ for this property type.", f"Added roof volume: {roof_volume:.1f}m³."))
-    else:
-        checks.append(_make_check("B-04", "Roof volume allowance", RuleStatus.FAIL, f"Class B roof volume allowance appears to be {volume_limit:.0f}m³ for this property type.", f"Added roof volume: {roof_volume:.1f}m³.", "Full planning permission is likely required."))
-
-    eaves_setback = _get_answer(pd_answers, "eaves_setback_0_2m", "eaves_setback_200mm")
-    if _is_yes(eaves_setback):
-        checks.append(_make_check("B-05", "200mm eaves setback", RuleStatus.PASS, "The roof enlargement should normally be set back at least 0.2m from the original eaves, measured along the roof slope.", "200mm setback indicated."))
-    elif _is_no(eaves_setback):
-        checks.append(_make_check("B-05", "200mm eaves setback", RuleStatus.FAIL, "The roof enlargement should normally be set back at least 0.2m from the original eaves, unless an exception applies.", "Setback not provided.", "Revise dormer set-back or justify exception."))
-    else:
-        checks.append(_make_check("B-05", "200mm eaves setback", RuleStatus.NEEDS_CONFIRMATION, "The roof enlargement should normally be set back at least 0.2m from the original eaves.", "Not confirmed.", "Confirm on elevations/sections."))
-
-    return checks
+    status = _class_status_from_checks(checks)
+    return ClassResult("Class B", "Additions etc. to the roof", status, checks, _summary_for_status(status))
 
 
 # -----------------------------------------------------------------------------
-# Class C - rooflights and non-enlarging roof alterations
+# Class C – other roof alterations
 # -----------------------------------------------------------------------------
 
 
-def check_class_c_rooflights(project_types: List[str], measurements: Dict[str, Any], pd_answers: Dict[str, Any], detected_features: Optional[Dict[str, Any]] = None) -> List[RuleCheck]:
-    text = _project_text(project_types, detected_features)
-    relevant = _contains_any(text, ["rooflight", "roof light", "rooflights", "front_rooflights", "class c"])
-    if not relevant:
-        return [_make_check("C-00", "Class C relevance", RuleStatus.NOT_APPLICABLE, "Class C applies to rooflights and other non-enlarging roof alterations.", "No Class C feature identified.")]
+def check_class_c(facts: ProjectFacts) -> ClassResult:
+    if not facts.includes_roof_alteration_class_c:
+        return ClassResult("Class C", "Other alterations to the roof", RouteStatus.NOT_APPLICABLE, [], _summary_for_status(RouteStatus.NOT_APPLICABLE))
+
     checks: List[RuleCheck] = []
-    protrusion = _get_measure(measurements, "rooflight_projection_m", "rooflight_protrusion_m")
-    if protrusion is None:
-        checks.append(_make_check("C-01", "Rooflight projection", RuleStatus.NEEDS_CONFIRMATION, "Class C roof alterations must not protrude more than 0.15m beyond the plane of the original roof slope.", "Projection not confirmed.", "Confirm rooflight projection detail."))
-    elif protrusion <= 0.15:
-        checks.append(_make_check("C-01", "Rooflight projection", RuleStatus.PASS, "Class C roof alterations must not protrude more than 0.15m beyond the plane of the original roof slope.", f"Projection: {protrusion:.2f}m."))
-    else:
-        checks.append(_make_check("C-01", "Rooflight projection", RuleStatus.FAIL, "Class C roof alterations must not protrude more than 0.15m beyond the plane of the original roof slope.", f"Projection: {protrusion:.2f}m.", "Full planning permission may be required or revise specification."))
+    checks.append(_check_bool("Class C", "C.1(a)", "Not created by specified Part 3 change of use rights", facts.created_by_part3_change_of_use_mnp_pa_q, False, "Class C does not apply where the house was created only by specified Part 3 change of use rights.", "No Part 3 M/N/P/PA/Q creation issue identified.", required="False", severity="HIGH"))
+    checks.append(_check_max("Class C", "C.1(b)", "Roof alteration projection", facts.rooflight_projection_m, 0.15, "m", fail_reason="Roof alteration/rooflight protrudes more than 0.15m beyond the roof plane."))
+    checks.append(_check_bool("Class C", "C.1(c)", "Not higher than original roof", facts.roof_alteration_higher_than_original_roof, False, "Roof alteration is higher than the highest part of the original roof.", "Roof alteration does not exceed original roof height.", required="False", severity="HIGH"))
+    checks.append(_check_bool("Class C", "C.1(d)(i)", "No chimney/flue/SVP under Class C", facts.class_c_includes_chimney_flue_svp, False, "Chimney/flue/SVP works are not permitted under Class C; consider Class G.", "No chimney/flue/SVP under Class C.", required="False"))
+    checks.append(_check_bool("Class C", "C.1(d)(ii)", "No solar equipment under Class C", facts.class_c_includes_solar_equipment, False, "Solar equipment is not permitted under Class C; consider Part 14.", "No solar equipment under Class C.", required="False"))
+    checks.append(_check_bool("Class C", "C.2", "Side roof windows obscure/non-opening", facts.class_c_side_windows_obscure_and_non_opening_1_7m, True, "Side roof windows must be obscure-glazed and non-opening below 1.7m.", "Side roof windows comply or are not proposed.", required="Obscure glazed and non-opening below 1.7m"))
 
-    above_roof = _get_answer(pd_answers, "rooflight_above_highest_roof", "above_highest_roof")
-    if _is_yes(above_roof):
-        checks.append(_make_check("C-02", "Highest roof height", RuleStatus.FAIL, "Class C alteration must not be higher than the highest part of the original roof.", "Input indicates rooflight/alteration above highest roof.", "Revise or seek planning permission."))
-    elif _is_no(above_roof):
-        checks.append(_make_check("C-02", "Highest roof height", RuleStatus.PASS, "Class C alteration must not be higher than the highest part of the original roof.", "Input indicates not above highest roof."))
-    else:
-        checks.append(_make_check("C-02", "Highest roof height", RuleStatus.NEEDS_CONFIRMATION, "Class C alteration must not be higher than the highest part of the original roof.", "Not confirmed.", "Confirm rooflight/alteration height."))
-    return checks
+    status = _class_status_from_checks(checks)
+    return ClassResult("Class C", "Other alterations to the roof", status, checks, _summary_for_status(status))
 
 
 # -----------------------------------------------------------------------------
-# Class D - porch
+# Class D – porches
 # -----------------------------------------------------------------------------
 
 
-def check_class_d_porch(project_types: List[str], measurements: Dict[str, Any], pd_answers: Dict[str, Any], detected_features: Optional[Dict[str, Any]] = None) -> List[RuleCheck]:
-    text = _project_text(project_types, detected_features)
-    if not _contains_any(text, ["porch"]):
-        return [_make_check("D-00", "Class D relevance", RuleStatus.NOT_APPLICABLE, "Class D applies to porches outside an external door.", "No porch feature identified.")]
+def check_class_d(facts: ProjectFacts) -> ClassResult:
+    if not facts.includes_porch_class_d:
+        return ClassResult("Class D", "Porches", RouteStatus.NOT_APPLICABLE, [], _summary_for_status(RouteStatus.NOT_APPLICABLE))
+
     checks: List[RuleCheck] = []
-    area = _get_measure(measurements, "porch_area_m2", "porch_ground_area_m2")
-    height = _get_measure(measurements, "porch_height_m", "overall_height_m")
-    highway_boundary_distance = _get_measure(measurements, "porch_highway_boundary_distance_m", "distance_to_highway_boundary_m")
-    if area is None:
-        checks.append(_make_check("D-01", "Porch ground area", RuleStatus.NEEDS_CONFIRMATION, "Class D porch ground area must not exceed 3m² measured externally.", "Porch area not confirmed.", "Confirm porch area."))
-    elif area <= 3.0:
-        checks.append(_make_check("D-01", "Porch ground area", RuleStatus.PASS, "Class D porch ground area must not exceed 3m² measured externally.", f"Area: {area:.2f}m²."))
+    checks.append(_check_bool("Class D", "D.1(a)", "Not created by specified Part 3 change of use rights", facts.created_by_part3_change_of_use_mnp_pa_q, False, "Class D does not apply where the house was created only by specified Part 3 change of use rights.", "No Part 3 M/N/P/PA/Q creation issue identified.", required="False", severity="HIGH"))
+    checks.append(_check_max("Class D", "D.1(b)", "Porch ground area", facts.porch_ground_area_m2, 3.0, "m²", fail_reason="Porch ground area exceeds 3m²."))
+    checks.append(_check_max("Class D", "D.1(c)", "Porch height", facts.porch_height_m, 3.0, "m", fail_reason="Porch height exceeds 3m."))
+    if facts.porch_distance_to_highway_boundary_m is None:
+        checks.append(RuleCheck("Class D", "D.1(d)", "Distance to highway boundary", RuleStatus.NEEDS_CONFIRMATION, "Distance from porch to highway boundary is not confirmed.", required="≥ 2m"))
+    elif facts.porch_distance_to_highway_boundary_m < 2:
+        checks.append(RuleCheck("Class D", "D.1(d)", "Distance to highway boundary", RuleStatus.FAIL, "Porch is within 2m of a boundary with a highway.", required="≥ 2m", actual=f"{facts.porch_distance_to_highway_boundary_m:g}m", severity="HIGH"))
     else:
-        checks.append(_make_check("D-01", "Porch ground area", RuleStatus.FAIL, "Class D porch ground area must not exceed 3m² measured externally.", f"Area: {area:.2f}m².", "Full planning permission is likely required."))
+        checks.append(RuleCheck("Class D", "D.1(d)", "Distance to highway boundary", RuleStatus.PASS, "Porch is at least 2m from a boundary with a highway.", required="≥ 2m", actual=f"{facts.porch_distance_to_highway_boundary_m:g}m", severity="LOW"))
 
-    if height is None:
-        checks.append(_make_check("D-02", "Porch height", RuleStatus.NEEDS_CONFIRMATION, "Class D porch height must not exceed 3.0m above ground level.", "Height not confirmed.", "Confirm porch height."))
-    elif height <= 3.0:
-        checks.append(_make_check("D-02", "Porch height", RuleStatus.PASS, "Class D porch height must not exceed 3.0m above ground level.", f"Height: {height:.2f}m."))
-    else:
-        checks.append(_make_check("D-02", "Porch height", RuleStatus.FAIL, "Class D porch height must not exceed 3.0m above ground level.", f"Height: {height:.2f}m.", "Full planning permission is likely required."))
-
-    if highway_boundary_distance is None:
-        checks.append(_make_check("D-03", "Porch distance to highway boundary", RuleStatus.NEEDS_CONFIRMATION, "Class D porch must not be within 2m of any boundary with a highway.", "Distance not confirmed.", "Confirm distance to highway boundary."))
-    elif highway_boundary_distance >= 2.0:
-        checks.append(_make_check("D-03", "Porch distance to highway boundary", RuleStatus.PASS, "Class D porch must not be within 2m of any boundary with a highway.", f"Distance: {highway_boundary_distance:.2f}m."))
-    else:
-        checks.append(_make_check("D-03", "Porch distance to highway boundary", RuleStatus.FAIL, "Class D porch must not be within 2m of any boundary with a highway.", f"Distance: {highway_boundary_distance:.2f}m.", "Full planning permission is likely required."))
-    return checks
+    status = _class_status_from_checks(checks)
+    return ClassResult("Class D", "Porches", status, checks, _summary_for_status(status))
 
 
 # -----------------------------------------------------------------------------
-# Main public API
+# Class E – outbuildings, pools, enclosures, containers
 # -----------------------------------------------------------------------------
 
 
-def run_planning_rule_checks(
-    project_types: Optional[List[str]] = None,
-    property_type: str = "",
-    measurements: Optional[Dict[str, Any]] = None,
-    pd_answers: Optional[Dict[str, Any]] = None,
-    detected_features: Optional[Dict[str, Any]] = None,
-) -> RuleEngineResult:
+def check_class_e(facts: ProjectFacts) -> ClassResult:
+    if not facts.includes_outbuilding_pool_container_class_e:
+        return ClassResult("Class E", "Buildings etc. within the curtilage", RouteStatus.NOT_APPLICABLE, [], _summary_for_status(RouteStatus.NOT_APPLICABLE))
+
+    checks: List[RuleCheck] = []
+    checks.append(_check_bool("Class E", "E.1(a)", "Not created by specified Part 3 change of use rights", facts.created_by_part3_change_of_use_mnp_pa_q, False, "Class E does not apply where the house was created only by specified Part 3 change of use rights.", "No Part 3 M/N/P/PA/Q creation issue identified.", required="False", severity="HIGH"))
+    checks.append(_check_max("Class E", "E.1(b)", "Total curtilage building coverage", facts.curtilage_coverage_percent_excluding_original_house, 50.0, "%", fail_reason="Total ground covered by buildings/enclosures/containers exceeds 50% of curtilage excluding original house."))
+    checks.append(_check_bool("Class E", "E.1(c)", "Not forward of principal elevation", facts.outbuilding_forward_of_principal_elevation, False, "Class E development forward of the principal elevation is not permitted development.", "Not forward of principal elevation.", required="False", severity="HIGH"))
+    checks.append(_check_bool("Class E", "E.1(d)", "Single storey only", facts.outbuilding_more_than_one_storey, False, "Class E buildings must not have more than one storey.", "Building is single storey.", required="False", severity="HIGH"))
+
+    # Height E.1(e)
+    if facts.outbuilding_within_2m_boundary is True:
+        checks.append(_check_max("Class E", "E.1(e)(ii)", "Height within 2m of boundary", facts.outbuilding_height_m, 2.5, "m", fail_reason="Class E building/container/enclosure within 2m of boundary exceeds 2.5m height."))
+    elif _norm(facts.outbuilding_roof_type) in {"dual pitched", "dual-pitched", "hipped"}:
+        checks.append(_check_max("Class E", "E.1(e)(i)", "Dual-pitched / hipped roof height", facts.outbuilding_height_m, 4.0, "m", fail_reason="Class E dual-pitched/hipped roof building exceeds 4m height."))
+    else:
+        checks.append(_check_max("Class E", "E.1(e)(iii)", "Other roof/container/enclosure height", facts.outbuilding_height_m, 3.0, "m", fail_reason="Class E building/container/enclosure exceeds 3m height."))
+
+    checks.append(_check_max("Class E", "E.1(f)", "Eaves height", facts.outbuilding_eaves_height_m, 2.5, "m", fail_reason="Class E building eaves exceed 2.5m."))
+    checks.append(_check_bool("Class E", "E.1(g)", "Not within curtilage of listed building", facts.outbuilding_within_curtilage_of_listed_building or facts.is_listed_building_or_within_curtilage, False, "Class E development within the curtilage of a listed building requires planning permission.", "Not within curtilage of a listed building.", required="False", severity="HIGH"))
+
+    # Raised platforms / verandahs
+    if facts.outbuilding_includes_verandah_balcony_raised_platform is True:
+        checks.append(RuleCheck("Class E", "E.1(h)", "No verandah/balcony/raised platform", RuleStatus.FAIL, "Class E does not permit verandahs, balconies or raised platforms.", required="False", actual="True", severity="HIGH"))
+    elif facts.outbuilding_raised_platform_height_m is not None and facts.outbuilding_raised_platform_height_m > 0.3:
+        checks.append(RuleCheck("Class E", "E.1(h)", "Raised platform height", RuleStatus.FAIL, "Raised platform exceeds 0.3m and is not permitted under Class E.", required="≤ 0.3m", actual=f"{facts.outbuilding_raised_platform_height_m:g}m", severity="HIGH"))
+    elif facts.outbuilding_includes_verandah_balcony_raised_platform is None and facts.outbuilding_raised_platform_height_m is None:
+        checks.append(RuleCheck("Class E", "E.1(h)", "No verandah/balcony/raised platform", RuleStatus.NEEDS_CONFIRMATION, "Confirm whether the proposal includes a verandah, balcony or raised platform.", required="False"))
+    else:
+        checks.append(RuleCheck("Class E", "E.1(h)", "No verandah/balcony/raised platform", RuleStatus.PASS, "No prohibited raised platform/verandah/balcony identified.", required="False", severity="LOW"))
+
+    checks.append(_check_bool("Class E", "E.1(i)", "Incidental purpose only", facts.outbuilding_related_to_dwelling_or_antenna, False, "Class E cannot be used for works related to the dwelling itself or microwave antenna.", "No dwelling-related works/antenna issue identified under Class E.", required="False"))
+    checks.append(_check_bool("Class E", "E purpose", "Purpose incidental to enjoyment of dwellinghouse", facts.outbuilding_purpose_incidental, True, "The outbuilding/pool/container is not confirmed as incidental to the enjoyment of the dwellinghouse.", "Purpose is confirmed as incidental.", required="Incidental purpose"))
+
+    checks.append(_check_max("Class E", "E.1(j)", "Container capacity", facts.container_capacity_litres, 3500.0, " litres", fail_reason="Container capacity exceeds 3,500 litres."))
+
+    # E.2 protected land >20m from house
+    if facts.national_park_broads_aonb or facts.world_heritage_site:
+        if facts.outbuilding_more_than_20m_from_house is True:
+            checks.append(_check_max("Class E", "E.2", "Area more than 20m from house on protected land", facts.outbuilding_area_more_than_20m_from_house_m2, 10.0, "m²", fail_reason="On protected land, Class E buildings etc more than 20m from the house exceed 10m²."))
+        elif facts.outbuilding_more_than_20m_from_house is None:
+            checks.append(RuleCheck("Class E", "E.2", "Area more than 20m from house on protected land", RuleStatus.NEEDS_CONFIRMATION, "Protected land status indicated; confirm whether development is more than 20m from the house.", required="If >20m, total area ≤ 10m²"))
+
+    # E.3 article 2(3) side land
+    if facts.article_2_3_land:
+        checks.append(_check_bool("Class E", "E.3", "Not between side wall and boundary on Article 2(3) land", facts.outbuilding_between_side_wall_and_boundary_on_article_2_3_land, False, "Class E development between a side wall and boundary is not permitted on Article 2(3) land.", "No side-land Class E issue identified.", required="False", severity="HIGH"))
+
+    # Attached buildings should be Class A not E
+    checks.append(_check_bool("Class E", "Class boundary", "Not attached to the house", facts.outbuilding_attached_to_house, False, "Buildings attached to the house are not assessed under Class E; Class A applies.", "Building is not attached to the house.", required="False"))
+
+    status = _class_status_from_checks(checks)
+    return ClassResult("Class E", "Buildings etc. within the curtilage", status, checks, _summary_for_status(status))
+
+
+# -----------------------------------------------------------------------------
+# Class F – hard surfaces
+# -----------------------------------------------------------------------------
+
+
+def check_class_f(facts: ProjectFacts) -> ClassResult:
+    if not facts.includes_hard_surface_class_f:
+        return ClassResult("Class F", "Hard surfaces", RouteStatus.NOT_APPLICABLE, [], _summary_for_status(RouteStatus.NOT_APPLICABLE))
+
+    checks: List[RuleCheck] = []
+    checks.append(_check_bool("Class F", "F.1", "Not created by specified Part 3 change of use rights", facts.created_by_part3_change_of_use_mnp_pa_q, False, "Class F does not apply where the house was created only by specified Part 3 change of use rights.", "No Part 3 M/N/P/PA/Q creation issue identified.", required="False", severity="HIGH"))
+
+    if facts.hard_surface_forward_of_principal_elevation_and_highway is True:
+        if facts.hard_surface_area_m2 is None:
+            checks.append(RuleCheck("Class F", "F.2", "Front hard surface area", RuleStatus.NEEDS_CONFIRMATION, "Hard surface area forward of principal elevation and highway is not confirmed.", required="If >5m², porous/drains to permeable area"))
+        elif facts.hard_surface_area_m2 <= 5:
+            checks.append(RuleCheck("Class F", "F.2", "Front hard surface drainage", RuleStatus.PASS, "Hard surface area is 5m² or less, so the porous/permeable drainage condition is not triggered.", required="≤ 5m² or porous/permeable drainage", actual=f"{facts.hard_surface_area_m2:g}m²", severity="LOW"))
+        else:
+            checks.append(_check_bool("Class F", "F.2", "Porous or drains to permeable area", facts.hard_surface_porous_or_drains_to_permeable_area, True, "Front hard surface over 5m² must be porous or drain to a permeable area within the curtilage.", "Drainage condition satisfied.", required="True", severity="HIGH"))
+    elif facts.hard_surface_forward_of_principal_elevation_and_highway is None:
+        checks.append(RuleCheck("Class F", "F.2", "Hard surface location", RuleStatus.NEEDS_CONFIRMATION, "Confirm whether the hard surface lies between the principal elevation and highway.", required="If yes and >5m², porous/permeable drainage required"))
+    else:
+        checks.append(RuleCheck("Class F", "F.2", "Front hard surface drainage", RuleStatus.NOT_APPLICABLE, "Hard surface is not forward of the principal elevation and highway.", severity="LOW"))
+
+    status = _class_status_from_checks(checks)
+    return ClassResult("Class F", "Hard surfaces", status, checks, _summary_for_status(status))
+
+
+# -----------------------------------------------------------------------------
+# Class G – chimneys, flues, soil and vent pipes
+# -----------------------------------------------------------------------------
+
+
+def check_class_g(facts: ProjectFacts) -> ClassResult:
+    if not facts.includes_chimney_flue_svp_class_g:
+        return ClassResult("Class G", "Chimneys, flues, soil and vent pipes", RouteStatus.NOT_APPLICABLE, [], _summary_for_status(RouteStatus.NOT_APPLICABLE))
+
+    checks: List[RuleCheck] = []
+    checks.append(_check_bool("Class G", "G.1(a)", "Not created by specified Part 3 change of use rights", facts.created_by_part3_change_of_use_mnp_pa_q, False, "Class G does not apply where the house was created only by specified Part 3 change of use rights.", "No Part 3 M/N/P/PA/Q creation issue identified.", required="False", severity="HIGH"))
+    checks.append(_check_max("Class G", "G.1(b)", "Height above highest roof", facts.chimney_flue_svp_height_above_highest_roof_m, 1.0, "m", fail_reason="Chimney/flue/SVP exceeds the highest part of the roof by 1m or more."))
+    if facts.article_2_3_land:
+        checks.append(_check_bool("Class G", "G.1(c)", "Not on principal/side highway elevation on Article 2(3) land", facts.chimney_flue_svp_on_principal_or_side_elevation_fronting_highway_article_2_3, False, "On Article 2(3) land, chimney/flue/SVP on a principal or side elevation fronting a highway is not permitted development.", "No Article 2(3) highway-facing elevation issue identified.", required="False", severity="HIGH"))
+
+    status = _class_status_from_checks(checks)
+    return ClassResult("Class G", "Chimneys, flues, soil and vent pipes", status, checks, _summary_for_status(status))
+
+
+# -----------------------------------------------------------------------------
+# Class H – microwave antenna
+# -----------------------------------------------------------------------------
+
+
+def check_class_h(facts: ProjectFacts) -> ClassResult:
+    if not facts.includes_antenna_class_h:
+        return ClassResult("Class H", "Microwave antenna", RouteStatus.NOT_APPLICABLE, [], _summary_for_status(RouteStatus.NOT_APPLICABLE))
+
+    checks: List[RuleCheck] = []
+    checks.append(_check_bool("Class H", "H.1(a)", "Not created by specified Part 3 change of use rights", facts.created_by_part3_change_of_use_mnp_pa_q, False, "Class H does not apply where the house was created only by specified Part 3 change of use rights.", "No Part 3 M/N/P/PA/Q creation issue identified.", required="False", severity="HIGH"))
+    checks.append(_check_max("Class H", "H.1(b)(i)", "Number of antennas", float(facts.number_of_antennas) if facts.number_of_antennas is not None else None, 2.0, "", fail_reason="More than 2 antennas would be present."))
+
+    lengths = facts.antenna_lengths_m or []
+    if not lengths:
+        checks.append(RuleCheck("Class H", "H.1(b)(ii)-(iii)", "Antenna length criteria", RuleStatus.NEEDS_CONFIRMATION, "Antenna lengths are not confirmed.", required="Single antenna ≤1m; if two antennas, only one may exceed 0.6m and none may exceed 1m."))
+    else:
+        too_long = [x for x in lengths if x > 1.0]
+        over_06 = [x for x in lengths if x > 0.6]
+        if too_long:
+            checks.append(RuleCheck("Class H", "H.1(b)(ii)", "Antenna maximum length", RuleStatus.FAIL, "At least one antenna exceeds 1m length.", required="≤ 1m", actual=", ".join(f"{x:g}m" for x in lengths), severity="HIGH"))
+        elif len(over_06) > 1:
+            checks.append(RuleCheck("Class H", "H.1(b)(iii)", "Two antenna length criteria", RuleStatus.FAIL, "More than one antenna exceeds 0.6m.", required="Only one antenna may exceed 0.6m", actual=", ".join(f"{x:g}m" for x in lengths), severity="HIGH"))
+        else:
+            checks.append(RuleCheck("Class H", "H.1(b)(ii)-(iii)", "Antenna length criteria", RuleStatus.PASS, "Antenna length criteria satisfied.", required="≤ 1m and only one >0.6m", actual=", ".join(f"{x:g}m" for x in lengths), severity="LOW"))
+
+    if facts.antenna_on_chimney:
+        chimney_lengths = lengths or None
+        max_len = max(chimney_lengths) if chimney_lengths else None
+        checks.append(_check_max("Class H", "H.1(b)(iv)", "Antenna on chimney length", max_len, 0.6, "m", fail_reason="Antenna installed on chimney exceeds 0.6m length."))
+        checks.append(_check_bool("Class H", "H.1(b)(v)", "Antenna does not protrude above chimney", facts.antenna_protrudes_above_chimney, False, "Antenna installed on chimney protrudes above chimney.", "Antenna does not protrude above chimney.", required="False", severity="HIGH"))
+
+    checks.append(_check_max("Class H", "H.1(b)(vi)", "Antenna cubic capacity", facts.antenna_cubic_capacity_litres, 35.0, " litres", fail_reason="Antenna cubic capacity exceeds 35 litres."))
+
+    if facts.antenna_installed_on_roof_without_chimney:
+        checks.append(_check_bool("Class H", "H.1(c)", "Roof without chimney height", facts.antenna_highest_part_higher_than_roof, False, "Antenna on roof without chimney is higher than the highest part of the roof.", "Antenna is not higher than the roof.", required="False", severity="HIGH"))
+
+    if facts.antenna_installed_on_roof_with_chimney:
+        checks.append(_check_bool("Class H", "H.1(d)", "Roof with chimney height", facts.antenna_highest_part_higher_than_chimney_or_0_6m_above_ridge, False, "Antenna is higher than the permitted roof/chimney height limit.", "Antenna height condition satisfied.", required="False", severity="HIGH"))
+
+    if facts.article_2_3_land:
+        checks.append(_check_bool("Class H", "H.1(e)(i)-(ii)", "Article 2(3) visible highway/waterway siting", facts.antenna_on_visible_highway_elevation_article_2_3, False, "On Article 2(3) land, antenna on visible highway/waterway-facing chimney/wall/roof slope is not permitted.", "No prohibited visible highway/waterway siting identified.", required="False", severity="HIGH"))
+        if facts.building_height_m is not None:
+            if facts.building_height_m > 15:
+                checks.append(RuleCheck("Class H", "H.1(e)(iii)", "Article 2(3) building height", RuleStatus.FAIL, "Antenna is on a building exceeding 15m in height on Article 2(3) land.", required="≤ 15m", actual=f"{facts.building_height_m:g}m", severity="HIGH"))
+            else:
+                checks.append(RuleCheck("Class H", "H.1(e)(iii)", "Article 2(3) building height", RuleStatus.PASS, "Building height is within the Article 2(3) antenna limit.", required="≤ 15m", actual=f"{facts.building_height_m:g}m", severity="LOW"))
+
+    checks.append(_check_bool("Class H", "H.2(a)", "Sited to minimise visual impact", facts.antenna_sited_to_minimise_visual_impact, True, "Antenna should be sited to minimise its effect on external appearance.", "Visual impact siting condition satisfied.", required="True"))
+
+    status = _class_status_from_checks(checks)
+    return ClassResult("Class H", "Microwave antenna", status, checks, _summary_for_status(status))
+
+
+# -----------------------------------------------------------------------------
+# Main runner
+# -----------------------------------------------------------------------------
+
+
+def run_householder_pd_rules(facts: ProjectFacts | Dict[str, Any]) -> RuleEngineResult:
+    """Run all relevant householder PD rule checks.
+
+    Accepts either ProjectFacts or a dictionary matching ProjectFacts fields.
     """
-    Run deterministic planning rule checks.
+    if isinstance(facts, dict):
+        facts = ProjectFacts(**{k: v for k, v in facts.items() if k in ProjectFacts.__dataclass_fields__})
 
-    Parameters:
-        project_types: selected user project types, e.g. ["Ground Floor Rear Extension"]
-        property_type: Detached / Semi-Detached / Terraced / Flat / Maisonette etc.
-        measurements: values extracted from drawings or user inputs.
-            Suggested keys:
-                rear_depth_m
-                overall_height_m
-                eaves_height_m
-                boundary_eaves_height_m
-                roof_volume_added_m3
-                rooflight_projection_m
-                porch_area_m2
-                porch_height_m
-                porch_highway_boundary_distance_m
-                curtilage_coverage_percent
-                side_width_ratio
-        pd_answers: user questionnaire answers and known constraints.
-            Suggested keys:
-                site_constraints
-                within_2m_boundary / within_2m_of_boundary
-                forward_of_principal_elevation
-                materials_similar
-                side_extension_width
-                front_roof_plane_highway
-                above_existing_roof_height
-                eaves_setback_0_2m
-                created_by_pd_change_of_use
-        detected_features: boolean feature flags extracted by AI/PDF parser.
-    """
-    project_types = project_types or []
-    measurements = measurements or {}
-    pd_answers = pd_answers or {}
-    detected_features = detected_features or {}
+    general_checks = check_general_pd_exclusions(facts)
+    general_fail = any(c.status == RuleStatus.FAIL for c in general_checks)
+    general_unknown = any(c.status == RuleStatus.NEEDS_CONFIRMATION for c in general_checks)
 
-    checks: List[RuleCheck] = []
-    checks.extend(check_general_pd_eligibility(property_type, pd_answers))
-    checks.extend(check_class_a_extension(project_types, property_type, measurements, pd_answers, detected_features))
-    checks.extend(check_class_b_roof_enlargement(project_types, property_type, measurements, pd_answers, detected_features))
-    checks.extend(check_class_c_rooflights(project_types, measurements, pd_answers, detected_features))
-    checks.extend(check_class_d_porch(project_types, measurements, pd_answers, detected_features))
+    class_results = [
+        ClassResult("GENERAL", "General PD eligibility", _class_status_from_checks(general_checks), general_checks, _summary_for_status(_class_status_from_checks(general_checks))),
+        check_class_a(facts),
+        check_class_b(facts),
+        check_class_c(facts),
+        check_class_d(facts),
+        check_class_e(facts),
+        check_class_f(facts),
+        check_class_g(facts),
+        check_class_h(facts),
+    ]
 
-    relevant_checks = [c for c in checks if c.status != RuleStatus.NOT_APPLICABLE]
-    failed = [c for c in relevant_checks if c.status == RuleStatus.FAIL]
-    needs = [c for c in relevant_checks if c.status == RuleStatus.NEEDS_CONFIRMATION]
-    passed = [c for c in relevant_checks if c.status == RuleStatus.PASS]
+    active_results = [r for r in class_results if r.status != RouteStatus.NOT_APPLICABLE]
 
-    text = _project_text(project_types, detected_features)
-    rear_relevant = _contains_any(text, ["rear extension", "single-storey rear extension", "single_storey_rear_extension"])
-    class_a_relevant = any(c.code.startswith("A-") and c.status != RuleStatus.NOT_APPLICABLE for c in checks)
+    if general_fail:
+        return RuleEngineResult(
+            RouteStatus.FULL_PLANNING_REQUIRED,
+            "Full planning likely required",
+            "General permitted development eligibility fails. Standard householder PD should not be relied on unless the facts are corrected.",
+            class_results,
+        )
 
-    if failed:
-        likely_route = RouteStatus.FULL_PLANNING_LIKELY
-        confidence = "HIGH" if len(failed) >= 2 else "MEDIUM"
-        summary = "One or more deterministic rule checks fail. Full planning is likely unless the failed item is corrected or shown differently on the drawings."
-    elif rear_relevant and any(c.code == "A-04" and "prior approval" in c.title.lower() and c.status == RuleStatus.PASS for c in checks):
-        likely_route = RouteStatus.PRIOR_APPROVAL_POSSIBLE
-        confidence = "MEDIUM" if needs else "HIGH"
-        summary = "The rear extension appears to fall within the larger home extension prior approval range, subject to confirmation of all Class A conditions and neighbour consultation."
-    elif class_a_relevant and not failed:
-        likely_route = RouteStatus.PD_POSSIBLE
-        confidence = "MEDIUM" if needs else "HIGH"
-        summary = "No deterministic Class A failure has been identified. PD/LDC may be possible, subject to confirming unresolved items."
-    elif any(c.code.startswith("B-") and c.status == RuleStatus.PASS for c in checks) and not failed:
-        likely_route = RouteStatus.PD_POSSIBLE
-        confidence = "MEDIUM" if needs else "HIGH"
-        summary = "No deterministic Class B failure has been identified. PD/LDC may be possible, subject to confirming unresolved items."
-    elif any(c.code.startswith("D-") and c.status == RuleStatus.PASS for c in checks) and not failed:
-        likely_route = RouteStatus.PD_POSSIBLE
-        confidence = "MEDIUM" if needs else "HIGH"
-        summary = "No deterministic Class D failure has been identified. PD/LDC may be possible, subject to confirming unresolved items."
-    else:
-        likely_route = RouteStatus.NEEDS_CONFIRMATION
-        confidence = "LOW" if needs else "MEDIUM"
-        summary = "The selected works do not clearly match a rule set or key information is missing. Further review is required."
+    if any(r.status == RouteStatus.FULL_PLANNING_REQUIRED for r in active_results):
+        return RuleEngineResult(
+            RouteStatus.FULL_PLANNING_REQUIRED,
+            "Full planning likely required",
+            "At least one applicable permitted development rule fails.",
+            class_results,
+        )
+
+    if any(r.status == RouteStatus.PRIOR_APPROVAL_POSSIBLE for r in active_results):
+        if any(r.status == RouteStatus.NEEDS_CONFIRMATION for r in active_results) or general_unknown:
+            return RuleEngineResult(
+                RouteStatus.NEEDS_CONFIRMATION,
+                "Prior approval possible, but information missing",
+                "The larger home extension route may be available, but key facts still need confirmation.",
+                class_results,
+            )
+        return RuleEngineResult(
+            RouteStatus.PRIOR_APPROVAL_POSSIBLE,
+            "Larger Home Extension prior approval",
+            "Applicable Class A checks indicate the larger home extension prior approval route may be available.",
+            class_results,
+        )
+
+    if any(r.status == RouteStatus.NEEDS_CONFIRMATION for r in active_results) or general_unknown:
+        return RuleEngineResult(
+            RouteStatus.NEEDS_CONFIRMATION,
+            "Route cannot be confirmed",
+            "No rule failure is confirmed, but key facts or dimensions are missing.",
+            class_results,
+        )
+
+    if any(r.status == RouteStatus.PD_POSSIBLE for r in active_results):
+        return RuleEngineResult(
+            RouteStatus.PD_POSSIBLE,
+            "Permitted development / LDC possible",
+            "Applicable checks pass based on the supplied facts. An LDC may still be advisable.",
+            class_results,
+        )
 
     return RuleEngineResult(
-        likely_route=likely_route,
-        confidence=confidence,
-        summary=summary,
-        checks=checks,
-        failed_checks=failed,
-        needs_confirmation=needs,
-        passed_checks=passed,
+        RouteStatus.NOT_APPLICABLE,
+        "No householder PD class triggered",
+        "No Class A-H proposal type was selected or detected.",
+        class_results,
     )
 
 
-def format_rule_checks_for_prompt(result: RuleEngineResult, max_checks: int = 25) -> str:
-    """Format deterministic rule checks so pdf_summary.py can pass them into the AI prompt."""
+def format_rule_result_for_prompt(result: RuleEngineResult) -> str:
+    """Create a short deterministic summary to pass into the AI prompt."""
     lines = [
-        "DETERMINISTIC PLANNING RULE ENGINE RESULT",
-        f"Likely route: {result.likely_route.value}",
-        f"Confidence: {result.confidence}",
-        f"Summary: {result.summary}",
+        f"DETERMINISTIC RULE ENGINE RESULT: {result.overall_status.value}",
+        f"LIKELY ROUTE: {result.likely_route}",
+        f"SUMMARY: {result.summary}",
         "",
-        "Rule checks:",
+        "CLASS RESULTS:",
     ]
-    for check in result.checks[:max_checks]:
-        if check.status == RuleStatus.NOT_APPLICABLE:
+    for class_result in result.class_results:
+        if class_result.status == RouteStatus.NOT_APPLICABLE:
             continue
-        lines.append(f"- {check.code} | {check.title} | {check.status.value}")
-        lines.append(f"  Rule: {check.rule}")
-        if check.evidence:
-            lines.append(f"  Evidence: {check.evidence}")
-        if check.action:
-            lines.append(f"  Action: {check.action}")
+        lines.append(f"- {class_result.class_ref}: {class_result.status.value} — {class_result.summary}")
+        for check in class_result.checks:
+            if check.status in {RuleStatus.FAIL, RuleStatus.NEEDS_CONFIRMATION}:
+                lines.append(
+                    f"  • {check.rule_ref} | {check.status.value}: {check.title}. "
+                    f"Required: {check.required or 'N/A'}. Actual: {check.actual or 'Not confirmed'}. Reason: {check.reason}"
+                )
     return "\n".join(lines)
 
 
-def format_rule_checks_for_report(result: RuleEngineResult) -> str:
-    """Shorter plain text version for report sections."""
-    lines = [
-        f"Likely Route: {result.likely_route.value}",
-        f"Rule Confidence: {result.confidence}",
-        f"Summary: {result.summary}",
-    ]
-    if result.failed_checks:
-        lines.append("Failed checks:")
-        for c in result.failed_checks:
-            lines.append(f"- {c.title}: {c.evidence or c.rule}")
-    if result.needs_confirmation:
-        lines.append("Needs confirmation:")
-        for c in result.needs_confirmation[:8]:
-            lines.append(f"- {c.title}: {c.action or c.rule}")
-    return "\n".join(lines)
+def extract_failed_and_unknown_checks(result: RuleEngineResult) -> Tuple[List[RuleCheck], List[RuleCheck]]:
+    failed: List[RuleCheck] = []
+    unknown: List[RuleCheck] = []
+    for class_result in result.class_results:
+        for check in class_result.checks:
+            if check.status == RuleStatus.FAIL:
+                failed.append(check)
+            elif check.status == RuleStatus.NEEDS_CONFIRMATION:
+                unknown.append(check)
+    return failed, unknown
 
 
-if __name__ == "__main__":
-    # Quick manual test
-    result = run_planning_rule_checks(
-        project_types=["Ground Floor Rear Extension"],
-        property_type="Semi-Detached House",
-        measurements={"rear_depth_m": 6.0, "overall_height_m": 4.0, "eaves_height_m": 3.0},
-        pd_answers={"within_2m_boundary": "yes", "materials_similar": "yes", "site_constraints": "None"},
-        detected_features={"single_storey_rear_extension": True},
-    )
-    print(format_rule_checks_for_prompt(result))
+# -----------------------------------------------------------------------------
+# Light extraction helpers from intake/pd_context
+# -----------------------------------------------------------------------------
+
+
+def facts_from_app_context(
+    project_types: Sequence[str] | None = None,
+    property_type: str = "",
+    proposal_summary: str = "",
+    pd_context: Optional[Dict[str, Any]] = None,
+    scope_items: Sequence[str] | None = None,
+) -> ProjectFacts:
+    """Build a ProjectFacts object from existing app/pdf_summary context.
+
+    This is intentionally conservative. It only fills facts that are explicit in
+    user inputs/pd_context. Drawing extraction should overwrite/add facts later.
+    """
+    project_types = list(project_types or [])
+    scope_items = list(scope_items or [])
+    combined = " ".join(project_types + scope_items + [proposal_summary or ""]).lower()
+    pd_context = pd_context or {}
+
+    facts = ProjectFacts(property_type=property_type or "")
+    facts.is_flat_or_maisonette = is_flat_or_maisonette(facts)
+    facts.is_single_dwellinghouse = not facts.is_flat_or_maisonette
+
+    constraints = str(pd_context.get("site_constraints", "")).lower()
+    facts.article_2_3_land = any(x in constraints for x in ["conservation", "article 2(3)", "aonb", "national park", "world heritage"])
+    facts.conservation_area = "conservation" in constraints
+    facts.article_4_direction = "article 4" in constraints
+    facts.is_listed_building_or_within_curtilage = "listed" in constraints
+
+    facts.includes_class_a_extension_or_alteration = any(x in combined for x in ["extension", "rear", "side", "infill", "new external doors", "windows"])
+    facts.includes_single_storey_rear_extension = "ground floor rear extension" in combined or "single-storey rear" in combined or "single storey rear" in combined
+    facts.includes_side_extension = "side extension" in combined or "infill" in combined
+    facts.includes_rear_and_side_extension = "wraparound" in combined or "wrap around" in combined or ("rear" in combined and "side" in combined)
+    facts.includes_more_than_one_storey_extension = "first floor" in combined or "two storey" in combined or "two-storey" in combined
+    facts.includes_roof_enlargement_class_b = any(x in combined for x in ["loft", "dormer", "hip to gable", "hip-to-gable", "roof extension"])
+    facts.includes_roof_alteration_class_c = any(x in combined for x in ["rooflight", "roof light", "rooflights", "roof lights"])
+    facts.includes_porch_class_d = "porch" in combined
+    facts.includes_outbuilding_pool_container_class_e = any(x in combined for x in ["outbuilding", "garden room", "garage", "shed", "pool", "container"])
+    facts.includes_hard_surface_class_f = any(x in combined for x in ["hardstanding", "hard surface", "driveway", "parking"])
+    facts.includes_chimney_flue_svp_class_g = any(x in combined for x in ["chimney", "flue", "svp", "soil vent"])
+    facts.includes_antenna_class_h = any(x in combined for x in ["antenna", "satellite dish", "microwave antenna"])
+
+    def _float_from_ctx(*keys: str) -> Optional[float]:
+        for key in keys:
+            value = pd_context.get(key)
+            if value in [None, ""]:
+                continue
+            try:
+                return float(str(value).replace("m", "").strip())
+            except Exception:
+                continue
+        return None
+
+    facts.rear_projection_m = _float_from_ctx("rear_extension_depth_m", "rear_depth_m")
+    facts.rear_projection_from_original_wall_m = facts.rear_projection_m
+    facts.extension_height_m = _float_from_ctx("rear_extension_overall_height_m", "extension_height_m")
+    facts.within_2m_boundary = str(pd_context.get("within_2m_of_boundary", "")).lower() == "yes" if pd_context.get("within_2m_of_boundary") else None
+    eaves_answer = str(pd_context.get("eaves_height_within_2m", "")).lower()
+    if eaves_answer == "yes":
+        facts.extension_eaves_height_m = 3.0
+    elif eaves_answer == "no":
+        facts.extension_eaves_height_m = 3.01
+
+    facts.projects_beyond_principal_elevation = str(pd_context.get("forward_of_principal_elevation", "")).lower() == "yes" if pd_context.get("forward_of_principal_elevation") else None
+    facts.external_materials_similar = str(pd_context.get("materials_similar", "")).lower() == "yes" if pd_context.get("materials_similar") else None
+    facts.side_extension_single_storey = not facts.includes_more_than_one_storey_extension if facts.includes_side_extension else None
+    side_width = str(pd_context.get("side_extension_width", "")).lower()
+    if side_width == "yes":
+        # Force a fail where user confirms > half width but exact dimensions are not known.
+        facts.side_extension_width_m = 1.0
+        facts.original_house_width_m = 1.0
+    elif side_width == "no":
+        facts.side_extension_width_m = 0.4
+        facts.original_house_width_m = 1.0
+
+    facts.roof_enlargement_on_principal_roof_slope_fronting_highway = str(pd_context.get("front_roof_plane_highway", "")).lower() == "yes" if pd_context.get("front_roof_plane_highway") else None
+    facts.roof_enlargement_exceeds_highest_roof = str(pd_context.get("above_existing_roof_height", "")).lower() == "yes" if pd_context.get("above_existing_roof_height") else None
+    roof_volume = str(pd_context.get("roof_volume_band", "")).lower()
+    if "within" in roof_volume:
+        facts.added_roof_volume_m3 = 40.0 if is_terrace(facts) else 50.0
+    elif "over" in roof_volume:
+        facts.added_roof_volume_m3 = 41.0 if is_terrace(facts) else 51.0
+    facts.roof_materials_similar = str(pd_context.get("materials_similar", "")).lower() == "yes" if pd_context.get("materials_similar") else None
+    eaves_setback = str(pd_context.get("eaves_setback_0_2m", "")).lower()
+    if eaves_setback == "yes":
+        facts.roof_enlargement_eaves_setback_m = 0.2
+    elif eaves_setback == "no":
+        facts.roof_enlargement_eaves_setback_m = 0.0
+    facts.roof_side_windows_obscure_and_non_opening_1_7m = str(pd_context.get("side_windows_obscure_glazed", "")).lower() in {"yes", "not applicable"} if pd_context.get("side_windows_obscure_glazed") else None
+
+    porch_area = str(pd_context.get("porch_ground_area_band", "")).lower()
+    if porch_area == "yes":
+        facts.porch_ground_area_m2 = 3.0
+    elif porch_area == "no":
+        facts.porch_ground_area_m2 = 3.1
+    porch_height = str(pd_context.get("porch_height_band", "")).lower()
+    if porch_height == "yes":
+        facts.porch_height_m = 3.0
+    elif porch_height == "no":
+        facts.porch_height_m = 3.1
+    porch_highway = str(pd_context.get("porch_within_2m_highway", "")).lower()
+    if porch_highway == "yes":
+        facts.porch_distance_to_highway_boundary_m = 1.99
+    elif porch_highway == "no":
+        facts.porch_distance_to_highway_boundary_m = 2.0
+
+    return facts
+
+
+__all__ = [
+    "ProjectFacts",
+    "RuleCheck",
+    "ClassResult",
+    "RuleEngineResult",
+    "RuleStatus",
+    "RouteStatus",
+    "run_householder_pd_rules",
+    "format_rule_result_for_prompt",
+    "extract_failed_and_unknown_checks",
+    "facts_from_app_context",
+    "check_general_pd_exclusions",
+    "check_class_a",
+    "check_class_b",
+    "check_class_c",
+    "check_class_d",
+    "check_class_e",
+    "check_class_f",
+    "check_class_g",
+    "check_class_h",
+]
