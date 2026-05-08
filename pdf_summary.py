@@ -239,6 +239,109 @@ def detect_local_authority(address: str = "", text: str = "") -> str:
 
 
 
+
+
+# -----------------------------------------------------------------------------
+# Local planning policy pack support
+# -----------------------------------------------------------------------------
+POLICY_FOLDER = os.getenv("ARCHLENS_POLICY_FOLDER", "planning_policies")
+
+def _normalise_policy_text(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip()
+
+def _policy_keywords_for_project(project_types_text: str, proposal_summary_text: str) -> List[str]:
+    combined = _normalise_policy_text(project_types_text + " " + proposal_summary_text)
+    keywords = ["local plan", "development management", "design", "householder", "residential"]
+    if any(x in combined for x in ["loft", "dormer", "roof", "rooflight", "gable"]):
+        keywords += ["house extension", "householder", "residential extension", "design", "roof", "dormer"]
+    if any(x in combined for x in ["rear extension", "side extension", "infill", "wraparound", "first floor"]):
+        keywords += ["house extension", "residential extension", "householder", "design", "daylight", "amenity"]
+    if any(x in combined for x in ["flat conversion", "house conversion", "hmo", "residential conversion"]):
+        keywords += ["ndss", "space standard", "housing", "conversion", "amenity", "refuse", "parking"]
+    if "shop" in combined or "commercial" in combined:
+        keywords += ["shopfront", "commercial", "town centre", "parking", "servicing"]
+    return list(dict.fromkeys(keywords))
+
+def find_relevant_policy_files(authority: str, project_types_text: str, proposal_summary_text: str, max_files: int = 5) -> List[str]:
+    folder = POLICY_FOLDER
+    if not os.path.isdir(folder):
+        return []
+    authority_key = _normalise_policy_text(authority)
+    project_keys = _policy_keywords_for_project(project_types_text, proposal_summary_text)
+    scored: List[Tuple[int, str]] = []
+    for name in os.listdir(folder):
+        if not name.lower().endswith(".pdf"):
+            continue
+        full_path = os.path.join(folder, name)
+        name_key = _normalise_policy_text(name)
+        score = 0
+        if authority_key and authority_key != "not clearly identified":
+            for part in authority_key.split():
+                if part and part in name_key:
+                    score += 4
+        for key in project_keys:
+            key_norm = _normalise_policy_text(key)
+            if key_norm and all(part in name_key for part in key_norm.split()[:3]):
+                score += 3
+            elif any(part in name_key for part in key_norm.split()):
+                score += 1
+        if score > 0:
+            scored.append((score, full_path))
+    scored.sort(key=lambda item: item[0], reverse=True)
+    return [path for _, path in scored[:max_files]]
+
+def extract_policy_context(authority: str, project_types_text: str, proposal_summary_text: str, max_chars: int = 4200) -> str:
+    files = find_relevant_policy_files(authority, project_types_text, proposal_summary_text)
+    if not files:
+        return "No matching local planning policy PDFs were found in the planning_policies folder for this authority/project type."
+    snippets: List[str] = []
+    keywords = _policy_keywords_for_project(project_types_text, proposal_summary_text)
+    for file_path in files:
+        try:
+            with pdfplumber.open(file_path) as pdf:
+                file_lines: List[str] = []
+                for page in pdf.pages[:6]:
+                    page_text = clean_extracted_text(page.extract_text() or "")
+                    if not page_text:
+                        continue
+                    for line in page_text.splitlines():
+                        line_l = line.lower()
+                        if any(k.lower() in line_l for k in keywords) or len(file_lines) < 8:
+                            file_lines.append(line.strip())
+                        if len("\n".join(file_lines)) > 900:
+                            break
+                    if len("\n".join(file_lines)) > 900:
+                        break
+                if file_lines:
+                    snippets.append(f"POLICY FILE: {os.path.basename(file_path)}\n" + "\n".join(file_lines[:18]))
+        except Exception as exc:
+            snippets.append(f"POLICY FILE: {os.path.basename(file_path)}\nCould not read policy PDF: {exc}")
+    context = "\n\n".join(snippets).strip()
+    return context[:max_chars] if context else "Policy files were found but no readable relevant text could be extracted."
+
+def summarise_planning_history_for_prompt(pd_context: Optional[Dict[str, str]]) -> str:
+    if not pd_context:
+        return "No previous planning history was provided by the user."
+    known = str(pd_context.get("planning_history_known", "Not sure"))
+    ref = str(pd_context.get("previous_application_ref", "")).strip()
+    decision = str(pd_context.get("previous_decision_type", "Unknown"))
+    pd_removed = str(pd_context.get("pd_rights_removed", "Not sure"))
+    implemented = str(pd_context.get("previous_permission_implemented", "Not sure"))
+    notes = str(pd_context.get("planning_history_notes", "")).strip()
+    parts = [
+        f"Known previous applications: {known}",
+        f"Reference: {ref or 'not provided'}",
+        f"Decision type: {decision}",
+        f"PD rights removal condition: {pd_removed}",
+        f"Previous permission implemented: {implemented}",
+    ]
+    if notes:
+        parts.append(f"Notes: {notes}")
+    if pd_removed.lower() == "yes" and implemented.lower() == "no":
+        parts.append("Important reasoning point: if a permission that removed PD rights was never implemented, the PD-removal condition may not have taken effect. Verify against the council planning register and site evidence.")
+    return "\n".join(parts)
+
+
 def extract_project_address(text: str) -> str:
     if not text:
         return ""
@@ -274,6 +377,11 @@ def clean_user_context_text(value: str) -> str:
     text = re.sub(r"Optional review focus\s*:\s*Not stated", "", text, flags=re.IGNORECASE)
     # Remove internal app/control text that must never appear in client-facing reports.
     cleanup_patterns = [
+        r"PD answers\s*:[^|.]*[|.]?",
+        r"Above highest roof\s*:[^|.]*[|.]?",
+        r"200mm eaves setback\s*:[^|.]*[|.]?",
+        r"Side windows obscure glazed\s*:[^|.]*[|.]?",
+        r"Roof volume\s*:[^|.]*[|.]?",
         r"Selected scope items to cross-check\s*:[^|.]*[|.]?",
         r"Scope noted\s*:[^|.]*[|.]?",
         r"Important instruction\s*:[^|]*",
@@ -1085,6 +1193,8 @@ def analyze_planning_pdf(
     address_text = project_address.strip() or extracted_address or "Not stated"
     inferred_authority = detect_local_authority(project_address, f"{text}\n{proposal_summary}")
     authority_value = inferred_authority
+    policy_context = extract_policy_context(authority_value, project_types_text, proposal_summary_text)
+    planning_history_context = summarise_planning_history_for_prompt(pd_context)
     page_summary = "\n".join(
         f"Page {page['page_number']}: {page['sheet_type']} | {page['sheet_title']}" for page in page_data
     )
@@ -1168,6 +1278,12 @@ Local authority input:
 Structured PD questionnaire answers:
 {format_pd_context_for_prompt(pd_context)}
 
+Previous planning history / PD rights context:
+{planning_history_context}
+
+Relevant local planning policy context from planning_policies folder:
+{policy_context}
+
 Deterministic rule engine result:
 {rule_engine_summary}
 
@@ -1182,7 +1298,10 @@ Planning reasoning requirements:
 - Use short bullets. Maximum 3 bullets in overview/route sections and maximum 5 bullets in assessment/risk/action sections unless essential.
 - Do not repeat the same caveat in multiple sections.
 - Do not include "In simple terms" sections.
-- Do not include user questionnaire labels such as "Improve Accuracy" in the final report.
+- Do not include user questionnaire labels such as "Improve Accuracy" or raw user input strings in the final report.
+- Translate all user inputs into natural professional English paragraphs.
+- Use the planning history context to identify PD-rights/condition risks. If PD rights may have been removed by a condition, check whether the permission was actually implemented before concluding full planning is required.
+- Use the local policy context only where relevant to the project type and authority. Do not quote long policy extracts.
 - User-entered measurements are supporting context only. If the drawings show different dimensions, drawing dimensions take priority. If dimensions cannot be verified from the drawings, say "Not clearly dimensioned on the drawings".
 - If the user asks for a specific review focus, focus the report on that issue and keep unrelated commentary minimal.
 - Only give factual conclusions supported by the uploaded drawings, structured user inputs, or relevant planning policy/PD rules.
@@ -1259,7 +1378,7 @@ TOP SUMMARY
 LOCAL AUTHORITY CONTEXT
 - State the local authority professionally, e.g. "This review has been prepared against the policy framework of the London Borough of Hounslow."
 - Do not say whether the authority was user-entered or inferred.
-- Refer to the relevant local plan / SPD / London Plan policies only.
+- Refer to the relevant local plan / SPD / London Plan policies found in the policy context only where they are relevant.
 - Where constraints mapping is not available, state that conservation area, Article 4 and other site constraints should still be confirmed.
 
 PD / PRIOR APPROVAL / PLANNING ROUTE
@@ -1416,6 +1535,8 @@ def simplify_report_text(report_text: str, max_bullets_per_section: int = 6) -> 
     text = re.sub(r"Proposed gROUND", "Proposed ground", text)
     text = re.sub(r"gROUND", "ground", text)
     text = re.sub(r"^Not provided$\n?", "", text, flags=re.MULTILINE)
+    text = re.sub(r"ROUTE POSITION\s*\n\s*Not provided\s*\n", "ROUTE POSITION\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"Project Summary:\s*PROPOSED\s+", "Project Summary: Proposed ", text)
     text = re.sub(r"Improve Accuracy\s*:\s*[^\n.]+[.]?", "", text, flags=re.IGNORECASE)
     text = re.sub(r"Selected scope items to cross-check\s*:[^\n.]*[.]?", "", text, flags=re.IGNORECASE)
     text = re.sub(r"Important instruction\s*:[^\n]*", "", text, flags=re.IGNORECASE)

@@ -52,7 +52,7 @@ STARTER_MONTHLY_REVIEW_LIMIT = 10
 # -----------------------------------------------------------------------------
 # CREDIT / TOKEN SYSTEM
 # User-facing name: Credits. Internal name can still be treated as tokens.
-# Session-based foundation first; move to Supabase/Stripe for live persistence.
+# API/database is the credit source of truth. Session value is only a temporary display cache.
 # -----------------------------------------------------------------------------
 CREDIT_PACKS = {
     "10 Credits": {"credits": 10, "price": "£19"},
@@ -576,6 +576,14 @@ def build_pd_context(project_types: List[str], property_type: str, rear_extensio
         pd_context['rear_extension_depth_m'] = f"{float(rear_extension_depth_m):.1f}"
     if rear_extension_height_m is not None:
         pd_context['rear_extension_overall_height_m'] = f"{float(rear_extension_height_m):.1f}"
+    # Planning history / PD-rights context. These values are used as filters for rule selection
+    # and report reasoning. They should not be printed as raw user-input labels in reports.
+    pd_context['planning_history_known'] = str(st.session_state.get('wizard_planning_history_known', 'Not sure'))
+    pd_context['previous_application_ref'] = str(st.session_state.get('wizard_previous_application_ref', '')).strip()
+    pd_context['previous_decision_type'] = str(st.session_state.get('wizard_previous_decision_type', 'Unknown'))
+    pd_context['pd_rights_removed'] = str(st.session_state.get('wizard_pd_rights_removed', 'Not sure'))
+    pd_context['previous_permission_implemented'] = str(st.session_state.get('wizard_previous_permission_implemented', 'Not sure'))
+    pd_context['planning_history_notes'] = str(st.session_state.get('wizard_planning_history_notes', '')).strip()
     if not pd_context.get('pd_question_family'):
         pd_context['pd_question_family'] = get_accuracy_question_group(project_types)
     return pd_context
@@ -1061,30 +1069,6 @@ def inject_custom_css():
 
         div[data-testid="stMetric"] {{ background: var(--sy-surface); border:1px solid var(--sy-border); padding:0.72rem 0.85rem; border-radius:16px; }}
         div[data-testid="stMetric"] * {{ color: var(--sy-text) !important; }}
-        .sy-kpi-card {{
-            background: var(--sy-surface);
-            border: 1px solid var(--sy-border);
-            border-radius: 18px;
-            padding: 0.85rem 0.95rem;
-            min-height: 96px;
-            box-shadow: var(--sy-card-shadow);
-            overflow: hidden;
-        }}
-        .sy-kpi-label {{
-            font-size: 0.78rem;
-            color: var(--sy-muted);
-            margin-bottom: 0.42rem;
-            line-height: 1.15;
-        }}
-        .sy-kpi-value {{
-            color: var(--sy-text);
-            font-size: clamp(1.15rem, 2.1vw, 1.95rem);
-            line-height: 1.05;
-            font-weight: 500;
-            white-space: normal;
-            overflow-wrap: anywhere;
-            word-break: break-word;
-        }}
 
         .stDownloadButton button, .stButton button, .stLinkButton a {{ border-radius:14px !important; }}
         .stButton button, .stDownloadButton button, .stLinkButton a {{
@@ -1092,8 +1076,6 @@ def inject_custom_css():
             box-shadow: 0 10px 24px rgba(212, 194, 154, 0.18) !important; font-weight: 650 !important;
         }}
         .stButton button:hover, .stDownloadButton button:hover, .stLinkButton a:hover {{ background: var(--sy-accent-hover) !important; border-color: var(--sy-accent-hover) !important; color: #111111 !important; filter:none !important; }}
-        .stButton button *, .stDownloadButton button *, .stLinkButton a * {{ color:#111111 !important; }}
-        .stButton button p, .stDownloadButton button p, .stLinkButton a p {{ color:#111111 !important; }}
 
         .stSelectbox label, .stTextInput label, .stTextArea label, .stNumberInput label, .stDateInput label, .stMultiSelect label, .stCheckbox label, .stRadio label {{
             color:var(--sy-text) !important; font-weight:650 !important;
@@ -1108,6 +1090,34 @@ def inject_custom_css():
         .stTextArea textarea {{ min-height: 90px; }}
         .streamlit-expanderHeader {{ border:1px solid #5D6472 !important; border-radius:12px !important; }}
         .stProgress > div > div > div > div {{ background: linear-gradient(90deg, #D4C29A, #c5b183); }}
+
+        /* ArchLens Hub premium shell */
+        .stApp { background: radial-gradient(circle at top left, rgba(212,194,154,0.10), transparent 28%), var(--sy-bg) !important; }
+        .sy-brand-block { display:flex; align-items:center; gap:0.85rem; margin:1rem 0 1.1rem 0; }
+        .sy-brand-logo { width:62px; height:62px; object-fit:contain; border-radius:14px; }
+        .sy-brand-title { font-weight:850; font-size:1.08rem; letter-spacing:-0.02em; }
+        .sy-brand-subtitle { font-size:0.82rem; color:var(--sy-muted); margin-top:0.18rem; }
+        .sy-sidebar-account-card { border:1px solid var(--sy-border); border-radius:14px; padding:0.85rem; margin:0.65rem 0 1rem 0; background:rgba(255,255,255,0.025); }
+        .sy-sidebar-account-card div { display:flex; justify-content:space-between; gap:0.55rem; font-size:0.83rem; padding:0.22rem 0; }
+        .sy-sidebar-account-card span { color:var(--sy-muted); }
+        .sy-sidebar-account-card strong { overflow-wrap:anywhere; text-align:right; }
+        .sy-sidebar-separator { height:1px; background:var(--sy-border); margin:1rem 0; }
+        .sy-help-card { border:1px solid var(--sy-border); border-radius:14px; padding:0.85rem; color:var(--sy-muted); margin-top:13rem; font-size:0.82rem; }
+        .sy-hub-header { display:flex; justify-content:space-between; align-items:center; gap:1rem; margin:0.25rem 0 1.1rem 0; }
+        .sy-hub-title { color:var(--sy-accent); font-weight:900; letter-spacing:0.24em; font-size:0.86rem; }
+        .sy-hub-subtitle { color:var(--sy-muted); font-size:0.86rem; margin-top:0.25rem; }
+        .sy-hub-meta { color:var(--sy-text); font-size:0.84rem; display:flex; align-items:center; gap:0.7rem; flex-wrap:wrap; }
+        .sy-avatar { display:inline-flex; align-items:center; justify-content:center; width:34px; height:34px; border-radius:999px; background:rgba(212,194,154,0.16); color:var(--sy-accent); font-weight:800; }
+        .sy-step-row { display:grid; grid-template-columns: repeat(auto-fit, minmax(135px, 1fr)); gap:0.75rem; margin:0.45rem 0 0.7rem 0; border-top:1px solid var(--sy-border); border-bottom:1px solid var(--sy-border); padding:0.85rem 0; }
+        .sy-step-item { display:flex; flex-direction:column; gap:0.12rem; color:var(--sy-muted); position:relative; padding-left:2.2rem; min-height:38px; }
+        .sy-step-item:before { content:""; position:absolute; left:0; top:0.15rem; width:24px; height:24px; border-radius:999px; border:1px solid var(--sy-border); background:rgba(255,255,255,0.03); }
+        .sy-step-item.active:before { background:rgba(212,194,154,0.16); border-color:var(--sy-accent); box-shadow:0 0 0 4px rgba(212,194,154,0.06); }
+        .sy-step-item span { color:var(--sy-text); font-weight:750; font-size:0.88rem; }
+        .sy-step-item.active span { color:var(--sy-accent); }
+        .sy-step-item small { color:var(--sy-muted); font-size:0.72rem; }
+        .sy-download-row { border-bottom:1px solid var(--sy-border); padding:0.52rem 0; font-size:0.78rem; }
+        .sy-download-row span { overflow-wrap:anywhere; }
+
         </style>
         """,
         unsafe_allow_html=True,
@@ -1901,44 +1911,16 @@ def extract_summary_value(sections: Dict[str, str], module_name: str):
     )
 
 
-def _shorten_card_value(value, max_chars=34):
-    value = str(value or "Not shown").strip()
-    if len(value) <= max_chars:
-        return value
-    return value[: max_chars - 1].rstrip() + "…"
-
-
 def render_kpi_cards(sections: Dict[str, str], report_id: str, module_name: str):
     v1, v2, v3 = extract_summary_value(sections, module_name)
-    if module_name == "Planning Review":
-        cards = [
-            ("Report ID", report_id),
-            ("Planning Position", v1),
-            ("Likely Route", v2),
-            ("Local Authority", v3),
-        ]
-    else:
-        cards = [
-            ("Report ID", report_id),
-            ("Risk Rating", v1),
-            ("Submission Status", v2),
-            ("Review Confidence", v3),
-        ]
+    label_2 = "Likely Route" if module_name == "Planning Review" else "Submission Status"
+    label_3 = "Local Authority" if module_name == "Planning Review" else "Review Confidence"
 
-    cols = st.columns(4)
-    for col, (label, value) in zip(cols, cards):
-        value_text = _shorten_card_value(value)
-        full_value = str(value or "")
-        with col:
-            st.markdown(
-                f"""
-                <div class="sy-kpi-card" title="{full_value}">
-                    <div class="sy-kpi-label">{label}</div>
-                    <div class="sy-kpi-value">{value_text}</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Report ID", report_id)
+    c2.metric("Risk Rating", v1)
+    c3.metric(label_2, v2)
+    c4.metric(label_3, v3)
 
 
 def extract_summary_values(sections: Dict[str, str], module_name: str):
@@ -2120,6 +2102,12 @@ WIZARD_DEFAULTS = {
     "wizard_uploaded_files": [],
     "wizard_scope_items": [],
     "wizard_review_focus": "",
+    "wizard_planning_history_known": "Not sure",
+    "wizard_previous_application_ref": "",
+    "wizard_previous_decision_type": "Unknown",
+    "wizard_pd_rights_removed": "Not sure",
+    "wizard_previous_permission_implemented": "Not sure",
+    "wizard_planning_history_notes": "",
     "wizard_accuracy_answers": {},
 }
 for k, v in WIZARD_DEFAULTS.items():
@@ -2162,27 +2150,17 @@ def checkbox_grid(label, options, state_key, columns=2, help_text=None):
 
 
 def single_choice_cards(label, options, state_key, columns=2, help_text=None):
-    """Single-select intake control.
-
-    Used for Property Type so the app can apply one clear PD/property-rule filter.
-    This avoids multiple property types being ticked at once.
-    """
     st.markdown(f"**{label}**")
     if help_text:
         st.caption(help_text)
     current = st.session_state.get(state_key, options[0] if options else "")
-    if current not in options and options:
-        current = options[0]
-    choice = st.radio(
-        label,
-        options,
-        index=options.index(current) if current in options else 0,
-        horizontal=False,
-        key=f"{state_key}_single_radio",
-        label_visibility="collapsed",
-    )
-    st.session_state[state_key] = choice
-    return choice
+    cols = st.columns(columns)
+    for i, option in enumerate(options):
+        with cols[i % columns]:
+            if st.checkbox(option, value=(current == option), key=f"{state_key}_{i}"):
+                current = option
+    st.session_state[state_key] = current
+    return current
 
 
 def get_required_accuracy_answers(project_types):
@@ -2222,31 +2200,34 @@ def get_required_accuracy_answers(project_types):
 
 def render_left_navigation():
     logo_uri = app_logo_data_uri()
-    theme = st.session_state.get("app_theme", "Dark")
-    light_mode = str(theme).lower().startswith("light")
-    logo_box_bg = "transparent" if light_mode else "#061225"
-    logo_padding = "0px" if light_mode else "8px"
-    logo_subtitle_colour = "#6B7280" if light_mode else "#9FB2D8"
     with st.sidebar:
         if logo_uri:
             st.markdown(
-                f'''
-                <div style="display:flex;align-items:center;gap:1rem;margin:0.9rem 0 1.45rem 0;">
-                    <img src="{logo_uri}" style="width:112px;height:112px;object-fit:contain;border-radius:18px;background:{logo_box_bg};padding:{logo_padding};" />
+                f"""
+                <div class="sy-brand-block">
+                    <img src="{logo_uri}" class="sy-brand-logo" />
                     <div>
-                        <div style="font-weight:850;font-size:1.28rem;line-height:1.15;">ArchLens AI</div>
-                        <div style="font-size:0.86rem;color:{logo_subtitle_colour};margin-top:0.25rem;">SY Design Studio</div>
+                        <div class="sy-brand-title">ArchLens AI</div>
+                        <div class="sy-brand-subtitle">by SY Design Studio</div>
                     </div>
                 </div>
-                ''',
+                """,
                 unsafe_allow_html=True,
             )
         else:
-            st.markdown("### ArchLens AI")
-        st.caption(f"Plan: {PLAN_LABELS.get(current_plan, 'Solo')}")
-        st.caption(f"Credits: {get_credit_balance()}")
-        if current_user_name:
-            st.caption(f"User: {current_user_name}")
+            st.markdown('<div class="sy-brand-title">ArchLens AI</div><div class="sy-brand-subtitle">by SY Design Studio</div>', unsafe_allow_html=True)
+
+        st.markdown(
+            f"""
+            <div class="sy-sidebar-account-card">
+                <div><span>Plan:</span> <strong>{PLAN_LABELS.get(current_plan, 'Solo')}</strong></div>
+                <div><span>Credits:</span> <strong>{get_credit_balance()}</strong></div>
+                <div><span>User:</span> <strong>{current_user_name or 'Verified member'}</strong></div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
         page = st.radio(
             "Navigation",
             ["Dashboard", "Projects", "Reports", "Settings"],
@@ -2254,9 +2235,10 @@ def render_left_navigation():
             label_visibility="collapsed",
         )
         st.session_state["app_page"] = page
-        st.markdown("---")
-        st.link_button("Return to SY Design Studio", WEBSITE_HOME_URL, use_container_width=True)
-        st.link_button("Buy Credits", ARCHLENS_BUY_CREDITS_URL, use_container_width=True)
+        st.markdown('<div class="sy-sidebar-separator"></div>', unsafe_allow_html=True)
+        st.link_button("Return to SY Design Studio  →", WEBSITE_HOME_URL, use_container_width=True)
+        st.link_button("Buy Credits  ↗", ARCHLENS_BUY_CREDITS_URL, use_container_width=True)
+        st.markdown('<div class="sy-help-card">Need help?<br><strong>Contact support</strong></div>', unsafe_allow_html=True)
     return page
 
 def intake_items():
@@ -2280,13 +2262,15 @@ def render_intake_panel():
     proposal_summary = st.session_state.get("wizard_proposal_summary", "")
     local_authority = detect_local_authority_for_display(project_address, proposal_summary)
     st.markdown('<div class="sy-sidepanel">', unsafe_allow_html=True)
-    st.markdown('<div class="sy-panel-title">Intake Readiness</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sy-panel-title">Project Intake Readiness</div>', unsafe_allow_html=True)
     st.markdown(f"**{complete} of {total} key items completed**")
-    for label, done in items:
-        icon = "✅" if done else "•"
-        st.markdown(f"{icon} {label}")
     st.progress(complete / max(total, 1))
-    st.markdown("---")
+    for label, done in items:
+        icon = "✅" if done else "○"
+        st.markdown(f"{icon} {label}")
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown('<div class="sy-sidepanel">', unsafe_allow_html=True)
     st.markdown('<div class="sy-panel-title">Live Summary</div>', unsafe_allow_html=True)
     rows = [
         ("Project", st.session_state.get("wizard_project_name") or "Not named"),
@@ -2298,6 +2282,17 @@ def render_intake_panel():
     ]
     for label, value in rows:
         st.markdown(f'<div class="sy-data-row"><span>{label}</span><strong>{value}</strong></div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    saved = st.session_state.get("saved_projects", []) or []
+    st.markdown('<div class="sy-sidepanel">', unsafe_allow_html=True)
+    st.markdown('<div style="display:flex;justify-content:space-between;gap:1rem;"><div class="sy-panel-title">Recent Downloads</div><span class="sy-muted">View all</span></div>', unsafe_allow_html=True)
+    if saved:
+        for item in saved[:5]:
+            filename = (item.get("filename") or "Report").rsplit(".", 1)[0]
+            st.markdown(f'<div class="sy-download-row">📄 <span>{filename}_AI_Review_Report.pdf</span><br><small>{item.get("date", "")}</small></div>', unsafe_allow_html=True)
+    else:
+        st.caption("No downloads yet.")
     st.markdown('</div>', unsafe_allow_html=True)
 
 def step_header(step_no, title, subtitle):
@@ -2315,14 +2310,14 @@ def step_header(step_no, title, subtitle):
 def wizard_buttons(max_step=7):
     def _next_step(current_step: int) -> int:
         next_step = min(max_step, current_step + 1)
-        # Step 4 Project Scope is only for Building Regulations Review.
+        # Project Scope is a Building Regulations-only step.
         if st.session_state.get("wizard_review_module") == "Planning Review" and next_step == 4:
             return min(max_step, 5)
         return next_step
 
     def _previous_step(current_step: int) -> int:
         previous_step = max(1, current_step - 1)
-        # Step 4 Project Scope is only for Building Regulations Review.
+        # Project Scope is a Building Regulations-only step.
         if st.session_state.get("wizard_review_module") == "Planning Review" and previous_step == 4:
             return max(1, 3)
         return previous_step
@@ -2582,14 +2577,15 @@ def render_report_download_panel(module_name=None, show_sections=True):
 page = render_left_navigation()
 
 # Main shell header
+user_initial = (current_user_name[:1] or "SY").upper()
 st.markdown(
     f'''
-    <div class="sy-topbar">
+    <div class="sy-hub-header">
         <div>
-            <div class="sy-topbar-title">Architect AI Workspace</div>
-            <div class="sy-topbar-meta">AI-powered planning and building regulations intelligence for UK projects</div>
+            <div class="sy-hub-title">ARCHLENS HUB</div>
+            <div class="sy-hub-subtitle">AI-powered planning and building regulations intelligence for UK projects</div>
         </div>
-        <div class="sy-topbar-meta">Credits: {get_credit_balance()} | Plan: {PLAN_LABELS.get(current_plan, "Solo")}{(" | User: " + current_user_name) if current_user_name else ""}</div>
+        <div class="sy-hub-meta">Credits: {get_credit_balance()} &nbsp; | &nbsp; Plan: {PLAN_LABELS.get(current_plan, "Solo")} &nbsp; | &nbsp; User: {current_user_name or "Verified member"} <span class="sy-avatar">{user_initial}</span></div>
     </div>
     ''',
     unsafe_allow_html=True,
@@ -2615,20 +2611,42 @@ if page == "Dashboard":
         st.info("No projects yet. Go to Projects to start a new intake.")
 
 elif page == "Projects":
-    st.markdown('<div class="sy-hero"><div class="sy-hero-copy"><h1>Projects</h1><div class="sy-muted">Create a structured project intake, upload drawings, and generate a professional AI review report.</div></div></div>', unsafe_allow_html=True)
+    ctitle, cbtn = st.columns([1, 0.22])
+    with ctitle:
+        st.markdown('<div class="sy-hero"><div class="sy-hero-copy"><h1>Projects</h1><div class="sy-muted">Create a structured project intake, upload drawings, and generate a professional AI review report.</div></div></div>', unsafe_allow_html=True)
+    with cbtn:
+        if st.button("+  New Project", use_container_width=True):
+            st.session_state.project_step = 1
+            st.session_state.report = None
+            st.session_state.sections = None
+            st.rerun()
     step = int(st.session_state.get("project_step", 1))
-    steps = ["Module", "Details", "Type", "Scope", "Specifics", "Upload", "Report"]
-    st.progress(step / len(steps))
-    st.caption(" → ".join([f"**{name}**" if i + 1 == step else name for i, name in enumerate(steps)]))
+    if st.session_state.get("wizard_review_module") == "Planning Review" and step == 4:
+        st.session_state.project_step = 5
+        st.rerun()
+    steps = ["Details", "Type", "Scope", "Upload", "Report"]
+    step_labels = [
+        (1, "Details", "Project information"),
+        (3, "Type", "Select project type"),
+        (4, "Scope", "Define review scope"),
+        (6, "Upload", "Upload documents"),
+        (7, "Report", "AI review report"),
+    ]
+    progress_value = min(1.0, max(0.1, step / 7))
+    st.markdown(
+        '<div class="sy-step-row">' + ''.join([
+            f'<div class="sy-step-item {("active" if step == step_no else "")}"><span>{name}</span><small>{caption}</small></div>'
+            for step_no, name, caption in step_labels
+            if not (st.session_state.get("wizard_review_module") == "Planning Review" and step_no == 4)
+        ]) + '</div>',
+        unsafe_allow_html=True,
+    )
+    st.progress(progress_value)
     main_col, side_col = st.columns([1.65, 0.82], gap="large")
     with main_col:
         if step == 1:
-            step_header(1, "Choose module", "Select whether this project needs a planning review or a building regulations review.")
-            previous_module = st.session_state.get("wizard_review_module", allowed_review_modules[0])
-            selected_module = st.selectbox("Review Module", allowed_review_modules, index=allowed_review_modules.index(previous_module if previous_module in allowed_review_modules else allowed_review_modules[0]))
-            st.session_state["wizard_review_module"] = selected_module
-            if selected_module == "Planning Review":
-                st.session_state["wizard_scope_items"] = []
+            step_header(1, "Project Details", "Select whether this project needs a planning review or a building regulations review.")
+            st.session_state["wizard_review_module"] = st.selectbox("Review Module", allowed_review_modules, index=allowed_review_modules.index(st.session_state.get("wizard_review_module", allowed_review_modules[0])))
             st.caption("Downloads are unlocked using credits. Planning PDF = 3 credits. Building Regs PDF = 5 credits. Word export = 1 credit.")
             st.session_state["wizard_review_mode"] = st.selectbox("Report Mode", ["Architect / Professional", "Homeowner Summary"], index=["Architect / Professional", "Homeowner Summary"].index(st.session_state.get("wizard_review_mode", "Architect / Professional")))
             wizard_buttons()
@@ -2640,7 +2658,7 @@ elif page == "Projects":
             st.session_state["wizard_proposal_summary"] = st.text_area("Proposal description", value=st.session_state.get("wizard_proposal_summary", ""), height=120, placeholder="Briefly describe the proposal.")
             wizard_buttons()
         elif step == 3:
-            step_header(3, "Project type", "Select the relevant project and property type using clear check boxes.")
+            step_header(3, "Project type", "Select the relevant project type and one property type so the correct rules apply.")
             checkbox_grid("Project Type", PROJECT_TYPE_OPTIONS, "wizard_project_types", columns=2)
             if st.session_state.get("wizard_review_module") == "Planning Review":
                 single_choice_cards("Property Type", PROPERTY_TYPE_OPTIONS, "wizard_property_type", columns=2)
@@ -2649,18 +2667,14 @@ elif page == "Projects":
                 st.info("Property type is mainly used for Planning Review. Building Regulations will focus on technical compliance and uploaded drawings.")
             wizard_buttons()
         elif step == 4:
-            if st.session_state.get("wizard_review_module") == "Building Regulations Review":
-                step_header(4, "Project scope", "Tick the works included. The AI will cross-check these selections against the uploaded plans and only rely on confirmed drawing information where there is a conflict.")
-                checkbox_grid("Scope items", SCOPE_ITEM_OPTIONS, "wizard_scope_items", columns=2)
-                if st.session_state.get("wizard_scope_items"):
-                    st.caption("Selected scope will be passed into the AI context and checked against the uploaded drawings.")
-                wizard_buttons()
-            else:
-                # Planning Review uses project type, property type, PD questions and drawings.
-                # Building Regulations scope items are intentionally hidden and not passed into planning reports.
-                st.session_state["wizard_scope_items"] = []
+            if st.session_state.get("wizard_review_module") != "Building Regulations Review":
                 st.session_state.project_step = 5
                 st.rerun()
+            step_header(4, "Project scope", "Tick the works included. The AI will cross-check these selections against the uploaded plans and only rely on confirmed drawing information where there is a conflict.")
+            checkbox_grid("Scope items", SCOPE_ITEM_OPTIONS, "wizard_scope_items", columns=2)
+            if st.session_state.get("wizard_scope_items"):
+                st.caption("Selected scope will be passed into the AI context and checked against the uploaded drawings.")
+            wizard_buttons()
         elif step == 5:
             step_header(5, "Project specifics", "Enter the key follow-up information. User-entered measurements are reference only; if the uploaded plans show different dimensions, the plans take priority in the report.")
             project_types = st.session_state.get("wizard_project_types", [])
@@ -2673,6 +2687,46 @@ elif page == "Projects":
                 st.caption("These dimensions help the initial route check. The uploaded plan measurements take priority if there is any difference.")
             if st.session_state.get("wizard_review_module") == "Planning Review":
                 st.session_state["wizard_accuracy_answers"] = get_required_accuracy_answers(project_types)
+                with st.expander("Planning history check", expanded=False):
+                    st.caption("Add any known previous applications. ArchLens will use this to check PD-rights risk and explain implementation/condition issues in plain English.")
+                    cph1, cph2 = st.columns(2)
+                    with cph1:
+                        st.session_state["wizard_planning_history_known"] = st.selectbox(
+                            "Any known previous planning applications?",
+                            ["Not sure", "No", "Yes"],
+                            index=["Not sure", "No", "Yes"].index(st.session_state.get("wizard_planning_history_known", "Not sure")),
+                            key="planning_history_known_select",
+                        )
+                        st.session_state["wizard_previous_application_ref"] = st.text_input(
+                            "Previous application reference if known",
+                            value=st.session_state.get("wizard_previous_application_ref", ""),
+                            placeholder="e.g. P/03120/002",
+                        )
+                        st.session_state["wizard_previous_decision_type"] = st.selectbox(
+                            "Previous decision type",
+                            ["Unknown", "Approved", "Refused", "LDC Approved", "LDC Refused", "Prior Approval", "Withdrawn"],
+                            index=["Unknown", "Approved", "Refused", "LDC Approved", "LDC Refused", "Prior Approval", "Withdrawn"].index(st.session_state.get("wizard_previous_decision_type", "Unknown")),
+                            key="previous_decision_type_select",
+                        )
+                    with cph2:
+                        st.session_state["wizard_pd_rights_removed"] = st.selectbox(
+                            "Any condition removing permitted development rights?",
+                            ["Not sure", "No", "Yes"],
+                            index=["Not sure", "No", "Yes"].index(st.session_state.get("wizard_pd_rights_removed", "Not sure")),
+                            key="pd_rights_removed_select",
+                        )
+                        st.session_state["wizard_previous_permission_implemented"] = st.selectbox(
+                            "Was the previous permission built/implemented?",
+                            ["Not sure", "No", "Yes", "Not applicable"],
+                            index=["Not sure", "No", "Yes", "Not applicable"].index(st.session_state.get("wizard_previous_permission_implemented", "Not sure")),
+                            key="previous_permission_implemented_select",
+                        )
+                        st.session_state["wizard_planning_history_notes"] = st.text_area(
+                            "Planning history notes / officer comments",
+                            value=st.session_state.get("wizard_planning_history_notes", ""),
+                            height=95,
+                            placeholder="Example: Previous permission included a condition removing PD rights, but the scheme was never implemented.",
+                        )
             else:
                 st.session_state["wizard_accuracy_answers"] = {}
                 st.info("Building Regulations mode will use the uploaded plans, specification notes and selected scope to focus the compliance review.")

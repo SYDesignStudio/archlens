@@ -1006,3 +1006,124 @@ if __name__ == "__main__":
         detected_features={"single_storey_rear_extension": True},
     )
     print(format_rule_checks_for_prompt(result))
+
+
+# -----------------------------------------------------------------------------
+# Compatibility API for current ArchLens app/pdf_summary integration
+# -----------------------------------------------------------------------------
+
+def facts_from_app_context(
+    project_types=None,
+    property_type: str = "",
+    proposal_summary: str = "",
+    pd_context: Optional[Dict[str, Any]] = None,
+    scope_items=None,
+):
+    """Compatibility wrapper used by app.py/pdf_summary.py.
+
+    Returns a conservative dictionary that is passed into run_householder_pd_rules.
+    User inputs are used as rule filters only. Planning drawings and AI extraction
+    should still be treated as the primary source where they conflict.
+    """
+    pd_context = pd_context or {}
+    scope_items = list(scope_items or [])
+    project_types = list(project_types or [])
+
+    pd_answers: Dict[str, Any] = {}
+    for key in [
+        "site_constraints",
+        "within_2m_boundary",
+        "within_2m_of_boundary",
+        "forward_of_principal_elevation",
+        "materials_similar",
+        "side_extension_width",
+        "front_roof_plane_highway",
+        "above_existing_roof_height",
+        "above_highest_roof",
+        "eaves_setback_0_2m",
+        "eaves_setback_200mm",
+        "created_by_pd_change_of_use",
+        "side_windows_obscure_glazed",
+        "porch_ground_area_band",
+        "porch_height_band",
+        "porch_within_2m_highway",
+    ]:
+        if key in pd_context:
+            pd_answers[key] = pd_context.get(key)
+
+    # Planning history / PD rights condition logic.
+    pd_removed = str(pd_context.get("pd_rights_removed", "")).strip().lower()
+    implemented = str(pd_context.get("previous_permission_implemented", "")).strip().lower()
+    history_note = str(pd_context.get("planning_history_notes", "")).strip()
+    if pd_removed == "yes" and implemented == "yes":
+        # Treat as a likely PD-rights restriction.
+        existing_constraints = str(pd_answers.get("site_constraints", "") or "")
+        pd_answers["site_constraints"] = (existing_constraints + ", Article 4 direction / PD rights removed by condition").strip(" ,")
+    elif pd_removed == "yes" and implemented == "no":
+        # Do not hard fail. This is a planning-history nuance to be verified.
+        pd_answers["planning_history_note"] = (
+            "Previous permission may have contained a PD removal condition, but the user indicates it was not implemented. "
+            "If not implemented, the PD-removal condition may not have taken effect; verify against the council register."
+        )
+    elif history_note:
+        pd_answers["planning_history_note"] = history_note
+
+    measurements: Dict[str, Any] = {}
+    if pd_context.get("rear_extension_depth_m"):
+        measurements["rear_depth_m"] = pd_context.get("rear_extension_depth_m")
+    if pd_context.get("rear_extension_overall_height_m"):
+        measurements["overall_height_m"] = pd_context.get("rear_extension_overall_height_m")
+
+    # Convert band answers into conservative measurements where explicit dimensions are not available.
+    roof_volume_band = str(pd_context.get("roof_volume_band", "")).lower()
+    prop_l = str(property_type or "").lower()
+    if "within" in roof_volume_band:
+        measurements["roof_volume_added_m3"] = 40.0 if "terrace" in prop_l else 50.0
+    elif "over" in roof_volume_band:
+        measurements["roof_volume_added_m3"] = 41.0 if "terrace" in prop_l else 51.0
+
+    porch_area = str(pd_context.get("porch_ground_area_band", "")).lower()
+    if porch_area == "yes":
+        measurements["porch_area_m2"] = 3.0
+    elif porch_area == "no":
+        measurements["porch_area_m2"] = 3.1
+
+    porch_height = str(pd_context.get("porch_height_band", "")).lower()
+    if porch_height == "yes":
+        measurements["porch_height_m"] = 3.0
+    elif porch_height == "no":
+        measurements["porch_height_m"] = 3.1
+
+    detected_features = {
+        "loft_extension": any("loft" in p.lower() for p in project_types) or "loft" in proposal_summary.lower(),
+        "rear_dormer": "dormer" in proposal_summary.lower(),
+        "single_storey_rear_extension": any("ground floor rear" in p.lower() for p in project_types),
+        "side_extension": any("side" in p.lower() or "infill" in p.lower() for p in project_types),
+        "porch": any("porch" in p.lower() for p in project_types),
+    }
+
+    return {
+        "project_types": project_types,
+        "property_type": property_type,
+        "measurements": measurements,
+        "pd_answers": pd_answers,
+        "detected_features": detected_features,
+        "scope_items": scope_items,
+    }
+
+
+def run_householder_pd_rules(facts) -> RuleEngineResult:
+    """Compatibility wrapper around run_planning_rule_checks."""
+    if isinstance(facts, dict):
+        return run_planning_rule_checks(
+            project_types=facts.get("project_types") or [],
+            property_type=facts.get("property_type") or "",
+            measurements=facts.get("measurements") or {},
+            pd_answers=facts.get("pd_answers") or {},
+            detected_features=facts.get("detected_features") or {},
+        )
+    return run_planning_rule_checks()
+
+
+def format_rule_result_for_prompt(result: RuleEngineResult) -> str:
+    return format_rule_checks_for_prompt(result)
