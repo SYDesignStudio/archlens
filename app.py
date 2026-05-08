@@ -7,6 +7,7 @@ import time
 import uuid
 import tempfile
 import jwt
+import requests
 from io import BytesIO
 from typing import Dict, List, Tuple
 
@@ -65,6 +66,89 @@ EXPORT_CREDIT_COSTS = {
 }
 
 FREE_PREVIEW_NOTE = "Analysis preview is available first. Credits are used when exports/downloads are unlocked."
+
+ARCHLENS_API_URL = os.getenv("ARCHLENS_API_URL", "https://archlens-api.onrender.com").rstrip("/")
+ARCHLENS_WEBHOOK_SECRET = os.getenv("ARCHLENS_WEBHOOK_SECRET", "archlens_secure_2026_SYDS_92838")
+
+
+def normalise_user_email(email: str) -> str:
+    return str(email or "").strip().lower()
+
+
+def api_get_credit_balance(email: str):
+    clean_email = normalise_user_email(email)
+    if not clean_email:
+        return None
+    try:
+        response = requests.get(
+            f"{ARCHLENS_API_URL}/user/{clean_email}",
+            timeout=10,
+        )
+        if response.status_code == 200:
+            data = response.json()
+            return int(data.get("credits", 0) or 0)
+    except Exception as exc:
+        print("Credit balance API error:", exc)
+    return None
+
+
+def api_deduct_credits(email: str, amount: int, report_id: str = "", export_type: str = ""):
+    clean_email = normalise_user_email(email)
+    amount = int(amount or 0)
+    if not clean_email:
+        return {
+            "success": False,
+            "message": "User email not found. Please launch ArchLens from your Wix member account.",
+        }
+    if amount <= 0:
+        return {"success": True, "credits": api_get_credit_balance(clean_email), "message": "No credits required."}
+
+    try:
+        response = requests.post(
+            f"{ARCHLENS_API_URL}/deduct-credits",
+            headers={
+                "Content-Type": "application/json",
+                "x-archlens-secret": ARCHLENS_WEBHOOK_SECRET,
+            },
+            json={
+                "email": clean_email,
+                "credits": amount,
+                "reportId": report_id,
+                "exportType": export_type,
+                "source": "archlens_download",
+            },
+            timeout=15,
+        )
+        try:
+            data = response.json()
+        except Exception:
+            data = {"detail": response.text}
+
+        if response.status_code == 200 and data.get("success", True):
+            return {
+                "success": True,
+                "credits": int(data.get("credits", data.get("new_balance", 0)) or 0),
+                "message": data.get("message", f"{amount} credits used."),
+            }
+
+        return {
+            "success": False,
+            "message": data.get("detail") or data.get("message") or "Credit deduction failed.",
+        }
+
+    except Exception as exc:
+        return {
+            "success": False,
+            "message": f"Could not connect to credit API: {exc}",
+        }
+
+
+def sync_credit_balance_from_api(email: str):
+    api_balance = api_get_credit_balance(email)
+    if api_balance is not None:
+        st.session_state["credit_balance"] = api_balance
+    return st.session_state.get("credit_balance", 0)
+
 
 BUILDING_REQUIRED_HEADINGS = [
     "PROJECT CLASSIFICATION",
@@ -822,17 +906,33 @@ def grant_credits(amount: int, reason: str = "Credits added"):
     add_credit_transaction(int(amount), reason, balance_after=new_balance)
 
 
-def spend_credits(amount: int, reason: str, report_id: str = ""):
+def spend_credits(amount: int, reason: str, report_id: str = "", export_type: str = ""):
     amount = int(amount)
     balance = get_credit_balance()
+
     if amount <= 0:
         return True, "No credits required."
+
     if balance < amount:
         return False, f"Not enough credits. You need {amount} credits but only have {balance}."
-    new_balance = balance - amount
+
+    user_email = normalise_user_email(st.session_state.get("auth_user_name", ""))
+
+    # Live persistence: deduct from ArchLens API first, then update Streamlit session.
+    api_result = api_deduct_credits(
+        user_email,
+        amount,
+        report_id=report_id,
+        export_type=export_type,
+    )
+
+    if not api_result.get("success"):
+        return False, api_result.get("message", "Credit deduction failed. Please try again.")
+
+    new_balance = int(api_result.get("credits", max(0, balance - amount)) or 0)
     st.session_state["credit_balance"] = new_balance
     add_credit_transaction(-amount, reason, report_id=report_id, balance_after=new_balance)
-    return True, f"Unlocked successfully. {amount} credits used."
+    return True, f"Unlocked successfully. {amount} credits used. New balance: {new_balance}."
 
 
 def get_export_credit_cost(module_name: str, export_type: str) -> int:
@@ -860,7 +960,7 @@ def unlock_report_export(report_id: str, module_name: str, export_type: str):
     if is_report_unlocked(report_id, export_type):
         return True, "Already unlocked. You can download again without using more credits."
     cost = get_export_credit_cost(module_name, export_type)
-    ok, message = spend_credits(cost, f"Unlock {export_type.upper()} export", report_id=report_id)
+    ok, message = spend_credits(cost, f"Unlock {export_type.upper()} export", report_id=report_id, export_type=export_type)
     if ok:
         mark_report_unlocked(report_id, export_type, cost)
     return ok, message
@@ -2000,6 +2100,8 @@ if not st.session_state.get("authenticated", False):
 
 current_plan = st.session_state.get("auth_plan", "starter")
 current_user_name = st.session_state.get("auth_user_name", "")
+if current_user_name:
+    sync_credit_balance_from_api(current_user_name)
 allowed_review_modules = get_allowed_review_modules(current_plan)
 
 # -------------------------------
