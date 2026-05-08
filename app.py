@@ -7,12 +7,14 @@ import time
 import uuid
 import tempfile
 import jwt
+import requests
 from io import BytesIO
 from typing import Dict, List, Tuple
 
 import fitz
 import streamlit as st
 import pdf_summary
+import planning_rules
 from docx import Document
 from docx.enum.table import WD_ALIGN_VERTICAL, WD_TABLE_ALIGNMENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -30,6 +32,14 @@ DEFAULT_STATE = {
     "report_id": None,
     "active_module": "Building Regulations Review",
     "saved_projects": [],
+    "report_library": [],
+    "app_theme": "Dark",
+    "brand_logo_bytes": None,
+    "ai_confidence": None,
+    "rule_engine_summary": None,
+    "credit_balance": 10,
+    "credit_transactions": [],
+    "unlocked_reports": {},
 }
 for key, value in DEFAULT_STATE.items():
     if key not in st.session_state:
@@ -38,6 +48,107 @@ for key, value in DEFAULT_STATE.items():
 MAX_FILE_SIZE_MB = 20
 MAX_PAGE_COUNT = 30
 STARTER_MONTHLY_REVIEW_LIMIT = 10
+
+# -----------------------------------------------------------------------------
+# CREDIT / TOKEN SYSTEM
+# User-facing name: Credits. Internal name can still be treated as tokens.
+# Session-based foundation first; move to Supabase/Stripe for live persistence.
+# -----------------------------------------------------------------------------
+CREDIT_PACKS = {
+    "10 Credits": {"credits": 10, "price": "£19"},
+    "30 Credits": {"credits": 30, "price": "£49"},
+    "75 Credits": {"credits": 75, "price": "£99"},
+}
+
+EXPORT_CREDIT_COSTS = {
+    "Planning Review": {"pdf": 3, "word": 1, "planning_statement": 3, "design_access_statement": 4},
+    "Building Regulations Review": {"pdf": 5, "word": 1},
+}
+
+FREE_PREVIEW_NOTE = "Analysis preview is available first. Credits are used when exports/downloads are unlocked."
+
+ARCHLENS_API_URL = os.getenv("ARCHLENS_API_URL", "https://archlens-api.onrender.com").rstrip("/")
+ARCHLENS_WEBHOOK_SECRET = os.getenv("ARCHLENS_WEBHOOK_SECRET", "archlens_secure_2026_SYDS_92838")
+ARCHLENS_BUY_CREDITS_URL = os.getenv("ARCHLENS_BUY_CREDITS_URL", "https://www.sydesignstudio.co.uk/category/archlens-ai-credits")
+
+
+def normalise_user_email(email: str) -> str:
+    return str(email or "").strip().lower()
+
+
+def api_get_credit_balance(email: str):
+    clean_email = normalise_user_email(email)
+    if not clean_email:
+        return None
+    try:
+        response = requests.get(
+            f"{ARCHLENS_API_URL}/user/{clean_email}",
+            timeout=10,
+        )
+        if response.status_code == 200:
+            data = response.json()
+            return int(data.get("credits", 0) or 0)
+    except Exception as exc:
+        print("Credit balance API error:", exc)
+    return None
+
+
+def api_deduct_credits(email: str, amount: int, report_id: str = "", export_type: str = ""):
+    clean_email = normalise_user_email(email)
+    amount = int(amount or 0)
+    if not clean_email:
+        return {
+            "success": False,
+            "message": "User email not found. Please launch ArchLens from your Wix member account.",
+        }
+    if amount <= 0:
+        return {"success": True, "credits": api_get_credit_balance(clean_email) or 0, "message": "No credits required."}
+
+    try:
+        response = requests.post(
+            f"{ARCHLENS_API_URL}/deduct-credits",
+            headers={
+                "Content-Type": "application/json",
+                "x-archlens-secret": ARCHLENS_WEBHOOK_SECRET,
+            },
+            json={
+                "email": clean_email,
+                "credits": amount,
+                "reportId": report_id,
+                "exportType": export_type,
+                "source": "archlens_download",
+            },
+            timeout=15,
+        )
+        try:
+            data = response.json()
+        except Exception:
+            data = {"detail": response.text}
+
+        if response.status_code == 200 and data.get("success", True):
+            return {
+                "success": True,
+                "credits": int(data.get("credits", data.get("new_balance", 0)) or 0),
+                "message": data.get("message", f"{amount} credits used."),
+            }
+
+        return {
+            "success": False,
+            "message": data.get("detail") or data.get("message") or "Credit deduction failed.",
+        }
+    except Exception as exc:
+        return {
+            "success": False,
+            "message": f"Could not connect to credit API: {exc}",
+        }
+
+
+def sync_credit_balance_from_api(email: str):
+    api_balance = api_get_credit_balance(email)
+    if api_balance is not None:
+        st.session_state["credit_balance"] = api_balance
+    return int(st.session_state.get("credit_balance", 0) or 0)
+
 
 BUILDING_REQUIRED_HEADINGS = [
     "PROJECT CLASSIFICATION",
@@ -59,13 +170,11 @@ PLANNING_REQUIRED_HEADINGS = [
     "TOP SUMMARY",
     "LOCAL AUTHORITY CONTEXT",
     "PD / PRIOR APPROVAL / PLANNING ROUTE",
-    "COMPLIANCE SNAPSHOT",
     "PLANNING ASSESSMENT",
     "DRAWING-PACK INCONSISTENCIES",
     "KEY RISKS",
     "MISSING INFORMATION",
     "RECOMMENDED ACTIONS",
-    "PROFESSIONAL CONCLUSION",
     "SUBMISSION READINESS",
 ]
 
@@ -89,13 +198,11 @@ PLANNING_SECTION_ORDER = [
     ("TOP SUMMARY", "Top Summary"),
     ("LOCAL AUTHORITY CONTEXT", "Local Authority Context"),
     ("PD / PRIOR APPROVAL / PLANNING ROUTE", "PD / Prior Approval / Planning Route"),
-    ("COMPLIANCE SNAPSHOT", "Compliance Snapshot"),
     ("PLANNING ASSESSMENT", "Planning Assessment"),
     ("DRAWING-PACK INCONSISTENCIES", "Drawing-Pack Inconsistencies"),
     ("KEY RISKS", "Key Risks"),
     ("MISSING INFORMATION", "Missing Information"),
     ("RECOMMENDED ACTIONS", "Recommended Actions"),
-    ("PROFESSIONAL CONCLUSION", "Professional Conclusion"),
     ("SUBMISSION READINESS", "Submission Readiness"),
 ]
 
@@ -130,7 +237,7 @@ MODULE_CONFIG = {
         "section_order": BUILDING_SECTION_ORDER,
         "special_key_value_sections": BUILDING_SPECIAL_KEY_VALUE_SECTIONS,
         "disclaimer": BUILDING_DISCLAIMER_TEXT,
-        "title": "AI Building Regulations Compliance Review",
+        "title": "Building Regulations Review Report",
         "readiness_key": "BUILDING CONTROL SUBMISSION READINESS",
     },
     "Planning Review": {
@@ -138,7 +245,7 @@ MODULE_CONFIG = {
         "section_order": PLANNING_SECTION_ORDER,
         "special_key_value_sections": PLANNING_SPECIAL_KEY_VALUE_SECTIONS,
         "disclaimer": PLANNING_DISCLAIMER_TEXT,
-        "title": "AI Planning Route and Risk Review",
+        "title": "Planning Appraisal Report",
         "readiness_key": "SUBMISSION READINESS",
     },
 }
@@ -176,6 +283,27 @@ CLASS_A_PROJECT_TYPES = {
     "First Floor Rear Extension",
     "First Floor Side Extension",
 }
+
+SCOPE_ITEM_OPTIONS = [
+    "New kitchen",
+    "New bathroom / WC",
+    "New bedroom",
+    "Internal room layout changes",
+    "Staircase changes",
+    "Structural openings",
+    "New steel beams",
+    "Drainage changes",
+    "New external doors / windows",
+    "Roof / loft / dormer works",
+    "Insulation / thermal upgrades",
+    "Heating / boiler / ventilation",
+    "Fire safety upgrades",
+    "Sound insulation",
+    "New foundations",
+    "Basement excavation",
+    "Party wall interface",
+]
+
 
 
 def get_accuracy_question_group(project_types: List[str]) -> str:
@@ -454,6 +582,201 @@ def build_pd_context(project_types: List[str], property_type: str, rear_extensio
 
 
 
+
+
+# -----------------------------------------------------------------------------
+# AI CONFIDENCE SYSTEM
+# Rule-engine-first confidence labels. These are not legal certainty scores.
+# They are user-facing status labels based on deterministic checks, drawing
+# completeness, report sections and missing information.
+# -----------------------------------------------------------------------------
+PLANNING_CONFIDENCE_LABELS = [
+    "PASS",
+    "LIKELY PD",
+    "LIKELY PRIOR APPROVAL",
+    "FULL PLANNING ADVISED",
+    "FAIL",
+    "MANUAL REVIEW ADVISED",
+]
+
+BUILDING_CONFIDENCE_LABELS = [
+    "LIKELY COMPLIANT",
+    "PARTIAL INFORMATION",
+    "NON-COMPLIANT ITEMS FOUND",
+    "STRUCTURAL REVIEW REQUIRED",
+    "FIRE STRATEGY REVIEW REQUIRED",
+    "BUILDING CONTROL REVIEW ADVISED",
+]
+
+
+def _normalise_text(value) -> str:
+    return str(value or "").strip()
+
+
+def _extract_route_from_rule_summary(rule_summary: str) -> str:
+    """Pull a stable route/status label from the deterministic rule summary."""
+    text = _normalise_text(rule_summary).upper()
+    if "LIKELY PRIOR APPROVAL" in text or "PRIOR APPROVAL" in text:
+        return "LIKELY PRIOR APPROVAL"
+    if "FULL PLANNING" in text:
+        return "FULL PLANNING ADVISED"
+    if "FAIL" in text:
+        return "FAIL"
+    if "PASS" in text:
+        return "PASS"
+    if "LIKELY PD" in text or "PD / LDC" in text or "PERMITTED DEVELOPMENT" in text:
+        return "LIKELY PD"
+    if "NEEDS CONFIRMATION" in text or "MANUAL" in text:
+        return "MANUAL REVIEW ADVISED"
+    return "MANUAL REVIEW ADVISED"
+
+
+def _count_report_signals(sections: Dict[str, str], needles: List[str]) -> int:
+    combined = "\n".join(sections.values()).upper()
+    return sum(1 for n in needles if n.upper() in combined)
+
+
+def calculate_planning_confidence(sections: Dict[str, str], rule_summary: str = "") -> Dict[str, object]:
+    """Return user-facing planning confidence label and explanation.
+
+    This avoids fake percentage certainty. The label is based on the deterministic
+    rule-engine result first, then adjusted for missing information and drawing readiness.
+    """
+    route_label = _extract_route_from_rule_summary(rule_summary)
+    missing_text = _normalise_text(sections.get("MISSING INFORMATION", "")).upper()
+    risk_text = _normalise_text(sections.get("KEY RISKS", "")).upper()
+    readiness_text = _normalise_text(sections.get("SUBMISSION READINESS", "")).upper()
+    route_text = _normalise_text(sections.get("PD / PRIOR APPROVAL / PLANNING ROUTE", "")).upper()
+    combined = "\n".join([missing_text, risk_text, readiness_text, route_text, _normalise_text(rule_summary).upper()])
+
+    blockers = _count_report_signals(sections, [
+        "NOT CLEARLY SHOWN",
+        "NOT CLEARLY DIMENSIONED",
+        "INSUFFICIENT",
+        "REQUIRES CONFIRMATION",
+        "CONFIRM",
+        "MISSING",
+    ])
+    high_risk = "HIGH" in risk_text or "FAIL" in combined or "NOT READY" in readiness_text
+
+    if route_label == "PASS" and blockers <= 1 and not high_risk:
+        label = "PASS"
+    elif route_label == "LIKELY PRIOR APPROVAL" and not high_risk:
+        label = "LIKELY PRIOR APPROVAL"
+    elif route_label == "LIKELY PD" and blockers <= 3 and not high_risk:
+        label = "LIKELY PD"
+    elif route_label == "FULL PLANNING ADVISED" or "FULL PLANNING" in combined:
+        label = "FULL PLANNING ADVISED"
+    elif route_label == "FAIL" or high_risk:
+        label = "FAIL"
+    else:
+        label = "MANUAL REVIEW ADVISED"
+
+    triggers = []
+    if rule_summary:
+        triggers.append("Deterministic PD rule checks were used before AI wording.")
+    if "PRIOR APPROVAL" in combined:
+        triggers.append("Larger Home Extension / prior approval route appears relevant.")
+    if "FULL PLANNING" in combined:
+        triggers.append("One or more items appear outside straightforward PD/PA route.")
+    if blockers:
+        triggers.append("Some dimensions or constraints still need confirmation from the drawings or site checks.")
+    if not triggers:
+        triggers.append("No major route conflict was identified from the current intake and report sections.")
+
+    return {
+        "module": "Planning Review",
+        "label": label,
+        "basis": "Rule engine + drawing/report checks",
+        "triggers": triggers[:4],
+        "note": "This is a review status, not a guarantee of lawful development or planning approval.",
+    }
+
+
+def calculate_building_confidence(sections: Dict[str, str]) -> Dict[str, object]:
+    combined = "\n".join(sections.values()).upper()
+    compliance = _normalise_text(sections.get("COMPLIANCE STATUS BY APPROVED DOCUMENT", "")).upper()
+    missing = _normalise_text(sections.get("MISSING INFORMATION", "")).upper()
+    risks = _normalise_text(sections.get("KEY RISKS", "")).upper()
+
+    fail_count = compliance.count("FAIL") + combined.count("NON-COMPLIANT")
+    partial_count = compliance.count("PARTLY") + compliance.count("REVIEW REQUIRED") + missing.count("NOT CLEARLY")
+
+    if "STRUCTURAL" in risks and any(x in risks for x in ["REQUIRED", "CALC", "ENGINEER"]):
+        label = "STRUCTURAL REVIEW REQUIRED"
+    elif "FIRE" in risks and any(x in risks for x in ["UNCLEAR", "REQUIRED", "ESCAPE", "STRATEGY"]):
+        label = "FIRE STRATEGY REVIEW REQUIRED"
+    elif fail_count > 0:
+        label = "NON-COMPLIANT ITEMS FOUND"
+    elif partial_count > 0 or "MISSING" in missing:
+        label = "PARTIAL INFORMATION"
+    elif "READY" in _normalise_text(sections.get("BUILDING CONTROL SUBMISSION READINESS", "")).upper():
+        label = "LIKELY COMPLIANT"
+    else:
+        label = "BUILDING CONTROL REVIEW ADVISED"
+
+    triggers = []
+    if fail_count:
+        triggers.append("One or more Approved Document checks are marked as fail/non-compliant.")
+    if partial_count:
+        triggers.append("Some compliance items require further details or confirmation.")
+    if "STRUCTURAL" in combined:
+        triggers.append("Structural information or engineer confirmation is relevant.")
+    if "FIRE" in combined:
+        triggers.append("Fire strategy information is relevant to the review.")
+    if not triggers:
+        triggers.append("No major issue was identified from the visible report sections.")
+
+    return {
+        "module": "Building Regulations Review",
+        "label": label,
+        "basis": "Drawing/report checks",
+        "triggers": triggers[:4],
+        "note": "This is an AI-assisted review status. Formal Building Control approval is still required.",
+    }
+
+
+def calculate_ai_confidence(module_name: str, sections: Dict[str, str], rule_summary: str = "") -> Dict[str, object]:
+    if module_name == "Planning Review":
+        return calculate_planning_confidence(sections, rule_summary)
+    return calculate_building_confidence(sections)
+
+
+def confidence_badge_style(label: str) -> str:
+    label_u = _normalise_text(label).upper()
+    if label_u in {"PASS", "LIKELY PD", "LIKELY PRIOR APPROVAL", "LIKELY COMPLIANT"}:
+        return "background:#DDF3E4;color:#14532D;border-color:#B7E4C7;"
+    if label_u in {"FULL PLANNING ADVISED", "PARTIAL INFORMATION", "STRUCTURAL REVIEW REQUIRED", "FIRE STRATEGY REVIEW REQUIRED", "MANUAL REVIEW ADVISED", "BUILDING CONTROL REVIEW ADVISED"}:
+        return "background:#FFF3CD;color:#6B4E00;border-color:#F1D48A;"
+    return "background:#F8D7DA;color:#842029;border-color:#F1AEB5;"
+
+
+def render_ai_confidence_card(confidence):
+    if not confidence:
+        return
+    label = _normalise_text(confidence.get("label", "MANUAL REVIEW ADVISED"))
+    style = confidence_badge_style(label)
+    triggers = confidence.get("triggers", []) or []
+    st.markdown(
+        f"""
+        <div class="sy-subtle-card">
+            <div class="sy-section-label">AI Confidence System</div>
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap;">
+                <h3 style="margin:0;">Review Status</h3>
+                <span style="display:inline-block;padding:0.42rem 0.72rem;border-radius:999px;border:1px solid; font-weight:800; letter-spacing:0.02em; {style}">{label}</span>
+            </div>
+            <div class="sy-muted" style="margin-top:0.45rem;">Basis: {confidence.get('basis', 'Rule and drawing checks')}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    if triggers:
+        st.markdown("**What caused this result?**")
+        for t in triggers:
+            st.markdown(f"- {t}")
+    if confidence.get("note"):
+        st.caption(str(confidence.get("note")))
+
 PLAN_LABELS = {
     "starter": "Solo",
     "pro": "Studio",
@@ -495,7 +818,9 @@ def get_verified_plan_and_user() -> Tuple[str, str, bool]:
 
 
 def get_allowed_review_modules(plan: str) -> List[str]:
-    return ["Planning Review", "Building Regulations Review"] if plan == "pro" else ["Planning Review"]
+    # Token system: both modules can be selected by authenticated users.
+    # Downloads are controlled by credits rather than the old monthly plan gate.
+    return ["Planning Review", "Building Regulations Review"]
 
 
 def get_plan_upgrade_message(feature_name: str) -> str:
@@ -508,319 +833,285 @@ def add_saved_project(project_record: Dict):
     st.session_state["saved_projects"] = filtered[:25]
 
 
-def inject_custom_css():
+def get_credit_balance() -> int:
+    return int(st.session_state.get("credit_balance", 0) or 0)
+
+
+def add_credit_transaction(amount: int, reason: str, report_id: str = "", balance_after=None):
+    transactions = st.session_state.get("credit_transactions", []) or []
+    transactions.insert(0, {
+        "date": time.strftime("%Y-%m-%d %H:%M"),
+        "amount": int(amount),
+        "reason": reason,
+        "report_id": report_id,
+        "balance_after": get_credit_balance() if balance_after is None else balance_after,
+    })
+    st.session_state["credit_transactions"] = transactions[:100]
+
+
+def grant_credits(amount: int, reason: str = "Credits added"):
+    new_balance = get_credit_balance() + int(amount)
+    st.session_state["credit_balance"] = new_balance
+    add_credit_transaction(int(amount), reason, balance_after=new_balance)
+
+
+def spend_credits(amount: int, reason: str, report_id: str = "", export_type: str = ""):
+    amount = int(amount)
+    balance = get_credit_balance()
+    if amount <= 0:
+        return True, "No credits required."
+    if balance < amount:
+        return False, f"Not enough credits. You need {amount} credits but only have {balance}."
+
+    user_email = normalise_user_email(st.session_state.get("auth_user_name", ""))
+    api_result = api_deduct_credits(
+        user_email,
+        amount,
+        report_id=report_id,
+        export_type=export_type,
+    )
+
+    if not api_result.get("success"):
+        return False, api_result.get("message", "Credit deduction failed. Please try again.")
+
+    new_balance = int(api_result.get("credits", max(0, balance - amount)) or 0)
+    st.session_state["credit_balance"] = new_balance
+    add_credit_transaction(-amount, reason, report_id=report_id, balance_after=new_balance)
+    return True, f"Unlocked successfully. {amount} credits used. New balance: {new_balance}."
+
+
+def get_export_credit_cost(module_name: str, export_type: str) -> int:
+    return int(EXPORT_CREDIT_COSTS.get(module_name, {}).get(export_type, 0))
+
+
+def is_report_unlocked(report_id: str, export_type: str) -> bool:
+    unlocked = st.session_state.get("unlocked_reports", {}) or {}
+    return bool(unlocked.get(report_id, {}).get(export_type, False))
+
+
+def mark_report_unlocked(report_id: str, export_type: str, cost: int = 0):
+    unlocked = st.session_state.get("unlocked_reports", {}) or {}
+    unlocked.setdefault(report_id, {})[export_type] = True
+    st.session_state["unlocked_reports"] = unlocked
+    saved = st.session_state.get("saved_projects", []) or []
+    for item in saved:
+        if item.get("report_id") == report_id:
+            item[f"{export_type}_unlocked"] = True
+            item["credits_used"] = int(item.get("credits_used", 0) or 0) + int(cost or 0)
+    st.session_state["saved_projects"] = saved
+
+
+def unlock_report_export(report_id: str, module_name: str, export_type: str):
+    if is_report_unlocked(report_id, export_type):
+        return True, "Already unlocked. You can download again without using more credits."
+    cost = get_export_credit_cost(module_name, export_type)
+    ok, message = spend_credits(cost, f"Unlock {export_type.upper()} export", report_id=report_id, export_type=export_type)
+    if ok:
+        mark_report_unlocked(report_id, export_type, cost)
+    return ok, message
+
+
+def render_credit_balance_card(compact: bool = False):
+    balance = get_credit_balance()
+    if compact:
+        st.caption(f"Credits: {balance}")
+        return
     st.markdown(
-        """
+        f'''<div class="sy-subtle-card">
+            <div class="sy-section-label">Credits</div>
+            <h3 style="margin:0;">{balance} credits available</h3>
+            <div class="sy-muted" style="margin-top:0.35rem;">{FREE_PREVIEW_NOTE}</div>
+        </div>''',
+        unsafe_allow_html=True,
+    )
+
+
+def render_buy_credits_panel():
+    st.markdown("### Buy Credits")
+    st.caption("Stripe/Wix payment automation is the next phase. These buttons simulate credit top-ups for testing the app flow.")
+    cols = st.columns(len(CREDIT_PACKS))
+    for idx, (pack_name, pack) in enumerate(CREDIT_PACKS.items()):
+        with cols[idx]:
+            st.markdown(f"**{pack_name}**")
+            st.caption(pack["price"])
+            if st.button(f"Add {pack['credits']} credits", key=f"add_credit_pack_{idx}", use_container_width=True):
+                grant_credits(pack["credits"], f"Test top-up: {pack_name}")
+                st.success(f"Added {pack['credits']} credits.")
+                st.rerun()
+
+
+def inject_custom_css():
+    theme = st.session_state.get("app_theme", "Dark")
+    light_mode = str(theme).lower().startswith("light")
+    if light_mode:
+        bg = "#F7F6F2"
+        surface = "#FFFFFF"
+        surface_2 = "#F1EFE8"
+        text = "#171717"
+        muted = "#5F6368"
+        border = "#D9D6CC"
+        shadow = "0 12px 28px rgba(20,20,20,0.08)"
+        sidebar_bg = "#FFFFFF"
+        input_bg = "#FFFFFF"
+    else:
+        bg = "#0E1117"
+        surface = "#121821"
+        surface_2 = "#172033"
+        text = "#F5F7FA"
+        muted = "#B8C0CC"
+        border = "#2A3140"
+        shadow = "0 14px 32px rgba(0,0,0,0.24)"
+        sidebar_bg = "#0B0F16"
+        input_bg = "#111827"
+
+    st.markdown(
+        f"""
         <style>
-        :root {
-            --sy-bg: var(--background-color);
-            --sy-surface: color-mix(in srgb, var(--secondary-background-color) 88%, transparent);
-            --sy-surface-2: color-mix(in srgb, var(--secondary-background-color) 76%, transparent);
-            --sy-border: color-mix(in srgb, var(--text-color) 14%, transparent);
-            --sy-text: var(--text-color);
-            --sy-muted: color-mix(in srgb, var(--text-color) 76%, transparent);
-            --sy-accent: var(--primary-color);
-            --sy-card-shadow: 0 12px 28px rgba(0,0,0,0.16);
-        }
+        :root {{
+            --sy-bg: {bg};
+            --sy-surface: {surface};
+            --sy-surface-2: {surface_2};
+            --sy-border: {border};
+            --sy-text: {text};
+            --sy-muted: {muted};
+            --sy-accent: #D4C29A;
+            --sy-accent-hover: #C5B183;
+            --sy-card-shadow: {shadow};
+            --sy-input-bg: {input_bg};
+            --sy-sidebar-bg: {sidebar_bg};
+        }}
 
-        .stApp {
-            background: linear-gradient(
-                180deg,
-                color-mix(in srgb, var(--background-color) 96%, #0A1630 4%) 0%,
-                var(--background-color) 100%
-            );
-            color: var(--sy-text);
-        }
+        .stApp {{
+            background: var(--sy-bg) !important;
+            color: var(--sy-text) !important;
+            font-size: 15px;
+        }}
+        header[data-testid="stHeader"], [data-testid="stToolbar"], .stAppDeployButton {{ display:none !important; }}
+        #MainMenu {{ visibility:hidden !important; }}
+        footer {{ visibility:hidden !important; }}
 
-        header[data-testid="stHeader"] { display:none !important; }
-        [data-testid="stToolbar"] { display:none !important; }
-        .stAppDeployButton { display:none !important; }
-        #MainMenu { visibility:hidden !important; }
-        footer { visibility:hidden !important; }
-
-        .block-container {
+        .block-container {{
             padding-top: 1rem !important;
-            padding-bottom: 2rem;
-            max-width: 1600px;
-        }
+            padding-bottom: 2rem !important;
+            max-width: 1420px !important;
+        }}
 
-        [data-testid="stSidebar"] {
-            background: linear-gradient(
-                180deg,
-                color-mix(in srgb, var(--background-color) 92%, #08111F 8%) 0%,
-                color-mix(in srgb, var(--background-color) 98%, black 2%) 100%
-            );
+        [data-testid="stSidebar"] {{
+            background: var(--sy-sidebar-bg) !important;
             border-right: 1px solid var(--sy-border);
-        }
-        [data-testid="stSidebar"] * { color: var(--sy-text); }
+        }}
+        [data-testid="stSidebar"] * {{ color: var(--sy-text); }}
+        [data-testid="stSidebar"] [role="radiogroup"] label {{
+            padding: 0.42rem 0.55rem !important;
+            border-radius: 12px !important;
+            margin-bottom: 0.15rem !important;
+        }}
 
-        .sy-topbar {
-            display:flex;
-            justify-content:space-between;
-            align-items:center;
-            padding:1rem;
-            border:1px solid var(--sy-border);
-            border-radius:18px;
-            background: linear-gradient(
-                90deg,
-                color-mix(in srgb, var(--secondary-background-color) 92%, transparent),
-                color-mix(in srgb, var(--secondary-background-color) 76%, var(--primary-color) 8%)
-            );
-            margin-bottom:1.1rem;
+        h1 {{ font-size: 2.35rem !important; letter-spacing: -0.035em !important; line-height: 1.08 !important; }}
+        h2 {{ font-size: 1.45rem !important; letter-spacing: -0.02em !important; }}
+        h3 {{ font-size: 1.12rem !important; }}
+        p, li, label, .stMarkdown, .stCaption {{ color: var(--sy-text); }}
+        small, .sy-muted {{ color: var(--sy-muted) !important; }}
+
+        .sy-topbar {{
+            display:flex; justify-content:space-between; align-items:center; gap: 1rem;
+            padding:0.85rem 1rem; border:1px solid var(--sy-border); border-radius:18px;
+            background: var(--sy-surface); margin-bottom:1rem; box-shadow: var(--sy-card-shadow);
+        }}
+        .sy-topbar-title {{ font-size:0.78rem; text-transform:uppercase; letter-spacing:0.14em; color:var(--sy-muted); font-weight:800; }}
+        .sy-topbar-meta {{ font-size:0.86rem; color:var(--sy-text); }}
+
+        .sy-hero {{
+            padding:1.25rem 1.3rem; border:1px solid var(--sy-border); border-radius:24px;
+            background: var(--sy-surface); margin-bottom:1rem; box-shadow: var(--sy-card-shadow);
+        }}
+        .sy-hero-copy h1 {{ margin:0 0 0.45rem 0 !important; }}
+        .sy-hero-copy .sy-muted {{ line-height:1.55; font-size:0.92rem; }}
+
+        .sy-card, .sy-mini-card, .sy-upload-item, .sy-sidepanel, .sy-workspace, .sy-subtle-card, .sy-option-card, .sy-report-card {{
+            border:1px solid var(--sy-border); background: var(--sy-surface); box-shadow: var(--sy-card-shadow); color: var(--sy-text);
+        }}
+        .sy-card {{ border-radius:20px; padding:1.05rem; margin-bottom:0.95rem; }}
+        .sy-mini-card {{ border-radius:18px; padding:0.9rem; min-height:118px; }}
+        .sy-sidepanel {{ border-radius:20px; padding:0.85rem; position:sticky; top:1rem; font-size:0.86rem; }}
+        .sy-sidepanel .sy-data-row {{ font-size:0.82rem; padding:0.42rem 0; }}
+        .sy-workspace {{ border-radius:22px; padding:1rem; }}
+        .sy-subtle-card {{ border-radius:18px; padding:0.95rem 1rem; margin-bottom:0.85rem; }}
+        .sy-section-label, .sy-panel-title, .sy-kpi {{
+            font-size:0.72rem; text-transform:uppercase; letter-spacing:0.12em; color:var(--sy-muted); margin-bottom:0.35rem; font-weight:800;
+        }}
+        .sy-data-row {{ display:flex; justify-content:space-between; gap:0.8rem; padding:0.52rem 0; border-bottom:1px solid var(--sy-border); color:var(--sy-text); }}
+        .sy-data-row:last-child {{ border-bottom:0; }}
+        .sy-data-row span:first-child {{ color:var(--sy-muted); }}
+        .sy-data-row strong {{ text-align:right; }}
+
+        .sy-option-grid {{ display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:0.7rem; margin:0.75rem 0 1rem 0; }}
+        .sy-option-card {{ border-radius:16px; padding:0.65rem 0.8rem; min-height:48px; }}
+        .sy-option-card label {{ font-weight:650 !important; }}
+        .sy-report-card {{ border-radius:18px; padding:1rem; margin-bottom:0.8rem; }}
+
+        .sy-preview-shell {{ border:1px solid var(--sy-border); border-radius:18px; overflow:hidden; background: var(--sy-surface); }}
+        .sy-preview-topbar {{ display:flex; justify-content:space-between; align-items:center; padding:0.75rem 0.9rem; border-bottom:1px solid var(--sy-border); background: var(--sy-surface-2); }}
+        .sy-preview-title {{ font-weight:700; font-size:0.94rem; color:var(--sy-text); }}
+        .sy-preview-meta {{ font-size:0.8rem; color:var(--sy-muted); }}
+        .sy-preview-badge {{ padding:0.25rem 0.5rem; border-radius:999px; font-size:0.72rem; font-weight:700; background:rgba(212,194,154,0.18); color:var(--sy-text); border:1px solid var(--sy-border); }}
+        .sy-preview-frame {{ border:0; background:white; }}
+        .sy-empty-preview {{ min-height:240px; display:flex; align-items:center; justify-content:center; text-align:center; border:1px dashed var(--sy-border); border-radius:18px; background:var(--sy-surface-2); padding:1rem; color:var(--sy-muted); }}
+        .sy-upload-item {{ border-radius:14px; padding:0.72rem 0.85rem; margin-bottom:0.5rem; }}
+
+        div[data-testid="stMetric"] {{ background: var(--sy-surface); border:1px solid var(--sy-border); padding:0.72rem 0.85rem; border-radius:16px; }}
+        div[data-testid="stMetric"] * {{ color: var(--sy-text) !important; }}
+        .sy-kpi-card {{
+            background: var(--sy-surface);
+            border: 1px solid var(--sy-border);
+            border-radius: 18px;
+            padding: 0.85rem 0.95rem;
+            min-height: 96px;
             box-shadow: var(--sy-card-shadow);
-        }
-        .sy-topbar-title {
-            font-size:0.9rem;
-            text-transform:uppercase;
-            letter-spacing:0.12em;
-            color:var(--sy-muted);
-        }
-        .sy-topbar-meta { font-size:0.9rem; color:var(--sy-text); }
-
-        .sy-hero {
-            padding:1.65rem 1.4rem 1.4rem 1.4rem;
-            border:1px solid var(--sy-border);
-            border-radius:24px;
-            background:
-                radial-gradient(circle at 8% 18%, color-mix(in srgb, var(--primary-color) 22%, transparent), transparent 30%),
-                radial-gradient(circle at 92% 12%, color-mix(in srgb, var(--primary-color) 14%, #00d4ff 22%), transparent 28%),
-                linear-gradient(
-                    135deg,
-                    color-mix(in srgb, var(--secondary-background-color) 70%, var(--primary-color) 12%) 0%,
-                    color-mix(in srgb, var(--background-color) 92%, transparent) 55%,
-                    color-mix(in srgb, var(--background-color) 98%, black 2%) 100%
-                );
-            margin-bottom:1rem;
-            box-shadow:0 18px 40px rgba(0,0,0,0.18);
-        }
-        .sy-hero-grid { display:grid; grid-template-columns:1.4fr 0.9fr; gap:1rem; align-items:start; }
-        .sy-hero-copy { padding-top:0.25rem; }
-        .sy-hero-copy h1 {
-            margin:0 0 0.55rem 0 !important;
-            line-height:1.06;
-            color:var(--sy-text);
-            font-size:3.05rem;
-            letter-spacing:-0.03em;
-        }
-        .sy-hero-copy .sy-muted { margin-top:0.2rem; line-height:1.7; color:var(--sy-muted); }
-
-        .sy-hero-stat,
-        .sy-step,
-        .sy-card,
-        .sy-mini-card,
-        .sy-upload-item,
-        .sy-sidepanel,
-        .sy-workspace {
-            border:1px solid var(--sy-border);
-            background: linear-gradient(
-                180deg,
-                color-mix(in srgb, var(--secondary-background-color) 86%, transparent),
-                color-mix(in srgb, var(--secondary-background-color) 76%, transparent)
-            );
-            box-shadow: var(--sy-card-shadow);
+            overflow: hidden;
+        }}
+        .sy-kpi-label {{
+            font-size: 0.78rem;
+            color: var(--sy-muted);
+            margin-bottom: 0.42rem;
+            line-height: 1.15;
+        }}
+        .sy-kpi-value {{
             color: var(--sy-text);
-        }
+            font-size: clamp(1.15rem, 2.1vw, 1.95rem);
+            line-height: 1.05;
+            font-weight: 500;
+            white-space: normal;
+            overflow-wrap: anywhere;
+            word-break: break-word;
+        }}
 
-        .sy-hero-stat { border-radius:18px; padding:1rem; min-height:82px; }
-        .sy-step { border-radius:18px; padding:1rem; min-height:112px; }
-        .sy-card { border-radius:20px; padding:1.05rem; margin-bottom:0.95rem; }
-        .sy-mini-card { border-radius:18px; padding:1rem; min-height:158px; }
-        .sy-sidepanel { border-radius:20px; padding:1rem; position:sticky; top:1rem; }
-        .sy-workspace { border-radius:22px; padding:1rem; }
+        .stDownloadButton button, .stButton button, .stLinkButton a {{ border-radius:14px !important; }}
+        .stButton button, .stDownloadButton button, .stLinkButton a {{
+            background: var(--sy-accent) !important; color: #111111 !important; border: 1px solid var(--sy-accent) !important;
+            box-shadow: 0 10px 24px rgba(212, 194, 154, 0.18) !important; font-weight: 650 !important;
+        }}
+        .stButton button:hover, .stDownloadButton button:hover, .stLinkButton a:hover {{ background: var(--sy-accent-hover) !important; border-color: var(--sy-accent-hover) !important; color: #111111 !important; filter:none !important; }}
+        .stButton button *, .stDownloadButton button *, .stLinkButton a * {{ color:#111111 !important; }}
+        .stButton button p, .stDownloadButton button p, .stLinkButton a p {{ color:#111111 !important; }}
 
-        .sy-panel-title,
-        .sy-kpi {
-            font-size:0.82rem;
-            text-transform:uppercase;
-            letter-spacing:0.1em;
-            color:var(--sy-muted);
-            margin-bottom:0.45rem;
-        }
-
-        .sy-workspace-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:0.8rem; }
-        .sy-workspace-title { font-size:1.08rem; font-weight:700; color:var(--sy-text); }
-        .sy-workspace-meta, .sy-muted { font-size:0.89rem; color:var(--sy-muted); }
-
-        .sy-preview-shell {
-            border:1px solid var(--sy-border);
-            border-radius:18px;
-            overflow:hidden;
-            background: var(--secondary-background-color);
-        }
-        .sy-preview-topbar {
-            display:flex;
-            justify-content:space-between;
-            align-items:center;
-            padding:0.82rem 0.95rem;
-            border-bottom:1px solid var(--sy-border);
-            background: linear-gradient(
-                90deg,
-                color-mix(in srgb, var(--secondary-background-color) 88%, var(--primary-color) 8%),
-                color-mix(in srgb, var(--secondary-background-color) 94%, transparent)
-            );
-        }
-        .sy-preview-title { font-weight:700; font-size:0.98rem; color:var(--sy-text); }
-        .sy-preview-meta { font-size:0.84rem; color:var(--sy-muted); }
-        .sy-preview-badge {
-            padding:0.28rem 0.58rem;
-            border-radius:999px;
-            font-size:0.76rem;
-            font-weight:700;
-            background:color-mix(in srgb, var(--primary-color) 18%, transparent);
-            color:var(--sy-text);
-            border:1px solid var(--sy-border);
-        }
-        .sy-preview-frame { border:0; background:white; }
-        .sy-empty-preview {
-            min-height:280px;
-            display:flex;
-            align-items:center;
-            justify-content:center;
-            text-align:center;
-            border:1px dashed var(--sy-border);
-            border-radius:18px;
-            background:color-mix(in srgb, var(--secondary-background-color) 72%, transparent);
-            padding:1rem;
-            color:var(--sy-muted);
-        }
-
-        .sy-upload-item { border-radius:14px; padding:0.78rem 0.9rem; margin-bottom:0.55rem; }
-        .sy-data-row {
-            display:flex;
-            justify-content:space-between;
-            gap:0.8rem;
-            padding:0.52rem 0;
-            border-bottom:1px solid var(--sy-border);
-            color:var(--sy-text);
-        }
-        .sy-data-row:last-child { border-bottom:0; }
-        .sy-data-row span:first-child { color:var(--sy-muted); }
-
-        div[data-testid="stMetric"] {
-            background: linear-gradient(
-                180deg,
-                color-mix(in srgb, var(--secondary-background-color) 86%, transparent),
-                color-mix(in srgb, var(--secondary-background-color) 76%, transparent)
-            );
-            border:1px solid var(--sy-border);
-            padding:0.78rem 0.9rem;
-            border-radius:16px;
-        }
-
-        .stDownloadButton button, .stButton button, .stLinkButton a {
-            border-radius:14px !important;
-        }
-        .stButton button, .stDownloadButton button, .stLinkButton a {
-            background: #D4C29A !important;
-            color: #111111 !important;
-            border: 1px solid #D4C29A !important;
-            box-shadow: 0 10px 24px rgba(212, 194, 154, 0.18) !important;
-            font-weight: 600 !important;
-        }
-        .stButton button:hover, .stDownloadButton button:hover, .stLinkButton a:hover {
-            background: #c5b183 !important;
-            border-color: #c5b183 !important;
-            color: #111111 !important;
-            filter:none !important;
-        }
-        .stButton button:focus, .stDownloadButton button:focus, .stLinkButton a:focus {
-            outline: none !important;
-            box-shadow: 0 0 0 2px rgba(212, 194, 154, 0.28) !important;
-        }
-
-        .stTabs [data-baseweb="tab-list"] { gap:0.42rem; }
-        .stTabs [data-baseweb="tab"] {
-            border-radius:12px;
-            padding:0.5rem 0.9rem;
-            background:color-mix(in srgb, var(--secondary-background-color) 80%, transparent);
-            border:1px solid var(--sy-border);
-        }
-        .stTabs [aria-selected="true"] {
-            color:var(--sy-text) !important;
-            border-color:color-mix(in srgb, var(--primary-color) 28%, transparent) !important;
-        }
-
-        .stSelectbox label, .stTextInput label, .stTextArea label, .stNumberInput label, .stDateInput label, .stMultiSelect label {
-            color:var(--sy-text) !important;
-            font-weight:600 !important;
-        }
-        [data-baseweb="select"] > div,
-        [data-baseweb="tag"] {
-            background:color-mix(in srgb, var(--secondary-background-color) 86%, transparent) !important;
-            border:1px solid #5D6472 !important;
-            color:var(--sy-text) !important;
-        }
-        .stTextInput input,
-        .stTextArea textarea,
-        .stNumberInput input,
-        .stDateInput input,
-        div[data-baseweb="base-input"] > input,
-        div[data-baseweb="base-input"] > textarea {
-            background:color-mix(in srgb, var(--secondary-background-color) 86%, transparent) !important;
-            border:1px solid #5D6472 !important;
-            color:var(--sy-text) !important;
-            border-radius:12px !important;
-        }
-        .stTextInput input:focus,
-        .stTextArea textarea:focus,
-        .stNumberInput input:focus,
-        .stDateInput input:focus,
-        div[data-baseweb="base-input"] > input:focus,
-        div[data-baseweb="base-input"] > textarea:focus,
-        [data-baseweb="select"] > div:focus-within {
-            border-color:#D4C29A !important;
-            box-shadow:0 0 0 1px #D4C29A !important;
-        }
-        .stTextArea textarea {
-            min-height: 90px;
-        }
-        .streamlit-expanderHeader {
-            border:1px solid #5D6472 !important;
-            border-radius:12px !important;
-        }
-
-                .sy-topbar { margin-bottom: 0.8rem; }
-        .sy-hero-simple { display:flex; gap:1rem; align-items:flex-start; }
-        .sy-badge-row { display:flex; flex-wrap:wrap; gap:0.5rem; margin-top:0.7rem; }
-        .sy-badge {
-            padding:0.35rem 0.65rem;
-            border:1px solid var(--sy-border);
-            border-radius:999px;
-            background:color-mix(in srgb, var(--secondary-background-color) 86%, transparent);
-            font-size:0.8rem;
-            color:var(--sy-text);
-        }
-        .sy-subtle-card {
-            border:1px solid var(--sy-border);
-            border-radius:18px;
-            background: linear-gradient(
-                180deg,
-                color-mix(in srgb, var(--secondary-background-color) 86%, transparent),
-                color-mix(in srgb, var(--secondary-background-color) 76%, transparent)
-            );
-            box-shadow: var(--sy-card-shadow);
-            padding:0.95rem 1rem;
-            margin-bottom:0.85rem;
-        }
-        .sy-section-label {
-            font-size:0.78rem;
-            text-transform:uppercase;
-            letter-spacing:0.08em;
-            color:var(--sy-muted);
-            margin-bottom:0.35rem;
-        }
-.stProgress > div > div > div > div {
-            background: linear-gradient(
-                90deg,
-                var(--primary-color),
-                color-mix(in srgb, var(--primary-color) 65%, #00D4FF 35%)
-            );
-        }
+        .stSelectbox label, .stTextInput label, .stTextArea label, .stNumberInput label, .stDateInput label, .stMultiSelect label, .stCheckbox label, .stRadio label {{
+            color:var(--sy-text) !important; font-weight:650 !important;
+        }}
+        [data-baseweb="select"] > div, [data-baseweb="tag"] {{ background:var(--sy-input-bg) !important; border:1px solid #5D6472 !important; color:var(--sy-text) !important; }}
+        .stTextInput input, .stTextArea textarea, .stNumberInput input, .stDateInput input, div[data-baseweb="base-input"] > input, div[data-baseweb="base-input"] > textarea {{
+            background:var(--sy-input-bg) !important; border:1px solid #5D6472 !important; color:var(--sy-text) !important; border-radius:12px !important;
+        }}
+        .stTextInput input:focus, .stTextArea textarea:focus, .stNumberInput input:focus, .stDateInput input:focus, div[data-baseweb="base-input"] > input:focus, div[data-baseweb="base-input"] > textarea:focus, [data-baseweb="select"] > div:focus-within {{
+            border-color:#D4C29A !important; box-shadow:0 0 0 1px #D4C29A !important;
+        }}
+        .stTextArea textarea {{ min-height: 90px; }}
+        .streamlit-expanderHeader {{ border:1px solid #5D6472 !important; border-radius:12px !important; }}
+        .stProgress > div > div > div > div {{ background: linear-gradient(90deg, #D4C29A, #c5b183); }}
         </style>
         """,
         unsafe_allow_html=True,
     )
-
 
 def smooth_progress(progress_bar, status_text, start, end, message, duration=0.8):
     steps = max(1, end - start)
@@ -1032,11 +1323,51 @@ def add_word_footer(section, practice_name="ArchLens AI", report_title="AI Revie
 
 
 
+
+
+# -----------------------------------------------------------------------------
+# SY DESIGN STUDIO BRANDED REPORT EXPORT SETTINGS
+# Place your logo in one of these paths in your Render/GitHub app:
+#   assets/sy_design_studio_logo.png
+#   assets/logo.png
+#   sy_design_studio_logo.png
+# The PDF will still export cleanly if no logo file is found.
+# -----------------------------------------------------------------------------
+SY_BRAND = {
+    "practice_name": "SY Design Studio",
+    "product_name": "ArchLens AI",
+    "charcoal": "#333333",
+    "gold": "#D4C29A",
+    "light_gold": "#F4EFE3",
+    "soft_grey": "#F6F6F4",
+    "mid_grey": "#707070",
+    "line_grey": "#D9D9D4",
+}
+
+
+def get_brand_logo_path():
+    candidates = [
+        "assets/sy_design_studio_logo.png",
+        "assets/sy_design_studio_logo.jpg",
+        "assets/logo.png",
+        "assets/logo.jpg",
+        "sy_design_studio_logo.png",
+        "sy_design_studio_logo.jpg",
+        "logo.png",
+        "logo.jpg",
+    ]
+    for candidate in candidates:
+        if os.path.exists(candidate):
+            return candidate
+    return None
+
 def build_pdf_report(file_name, address, client, date, practice_name, report_id, sections, module_name):
+    """Create a polished SY Design Studio branded PDF for Planning and Building Regulations modules."""
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4
     from reportlab.pdfbase.pdfmetrics import stringWidth
     from reportlab.pdfgen import canvas
+    from reportlab.lib.utils import ImageReader
 
     config = MODULE_CONFIG[module_name]
     section_order = config["section_order"]
@@ -1044,19 +1375,37 @@ def build_pdf_report(file_name, address, client, date, practice_name, report_id,
     disclaimer_text = config["disclaimer"]
     report_title = config["title"]
 
+    brand_practice = practice_name or SY_BRAND["practice_name"]
+    logo_path = get_brand_logo_path()
+    try:
+        logo_bytes = st.session_state.get("brand_logo_bytes")
+    except Exception:
+        logo_bytes = None
+
+    charcoal = colors.HexColor(SY_BRAND["charcoal"])
+    gold = colors.HexColor(SY_BRAND["gold"])
+    light_gold = colors.HexColor(SY_BRAND["light_gold"])
+    soft_grey = colors.HexColor(SY_BRAND["soft_grey"])
+    mid_grey = colors.HexColor(SY_BRAND["mid_grey"])
+    line_grey = colors.HexColor(SY_BRAND["line_grey"])
+
     buffer = BytesIO()
     c = canvas.Canvas(buffer, pagesize=A4)
     width, height = A4
-    left_margin = 46
-    right_margin = 46
-    top_margin = 56
-    bottom_margin = 42
+    left_margin = 48
+    right_margin = 48
+    top_margin = 58
+    bottom_margin = 48
     usable_width = width - left_margin - right_margin
     y = height - top_margin
+    page_no = 0
 
-    def wrap_text(text, font_name="Helvetica", font_size=10.5, max_width=None):
+    def safe_text(value):
+        return str(value if value not in [None, ""] else "Not provided")
+
+    def wrap_text(text, font_name="Helvetica", font_size=10.2, max_width=None):
         max_width = max_width or usable_width
-        words = str(text).split()
+        words = safe_text(text).replace("\t", " ").split()
         lines = []
         current = ""
         for word in words:
@@ -1071,34 +1420,52 @@ def build_pdf_report(file_name, address, client, date, practice_name, report_id,
             lines.append(current)
         return lines or [""]
 
-    def draw_page_header():
-        c.setStrokeColor(colors.HexColor("#D8E0EE"))
-        c.line(left_margin, height - 28, width - right_margin, height - 28)
-        c.setFillColor(colors.HexColor("#1F3B73"))
-        c.setFont("Helvetica-Bold", 10)
-        c.drawString(left_margin, height - 18, practice_name or "ArchLens AI")
-        c.setFont("Helvetica", 8.5)
-        c.drawRightString(width - right_margin, height - 18, f"{report_title} | {report_id}")
-        c.setFillColor(colors.black)
+    def draw_logo_or_brand(x, y_top, max_w=140, max_h=48, dark=False):
+        logo_source = BytesIO(logo_bytes) if logo_bytes else logo_path
+        if logo_source:
+            try:
+                img = ImageReader(logo_source)
+                iw, ih = img.getSize()
+                scale = min(max_w / iw, max_h / ih)
+                draw_w, draw_h = iw * scale, ih * scale
+                c.drawImage(img, x, y_top - draw_h, width=draw_w, height=draw_h, mask="auto", preserveAspectRatio=True)
+                return draw_w, draw_h
+            except Exception:
+                pass
+        c.setFont("Helvetica-Bold", 15)
+        c.setFillColor(colors.white if dark else charcoal)
+        c.drawString(x, y_top - 20, brand_practice)
+        c.setFont("Helvetica", 7.5)
+        c.setFillColor(colors.white if dark else mid_grey)
+        c.drawString(x, y_top - 32, "Planning & Architectural Services")
+        return max_w, 32
 
-    def draw_page_footer():
-        c.setStrokeColor(colors.HexColor("#D8E0EE"))
-        c.line(left_margin, 24, width - right_margin, 24)
-        c.setFillColor(colors.grey)
-        c.setFont("Helvetica-Oblique", 8.2)
-        footer_lines = wrap_text(disclaimer_text, "Helvetica-Oblique", 8.2, usable_width - 30)[:2]
-        yy = 14
-        for line in footer_lines:
-            c.drawCentredString(width / 2, yy, line)
-            yy -= 9
-        c.setFillColor(colors.black)
+    def draw_footer():
+        c.setStrokeColor(line_grey)
+        c.setLineWidth(0.7)
+        c.line(left_margin, 34, width - right_margin, 34)
+        c.setFont("Helvetica", 8)
+        c.setFillColor(mid_grey)
+        footer_left = f"Prepared by {brand_practice} | Planning & Architectural Services"
+        c.drawString(left_margin, 22, footer_left)
+        c.drawRightString(width - right_margin, 22, f"Page {page_no}")
+
+    def draw_header():
+        c.setStrokeColor(line_grey)
+        c.setLineWidth(0.7)
+        c.line(left_margin, height - 36, width - right_margin, height - 36)
+        draw_logo_or_brand(left_margin, height - 12, max_w=125, max_h=28)
+        c.setFillColor(mid_grey)
+        c.setFont("Helvetica", 8.2)
+        c.drawRightString(width - right_margin, height - 20, f"{report_title} | Ref: {report_id}")
 
     def new_page():
-        nonlocal y
+        nonlocal y, page_no
         c.showPage()
+        page_no += 1
         y = height - top_margin
-        draw_page_header()
-        draw_page_footer()
+        draw_header()
+        draw_footer()
 
     def ensure_space(required_height):
         nonlocal y
@@ -1106,204 +1473,261 @@ def build_pdf_report(file_name, address, client, date, practice_name, report_id,
             new_page()
 
     def draw_cover():
-        c.setFillColor(colors.HexColor("#1F3B73"))
+        nonlocal page_no
+        page_no = 1
+        # dark charcoal title band
+        c.setFillColor(charcoal)
+        c.rect(0, height - 230, width, 230, fill=1, stroke=0)
+        # gold accent strip
+        c.setFillColor(gold)
+        c.rect(0, height - 235, width, 5, fill=1, stroke=0)
+
+        draw_logo_or_brand(left_margin, height - 45, max_w=170, max_h=58, dark=True)
+        c.setFillColor(colors.white)
+        c.setFont("Helvetica", 10)
+        c.drawRightString(width - right_margin, height - 55, SY_BRAND["product_name"])
+        c.setFont("Helvetica", 8.5)
+        c.drawRightString(width - right_margin, height - 70, f"Report ID: {report_id}")
+
+        title = report_title
+        if module_name == "Planning Review":
+            title = "Planning Appraisal Report"
+        elif module_name == "Building Regulations Review":
+            title = "Building Regulations Review Report"
+
+        c.setFillColor(colors.white)
         c.setFont("Helvetica-Bold", 24)
-        c.drawCentredString(width / 2, height - 145, practice_name or "ArchLens AI")
-        c.setFillColor(colors.black)
-        c.setFont("Helvetica-Bold", 19)
-        c.drawCentredString(width / 2, height - 175, report_title)
+        title_lines = wrap_text(title, "Helvetica-Bold", 24, width - 2 * left_margin)
+        yy = height - 125
+        for line in title_lines[:2]:
+            c.drawString(left_margin, yy, line)
+            yy -= 29
         c.setFont("Helvetica", 11)
-        c.setFillColor(colors.HexColor("#404040"))
-        meta_lines = [
-            f"Project Address: {address}",
-            f"Client: {client}",
-            f"Drawing Pack Reviewed: {file_name}",
-            f"Date: {date}",
-            f"Report ID: {report_id}",
-            f"Prepared by: {practice_name or 'ArchLens AI'}",
+        c.setFillColor(colors.HexColor("#E8E2D5"))
+        c.drawString(left_margin, yy - 4, "Prepared in a professional planning-consultant style using ArchLens AI")
+
+        # Meta card
+        card_x = left_margin
+        card_y = height - 495
+        card_w = usable_width
+        card_h = 210
+        c.setFillColor(colors.white)
+        c.roundRect(card_x, card_y, card_w, card_h, 12, fill=1, stroke=0)
+        c.setStrokeColor(line_grey)
+        c.roundRect(card_x, card_y, card_w, card_h, 12, fill=0, stroke=1)
+        c.setFillColor(light_gold)
+        c.roundRect(card_x, card_y + card_h - 36, card_w, 36, 12, fill=1, stroke=0)
+        c.setFillColor(charcoal)
+        c.setFont("Helvetica-Bold", 11)
+        c.drawString(card_x + 18, card_y + card_h - 23, "Project Information")
+
+        meta = [
+            ("Project Address", safe_text(address)),
+            ("Client", safe_text(client)),
+            ("Project Type", sections.get("PROJECT CLASSIFICATION", "Not detected").splitlines()[0] if sections.get("PROJECT CLASSIFICATION") else "Not detected"),
+            ("Drawing Pack Reviewed", safe_text(file_name)),
+            ("Date", safe_text(date)),
+            ("Prepared By", brand_practice),
         ]
-        yy = height - 255
-        for line in meta_lines:
-            c.drawCentredString(width / 2, yy, line)
-            yy -= 18
-        summary_lines = [ln.strip() for ln in sections.get("TOP SUMMARY", "").splitlines() if ln.strip()]
-        c.setFillColor(colors.HexColor("#1F3B73"))
-        c.setFont("Helvetica-Bold", 13)
-        c.drawCentredString(width / 2, yy - 8, "Executive Summary")
-        c.setFillColor(colors.black)
-        c.setFont("Helvetica", 11)
-        yy -= 30
-        for line in summary_lines[:4]:
-            c.drawCentredString(width / 2, yy, line)
-            yy -= 18
+        yy = card_y + card_h - 62
+        for label, value in meta:
+            c.setFont("Helvetica-Bold", 8.8)
+            c.setFillColor(mid_grey)
+            c.drawString(card_x + 18, yy, label.upper())
+            c.setFont("Helvetica", 9.4)
+            c.setFillColor(charcoal)
+            x_val = card_x + 155
+            for i, line in enumerate(wrap_text(value, "Helvetica", 9.4, card_w - 175)[:2]):
+                c.drawString(x_val, yy - (i * 11), line)
+            yy -= 27
+
+        # Summary card
+        summary = sections.get("TOP SUMMARY", "") or sections.get("EXECUTIVE SUMMARY", "")
+        c.setFillColor(soft_grey)
+        c.roundRect(left_margin, 140, usable_width, 90, 10, fill=1, stroke=0)
+        c.setFillColor(charcoal)
+        c.setFont("Helvetica-Bold", 11)
+        c.drawString(left_margin + 16, 206, "Executive Summary")
+        c.setFont("Helvetica", 9.4)
+        c.setFillColor(colors.HexColor("#444444"))
+        yy = 190
+        summary_lines = []
+        for raw in summary.splitlines():
+            raw = raw.strip(" -•")
+            if raw:
+                summary_lines.extend(wrap_text(raw, "Helvetica", 9.4, usable_width - 32))
+        for line in summary_lines[:5]:
+            c.drawString(left_margin + 16, yy, line)
+            yy -= 12
+
+        c.setFont("Helvetica", 8)
+        c.setFillColor(mid_grey)
+        c.drawCentredString(width / 2, 58, "This document is AI-assisted and should be reviewed by a competent professional before formal submission.")
         c.showPage()
 
-    def draw_section_banner(title):
+    def draw_section_heading(number, title):
         nonlocal y
-        ensure_space(58)
-        banner_h = 26
-        bottom = y - banner_h
-        c.setFillColor(colors.HexColor("#E9EEF5"))
-        c.roundRect(left_margin, bottom, usable_width, banner_h, 6, fill=1, stroke=0)
-        c.setFillColor(colors.HexColor("#1F3B73"))
+        ensure_space(48)
+        c.setFillColor(light_gold)
+        c.roundRect(left_margin, y - 27, usable_width, 30, 7, fill=1, stroke=0)
+        c.setFillColor(gold)
+        c.roundRect(left_margin, y - 27, 34, 30, 7, fill=1, stroke=0)
+        c.setFillColor(charcoal)
+        c.setFont("Helvetica-Bold", 10)
+        c.drawCentredString(left_margin + 17, y - 16, f"{number}")
         c.setFont("Helvetica-Bold", 12)
-        c.drawString(left_margin + 12, bottom + 8, title)
-        c.setFillColor(colors.black)
-        y = bottom - 12
+        c.drawString(left_margin + 46, y - 16, title)
+        y -= 43
+
+    def draw_paragraph(text, indent=0, bullet=False, font_size=10.2):
+        nonlocal y
+        max_w = usable_width - indent - (16 if bullet else 0)
+        lines = wrap_text(text, "Helvetica", font_size, max_w)
+        ensure_space(len(lines) * 14 + 12)
+        c.setFont("Helvetica", font_size)
+        c.setFillColor(colors.HexColor("#3F3F3F"))
+        if bullet:
+            c.setFillColor(gold)
+            c.circle(left_margin + indent + 3, y - 3, 2.2, fill=1, stroke=0)
+            c.setFillColor(colors.HexColor("#3F3F3F"))
+            x = left_margin + indent + 14
+        else:
+            x = left_margin + indent
+        for line in lines:
+            c.drawString(x, y, line)
+            y -= 14
+        y -= 5
 
     def draw_key_value_section(content):
         nonlocal y
         rows = parse_key_value_lines(content)
+        if not rows:
+            draw_paragraph("Not detected")
+            return
         for label, value in rows:
+            ensure_space(32)
             if label:
-                ensure_space(40)
-                c.setFont("Helvetica-Bold", 10.5)
-                for line in wrap_text(f"{label}:"):
-                    c.drawString(left_margin, y, line)
-                    y -= 15
-                y -= 3
-                c.setFont("Helvetica", 10.5)
-                for line in wrap_text(value, "Helvetica", 10.5, usable_width - 14):
-                    ensure_space(20)
-                    c.drawString(left_margin + 12, y, line)
-                    y -= 15
+                c.setFont("Helvetica-Bold", 9.2)
+                c.setFillColor(mid_grey)
+                c.drawString(left_margin, y, label.upper())
+                y -= 13
+                for line in wrap_text(value, "Helvetica", 10.2, usable_width - 10):
+                    ensure_space(16)
+                    c.setFont("Helvetica", 10.2)
+                    c.setFillColor(colors.HexColor("#3F3F3F"))
+                    c.drawString(left_margin + 10, y, line)
+                    y -= 14
+                y -= 5
             else:
-                c.setFont("Helvetica", 10.5)
-                for line in wrap_text(value):
-                    ensure_space(20)
-                    c.drawString(left_margin, y, line)
-                    y -= 15
-            y -= 8
+                draw_paragraph(value)
 
-    def draw_bullet_section(content):
-        nonlocal y
+    def draw_text_section(content):
+        if not content or not content.strip():
+            draw_paragraph("Not detected")
+            return
         for raw in content.splitlines():
             line = raw.strip()
             if not line:
-                y -= 8
                 continue
-            bullet = False
-            if line.startswith("- "):
-                line = line[2:].strip()
-                bullet = True
-            elif line.startswith("• "):
-                line = line[2:].strip()
-                bullet = True
-            wrapped = wrap_text(line, "Helvetica", 10.5, usable_width - (18 if bullet else 0))
-            ensure_space((len(wrapped) * 15) + 10)
-            c.setFont("Helvetica", 10.5)
-            if bullet:
-                c.drawString(left_margin, y, "•")
-                for part in wrapped:
-                    c.drawString(left_margin + 14, y, part)
-                    y -= 15
-                y -= 10
+            if line.startswith("- ") or line.startswith("• "):
+                draw_paragraph(line[2:].strip(), bullet=True)
             else:
-                for part in wrapped:
-                    c.drawString(left_margin, y, part)
-                    y -= 15
-                y -= 10
+                draw_paragraph(line)
 
     def draw_compliance_table(content):
         nonlocal y
         rows = parse_compliance_rows(content)
         if not rows:
-            c.setFont("Helvetica", 10.5)
-            c.drawString(left_margin, y, "No compliance status detected.")
-            y -= 15
+            draw_text_section(content)
             return
 
-        col_part = left_margin
-        col_doc = left_margin + 42
-        col_status = left_margin + 258
-        col_why = left_margin + 392
-        doc_w = 195
-        why_w = usable_width - (col_why - left_margin) - 8
+        col_w = [45, 190, 105, usable_width - 45 - 190 - 105]
+        x_positions = [left_margin]
+        for w_col in col_w[:-1]:
+            x_positions.append(x_positions[-1] + w_col)
 
-        def header():
+        def table_header():
             nonlocal y
-            ensure_space(34)
-            c.setFillColor(colors.HexColor("#EAEFF7"))
-            c.rect(left_margin, y - 18, usable_width, 20, fill=1, stroke=0)
-            c.setFillColor(colors.black)
-            c.setFont("Helvetica-Bold", 9)
-            c.drawString(col_part, y - 5, "Part")
-            c.drawString(col_doc, y - 5, "Approved Document")
-            c.drawString(col_status, y - 5, "Status")
-            c.drawString(col_why, y - 5, "Why")
+            ensure_space(31)
+            c.setFillColor(charcoal)
+            c.roundRect(left_margin, y - 22, usable_width, 24, 5, fill=1, stroke=0)
+            c.setFillColor(colors.white)
+            c.setFont("Helvetica-Bold", 8.2)
+            headers = ["PART", "APPROVED DOCUMENT", "STATUS", "COMMENTARY"]
+            for x, h in zip(x_positions, headers):
+                c.drawString(x + 7, y - 14, h)
             y -= 30
 
-        def status_fill(status):
-            up = status.upper()
-            if "PASS" in up and "PARTLY" not in up:
-                return colors.HexColor("#2E7D32")
-            if "FAIL" in up:
-                return colors.HexColor("#C62828")
-            return colors.HexColor("#EF6C00")
-
-        header()
+        table_header()
         for row in rows:
-            doc_lines = wrap_text(row["title"], "Helvetica-Bold", 9, doc_w)
-            why_lines = wrap_text(row["why"], "Helvetica", 8.5, why_w)
-            row_h = max(40, 18 + max(len(doc_lines), len(why_lines), 1) * 10)
-            ensure_space(row_h + 12)
-            top = y
-            c.setFillColor(colors.whitesmoke)
-            c.rect(left_margin, y - row_h + 5, usable_width, row_h, fill=1, stroke=0)
-            c.setFillColor(colors.HexColor("#1F3B73"))
-            c.circle(col_part + 8, top - 6, 8, fill=1, stroke=0)
-            c.setFillColor(colors.white)
-            c.setFont("Helvetica-Bold", 8)
-            c.drawCentredString(col_part + 8, top - 9, row["part"])
-            c.setFillColor(colors.black)
-
+            doc_lines = wrap_text(row.get("title", ""), "Helvetica-Bold", 8.4, col_w[1] - 12)
+            why_lines = wrap_text(row.get("why", ""), "Helvetica", 8.2, col_w[3] - 12)
+            status_lines = wrap_text(row.get("status", ""), "Helvetica-Bold", 8, col_w[2] - 12)
+            row_h = max(38, 14 + max(len(doc_lines), len(why_lines), len(status_lines), 1) * 10)
+            ensure_space(row_h + 8)
+            if y - row_h < bottom_margin:
+                new_page()
+                table_header()
+            c.setFillColor(soft_grey)
+            c.roundRect(left_margin, y - row_h + 4, usable_width, row_h, 5, fill=1, stroke=0)
+            c.setStrokeColor(colors.white)
+            for x in x_positions[1:]:
+                c.line(x, y + 4, x, y - row_h + 4)
+            c.setFillColor(charcoal)
             c.setFont("Helvetica-Bold", 9)
-            yy = top - 5
+            c.drawString(x_positions[0] + 10, y - 13, row.get("part", ""))
+            c.setFont("Helvetica-Bold", 8.4)
+            yy = y - 12
             for line in doc_lines:
-                c.drawString(col_doc, yy, line)
+                c.drawString(x_positions[1] + 7, yy, line)
                 yy -= 10
-
-            badge = row["status"].upper()
-            if "PARTLY" in badge:
-                badge = "REVIEW REQUIRED"
-            elif "PASS" in badge and "PARTLY" not in badge:
-                badge = "PASS"
-            elif "FAIL" in badge:
-                badge = "FAIL"
-            bw = stringWidth(badge, "Helvetica-Bold", 8) + 12
-            c.setFillColor(status_fill(badge))
-            c.roundRect(col_status, top - 14, bw, 14, 3, fill=1, stroke=0)
-            c.setFillColor(colors.white)
-            c.setFont("Helvetica-Bold", 8)
-            c.drawString(col_status + 6, top - 9, badge)
-            c.setFillColor(colors.black)
-
-            c.setFont("Helvetica", 8.5)
-            yy = top - 5
+            status = row.get("status", "")
+            status_upper = status.upper()
+            fill = gold
+            if "FAIL" in status_upper:
+                fill = colors.HexColor("#D9A0A0")
+            elif "PASS" in status_upper and "PARTLY" not in status_upper:
+                fill = colors.HexColor("#B7D7B0")
+            c.setFillColor(fill)
+            c.roundRect(x_positions[2] + 7, y - 20, min(col_w[2] - 14, 92), 16, 4, fill=1, stroke=0)
+            c.setFillColor(charcoal)
+            c.setFont("Helvetica-Bold", 7.4)
+            c.drawCentredString(x_positions[2] + 53, y - 15, status[:22].upper())
+            c.setFillColor(colors.HexColor("#3F3F3F"))
+            c.setFont("Helvetica", 8.2)
+            yy = y - 12
             for line in why_lines:
-                c.drawString(col_why, yy, line)
+                c.drawString(x_positions[3] + 7, yy, line)
                 yy -= 10
-
-            y -= row_h + 10
+            y -= row_h + 7
 
     draw_cover()
+    page_no = 2
     y = height - top_margin
-    draw_page_header()
-    draw_page_footer()
+    draw_header()
+    draw_footer()
 
-    for key, title in section_order:
+    for idx, (key, title) in enumerate(section_order, start=1):
         content = sections.get(key, "Not detected")
-        estimated_lines = max(4, len([ln for ln in str(content).splitlines() if ln.strip()]))
-        estimated_height = 52 + min(estimated_lines, 18) * 16
-        ensure_space(estimated_height)
-        draw_section_banner(title)
+        draw_section_heading(idx, title)
         if module_name == "Building Regulations Review" and key == "COMPLIANCE STATUS BY APPROVED DOCUMENT":
             draw_compliance_table(content)
         elif key in special_key_value_sections:
             draw_key_value_section(content)
         else:
-            draw_bullet_section(content)
-        y -= 8
+            draw_text_section(content)
+        y -= 6
+
+    # Final professional disclaimer page note when space allows
+    ensure_space(48)
+    c.setFillColor(soft_grey)
+    c.roundRect(left_margin, y - 40, usable_width, 42, 7, fill=1, stroke=0)
+    c.setFillColor(mid_grey)
+    c.setFont("Helvetica-Oblique", 8.4)
+    yy = y - 14
+    for line in wrap_text(disclaimer_text, "Helvetica-Oblique", 8.4, usable_width - 24)[:2]:
+        c.drawString(left_margin + 12, yy, line)
+        yy -= 11
 
     c.save()
     buffer.seek(0)
@@ -1459,16 +1883,15 @@ def build_word_report(file_name, address, client, date, practice_name, report_id
 def extract_summary_value(sections: Dict[str, str], module_name: str):
     top_summary_rows = {k.upper(): v for k, v in parse_key_value_lines(sections.get("TOP SUMMARY", "")) if k}
     if module_name == "Planning Review":
-        authority_value = top_summary_rows.get("LOCAL AUTHORITY", "Unknown")
-        if authority_value == "Unknown":
-            for line in sections.get("TOP SUMMARY", "").splitlines():
-                stripped = line.strip()
-                if stripped and ":" not in stripped:
-                    authority_value = stripped
-                    break
+        authority_value = "Unknown"
+        for line in sections.get("TOP SUMMARY", "").splitlines():
+            stripped = line.strip()
+            if stripped and ":" not in stripped:
+                authority_value = stripped
+                break
         return (
-            top_summary_rows.get("OVERALL PLANNING POSITION", "Not shown"),
-            top_summary_rows.get("LIKELY PLANNING ROUTE", top_summary_rows.get("APPLICATION TYPE", top_summary_rows.get("LIKELY ROUTE", "Unknown"))),
+            "Not shown",
+            top_summary_rows.get("APPLICATION TYPE", top_summary_rows.get("LIKELY ROUTE", "Unknown")),
             authority_value,
         )
     return (
@@ -1478,33 +1901,60 @@ def extract_summary_value(sections: Dict[str, str], module_name: str):
     )
 
 
+def _shorten_card_value(value, max_chars=34):
+    value = str(value or "Not shown").strip()
+    if len(value) <= max_chars:
+        return value
+    return value[: max_chars - 1].rstrip() + "…"
+
+
 def render_kpi_cards(sections: Dict[str, str], report_id: str, module_name: str):
     v1, v2, v3 = extract_summary_value(sections, module_name)
-    label_2 = "Likely Route" if module_name == "Planning Review" else "Submission Status"
-    label_3 = "Local Authority" if module_name == "Planning Review" else "Review Confidence"
+    if module_name == "Planning Review":
+        cards = [
+            ("Report ID", report_id),
+            ("Planning Position", v1),
+            ("Likely Route", v2),
+            ("Local Authority", v3),
+        ]
+    else:
+        cards = [
+            ("Report ID", report_id),
+            ("Risk Rating", v1),
+            ("Submission Status", v2),
+            ("Review Confidence", v3),
+        ]
 
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Report ID", report_id)
-    c2.metric("Planning Position" if module_name == "Planning Review" else "Risk Rating", v1)
-    c3.metric(label_2, v2)
-    c4.metric(label_3, v3)
+    cols = st.columns(4)
+    for col, (label, value) in zip(cols, cards):
+        value_text = _shorten_card_value(value)
+        full_value = str(value or "")
+        with col:
+            st.markdown(
+                f"""
+                <div class="sy-kpi-card" title="{full_value}">
+                    <div class="sy-kpi-label">{label}</div>
+                    <div class="sy-kpi-value">{value_text}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
 
 
 def extract_summary_values(sections: Dict[str, str], module_name: str):
     top_summary_rows = {k.upper(): v for k, v in parse_key_value_lines(sections.get("TOP SUMMARY", "")) if k}
     if module_name == "Planning Review":
-        authority_value = top_summary_rows.get("LOCAL AUTHORITY", "Unknown")
-        if authority_value == "Unknown":
-            for line in sections.get("TOP SUMMARY", "").splitlines():
-                stripped = line.strip()
-                if stripped and ":" not in stripped:
-                    authority_value = stripped
-                    break
+        authority_value = "Unknown"
+        for line in sections.get("TOP SUMMARY", "").splitlines():
+            stripped = line.strip()
+            if stripped and ":" not in stripped:
+                authority_value = stripped
+                break
         return {
-            "risk": top_summary_rows.get("OVERALL PLANNING POSITION", "Not shown"),
-            "route": top_summary_rows.get("LIKELY PLANNING ROUTE", top_summary_rows.get("APPLICATION TYPE", top_summary_rows.get("LIKELY ROUTE", "Unknown"))),
+            "risk": "Not shown",
+            "route": top_summary_rows.get("APPLICATION TYPE", top_summary_rows.get("LIKELY ROUTE", "Unknown")),
             "authority": authority_value,
-            "probability": "Not shown",
+            "probability": top_summary_rows.get("PLANNING ROUTE CONFIDENCE SCORE", "Not shown"),
         }
     return {
         "risk": top_summary_rows.get("OVERALL RISK RATING", "Unknown"),
@@ -1647,490 +2097,719 @@ if not st.session_state.get("authenticated", False):
 
 current_plan = st.session_state.get("auth_plan", "starter")
 current_user_name = st.session_state.get("auth_user_name", "")
+if current_user_name:
+    sync_credit_balance_from_api(current_user_name)
 allowed_review_modules = get_allowed_review_modules(current_plan)
-default_module = st.session_state.active_module if st.session_state.active_module in allowed_review_modules else allowed_review_modules[0]
-review_module = default_module
-hero_welcome = f'<div style="font-size:0.92rem;color:#C7D7FF;margin-bottom:0.5rem;">Welcome {current_user_name}</div>' if current_user_name else ""
 
+# -------------------------------
+# ArchGuard/ArchLens dashboard UI
+# -------------------------------
+WIZARD_DEFAULTS = {
+    "app_page": "Projects",
+    "project_step": 1,
+    "wizard_review_module": allowed_review_modules[0],
+    "wizard_review_mode": "Architect / Professional",
+    "wizard_project_name": "",
+    "wizard_project_address": "",
+    "wizard_client_name": "",
+    "wizard_project_types": [],
+    "wizard_property_type": "Not stated",
+    "wizard_proposal_summary": "",
+    "wizard_rear_depth": 6.0,
+    "wizard_rear_height": 4.0,
+    "wizard_uploaded_files": [],
+    "wizard_scope_items": [],
+    "wizard_review_focus": "",
+    "wizard_accuracy_answers": {},
+}
+for k, v in WIZARD_DEFAULTS.items():
+    if k not in st.session_state:
+        st.session_state[k] = v
+
+if st.session_state["wizard_review_module"] not in allowed_review_modules:
+    st.session_state["wizard_review_module"] = allowed_review_modules[0]
+
+def get_brand_logo_bytes_for_ui():
+    logo_bytes = st.session_state.get("brand_logo_bytes")
+    if logo_bytes:
+        return logo_bytes
+    logo_path = get_brand_logo_path()
+    if logo_path and os.path.exists(logo_path):
+        with open(logo_path, "rb") as f:
+            return f.read()
+    return None
+
+def app_logo_data_uri():
+    logo_bytes = get_brand_logo_bytes_for_ui()
+    if not logo_bytes:
+        return ""
+    return "data:image/png;base64," + base64.b64encode(logo_bytes).decode("utf-8")
+
+def checkbox_grid(label, options, state_key, columns=2, help_text=None):
+    st.markdown(f"**{label}**")
+    if help_text:
+        st.caption(help_text)
+    current = set(st.session_state.get(state_key, []))
+    selected = []
+    cols = st.columns(columns)
+    for i, option in enumerate(options):
+        with cols[i % columns]:
+            checked = st.checkbox(option, value=option in current, key=f"{state_key}_{i}")
+            if checked:
+                selected.append(option)
+    st.session_state[state_key] = selected
+    return selected
+
+
+def single_choice_cards(label, options, state_key, columns=2, help_text=None):
+    """Single-select intake control.
+
+    Used for Property Type so the app can apply one clear PD/property-rule filter.
+    This avoids multiple property types being ticked at once.
+    """
+    st.markdown(f"**{label}**")
+    if help_text:
+        st.caption(help_text)
+    current = st.session_state.get(state_key, options[0] if options else "")
+    if current not in options and options:
+        current = options[0]
+    choice = st.radio(
+        label,
+        options,
+        index=options.index(current) if current in options else 0,
+        horizontal=False,
+        key=f"{state_key}_single_radio",
+        label_visibility="collapsed",
+    )
+    st.session_state[state_key] = choice
+    return choice
+
+
+def get_required_accuracy_answers(project_types):
+    group = get_accuracy_question_group(project_types)
+    answers = {"pd_question_family": group}
+    st.markdown("**Planning / PD accuracy questions**")
+    st.caption("These answers are part of the project intake and will be used with the uploaded drawings. Where drawing dimensions differ, the uploaded plans take priority.")
+    if group in {"class_a", "class_b", "class_d"}:
+        answers["site_constraints"] = checkbox_grid(
+            "Site constraints",
+            ["None", "Conservation area / Article 2(3) land", "Article 4 direction", "Listed building"],
+            "wizard_acc_site_constraints",
+            columns=2,
+        )
+    if group == "class_b":
+        answers["front_roof_plane_highway"] = st.radio("Does any part project from the front roof slope facing the highway?", ["Not sure", "No", "Yes"], horizontal=True, key="wizard_acc_b_front")
+        answers["roof_volume_band"] = st.radio("Added roof volume", ["Not sure", "Within normal limit", "Over limit"], horizontal=True, key="wizard_acc_b_volume")
+        answers["above_existing_roof_height"] = st.radio("Does it rise above the highest part of the existing roof?", ["Not sure", "No", "Yes"], horizontal=True, key="wizard_acc_b_highest")
+        answers["eaves_setback_0_2m"] = st.radio("Is the enlargement set back at least 200mm from the original eaves?", ["Not sure", "Yes", "No"], horizontal=True, key="wizard_acc_b_eaves")
+        answers["side_windows_obscure_glazed"] = st.radio("Any side windows obscure glazed and non-opening below 1.7m?", ["Not applicable", "Yes", "No", "Not sure"], horizontal=True, key="wizard_acc_b_windows")
+        answers["materials_similar"] = st.radio("Will external materials be similar in appearance to the existing house?", ["Not sure", "Yes", "No"], horizontal=True, key="wizard_acc_b_materials")
+    elif group == "class_a":
+        answers["forward_of_principal_elevation"] = st.radio("Does any part project beyond the principal elevation or a side elevation facing a highway?", ["Not sure", "No", "Yes"], horizontal=True, key="wizard_acc_a_principal")
+        answers["existing_rear_extensions"] = st.radio("Have there been previous rear extensions added to the original house?", ["Not sure", "No", "Yes"], horizontal=True, key="wizard_acc_a_existing")
+        answers["within_2m_of_boundary"] = st.radio("Is any part within 2m of a boundary?", ["Not sure", "No", "Yes"], horizontal=True, key="wizard_acc_a_boundary")
+        answers["eaves_height_within_2m"] = st.radio("If within 2m of a boundary, are the eaves 3.0m or lower?", ["Not applicable", "Yes", "No", "Not sure"], horizontal=True, key="wizard_acc_a_eaves")
+        answers["side_extension_width"] = st.radio("For a side extension, is it more than half the width of the original house?", ["Not applicable", "No", "Yes", "Not sure"], horizontal=True, key="wizard_acc_a_width")
+        answers["materials_similar"] = st.radio("Will external materials be similar in appearance to the existing house?", ["Not sure", "Yes", "No"], horizontal=True, key="wizard_acc_a_materials")
+    elif group == "class_d":
+        answers["porch_ground_area_band"] = st.radio("Is the porch ground area 3m² or less?", ["Not sure", "Yes", "No"], horizontal=True, key="wizard_acc_d_area")
+        answers["porch_height_band"] = st.radio("Is the porch 3.0m high or lower?", ["Not sure", "Yes", "No"], horizontal=True, key="wizard_acc_d_height")
+        answers["porch_within_2m_highway"] = st.radio("Is any part within 2m of a boundary with a highway?", ["Not sure", "No", "Yes"], horizontal=True, key="wizard_acc_d_highway")
+    else:
+        st.info("No specific PD question set has been triggered for this project type. Add any constraints or review focus below.")
+    return answers
+
+
+def render_left_navigation():
+    logo_uri = app_logo_data_uri()
+    theme = st.session_state.get("app_theme", "Dark")
+    light_mode = str(theme).lower().startswith("light")
+    logo_box_bg = "transparent" if light_mode else "#061225"
+    logo_padding = "0px" if light_mode else "8px"
+    logo_subtitle_colour = "#6B7280" if light_mode else "#9FB2D8"
+    with st.sidebar:
+        if logo_uri:
+            st.markdown(
+                f'''
+                <div style="display:flex;align-items:center;gap:1rem;margin:0.9rem 0 1.45rem 0;">
+                    <img src="{logo_uri}" style="width:112px;height:112px;object-fit:contain;border-radius:18px;background:{logo_box_bg};padding:{logo_padding};" />
+                    <div>
+                        <div style="font-weight:850;font-size:1.28rem;line-height:1.15;">ArchLens AI</div>
+                        <div style="font-size:0.86rem;color:{logo_subtitle_colour};margin-top:0.25rem;">SY Design Studio</div>
+                    </div>
+                </div>
+                ''',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown("### ArchLens AI")
+        st.caption(f"Plan: {PLAN_LABELS.get(current_plan, 'Solo')}")
+        st.caption(f"Credits: {get_credit_balance()}")
+        if current_user_name:
+            st.caption(f"User: {current_user_name}")
+        page = st.radio(
+            "Navigation",
+            ["Dashboard", "Projects", "Reports", "Settings"],
+            index=["Dashboard", "Projects", "Reports", "Settings"].index(st.session_state.get("app_page", "Projects")),
+            label_visibility="collapsed",
+        )
+        st.session_state["app_page"] = page
+        st.markdown("---")
+        st.link_button("Return to SY Design Studio", WEBSITE_HOME_URL, use_container_width=True)
+        st.link_button("Buy Credits", ARCHLENS_BUY_CREDITS_URL, use_container_width=True)
+    return page
+
+def intake_items():
+    review_module = st.session_state.get("wizard_review_module")
+    return [
+        ("Module selected", bool(review_module)),
+        ("Project named", bool(st.session_state.get("wizard_project_name") or st.session_state.get("wizard_project_address"))),
+        ("Project type selected", bool(st.session_state.get("wizard_project_types"))),
+        ("Property details captured", review_module == "Building Regulations Review" or st.session_state.get("wizard_property_type") != "Not stated"),
+        ("Site and council added", bool(st.session_state.get("wizard_project_address"))),
+        ("Scope selected", bool(st.session_state.get("wizard_proposal_summary") or st.session_state.get("wizard_project_types"))),
+        ("Files uploaded", bool(st.session_state.get("wizard_uploaded_files"))),
+    ]
+
+def render_intake_panel():
+    items = intake_items()
+    complete = sum(1 for _, done in items if done)
+    total = len(items)
+    project_types = st.session_state.get("wizard_project_types", [])
+    project_address = st.session_state.get("wizard_project_address", "")
+    proposal_summary = st.session_state.get("wizard_proposal_summary", "")
+    local_authority = detect_local_authority_for_display(project_address, proposal_summary)
+    st.markdown('<div class="sy-sidepanel">', unsafe_allow_html=True)
+    st.markdown('<div class="sy-panel-title">Intake Readiness</div>', unsafe_allow_html=True)
+    st.markdown(f"**{complete} of {total} key items completed**")
+    for label, done in items:
+        icon = "✅" if done else "•"
+        st.markdown(f"{icon} {label}")
+    st.progress(complete / max(total, 1))
+    st.markdown("---")
+    st.markdown('<div class="sy-panel-title">Live Summary</div>', unsafe_allow_html=True)
+    rows = [
+        ("Project", st.session_state.get("wizard_project_name") or "Not named"),
+        ("Module", st.session_state.get("wizard_review_module", "Not selected")),
+        ("Project type", ", ".join(project_types) if project_types else "Not selected"),
+        ("Property", st.session_state.get("wizard_property_type", "Not stated")),
+        ("Site", project_address or "Not added"),
+        ("Council", local_authority or "Not detected"),
+    ]
+    for label, value in rows:
+        st.markdown(f'<div class="sy-data-row"><span>{label}</span><strong>{value}</strong></div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+def step_header(step_no, title, subtitle):
+    st.markdown(
+        f'''
+        <div class="sy-subtle-card">
+            <div class="sy-section-label">Step {step_no}</div>
+            <h2 style="margin:0 0 0.35rem 0;">{title}</h2>
+            <div class="sy-muted">{subtitle}</div>
+        </div>
+        ''',
+        unsafe_allow_html=True,
+    )
+
+def wizard_buttons(max_step=7):
+    def _next_step(current_step: int) -> int:
+        next_step = min(max_step, current_step + 1)
+        # Step 4 Project Scope is only for Building Regulations Review.
+        if st.session_state.get("wizard_review_module") == "Planning Review" and next_step == 4:
+            return min(max_step, 5)
+        return next_step
+
+    def _previous_step(current_step: int) -> int:
+        previous_step = max(1, current_step - 1)
+        # Step 4 Project Scope is only for Building Regulations Review.
+        if st.session_state.get("wizard_review_module") == "Planning Review" and previous_step == 4:
+            return max(1, 3)
+        return previous_step
+
+    c1, c2, c3 = st.columns([0.35, 1, 0.35])
+    with c1:
+        if st.session_state.project_step > 1:
+            if st.button("Back", use_container_width=True):
+                st.session_state.project_step = _previous_step(int(st.session_state.project_step))
+                st.rerun()
+    with c3:
+        if st.session_state.project_step < max_step:
+            if st.button("Continue", use_container_width=True):
+                st.session_state.project_step = _next_step(int(st.session_state.project_step))
+                st.rerun()
+
+def run_archlens_analysis(uploaded_files):
+    review_module = st.session_state.get("wizard_review_module")
+    review_mode = st.session_state.get("wizard_review_mode")
+    project_types = st.session_state.get("wizard_project_types", [])
+    property_type = st.session_state.get("wizard_property_type", "Not stated")
+    proposal_summary = st.session_state.get("wizard_proposal_summary", "")
+    project_address = st.session_state.get("wizard_project_address", "")
+    client_name = st.session_state.get("wizard_client_name", "")
+    rear_extension_depth_m = float(st.session_state.get("wizard_rear_depth", 0) or 0)
+    rear_extension_height_m = float(st.session_state.get("wizard_rear_height", 0) or 0)
+    local_authority = detect_local_authority_for_display(project_address, proposal_summary, uploaded_files)
+    accuracy_answers = st.session_state.get("wizard_accuracy_answers", {}) or {}
+    scope_items = st.session_state.get("wizard_scope_items", []) or []
+    if review_module != "Building Regulations Review":
+        scope_items = []
+    review_focus = st.session_state.get("wizard_review_focus") or ""
+    rule_engine_summary = ""
+    drawing_priority_instruction = (
+        "Important instruction: cross-check all user-entered project type, scope items and measurements against the uploaded drawing PDF. "
+        "If the uploaded plans show different dimensions or scope, the uploaded plans take priority. "
+        "Only state measurements and conclusions that are supported by the drawings, policy, guidance or Building Regulations. "
+        "If the user gives a specific review focus, concentrate the report on that issue and avoid unsupported assumptions."
+    )
+    config = MODULE_CONFIG[review_module]
+
+    # Token system: module access is no longer blocked by Solo/Studio here.
+    # Keep file-size/page limits below to protect AI/API costs.
+    if not uploaded_files:
+        st.error("Please upload at least one PDF drawing pack before running the review.")
+        st.stop()
+
+    total_uploaded_mb = sum(f.size for f in uploaded_files) / (1024 * 1024)
+    if total_uploaded_mb > 20:
+        st.error("Drawing pack too large. Please keep the total upload size to 20MB or less, or split the pack into smaller PDFs.")
+        st.stop()
+
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    temp_pdf_path = None
+    file = uploaded_files[-1]
+
+    for f in uploaded_files:
+        if f.size > MAX_FILE_SIZE_MB * 1024 * 1024:
+            st.error(f"PDF too large. Maximum file size is {MAX_FILE_SIZE_MB}MB.")
+            st.stop()
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
+            tmp_file.write(f.getbuffer())
+            temp_pdf_path = tmp_file.name
+
+    try:
+        page_count = get_pdf_page_count(temp_pdf_path)
+        if page_count > MAX_PAGE_COUNT:
+            st.error(f"PDF has {page_count} pages. Maximum allowed is {MAX_PAGE_COUNT} pages.")
+            os.remove(temp_pdf_path)
+            st.stop()
+        if page_count > 12:
+            st.warning("Large drawing pack detected. The live app will analyse the first 12 pages only to keep processing stable.")
+
+        smooth_progress(progress_bar, status_text, 10, 25, "Preparing drawing analysis...", 0.6)
+
+        def update_analysis_progress(current_batch, total_batches):
+            start_pct = 25
+            end_pct = 85
+            progress = start_pct + int((current_batch / max(1, total_batches)) * (end_pct - start_pct))
+            progress_bar.progress(progress)
+            status_text.text(f"Step 3 of 4 — Analyzing drawing pages... Batch {current_batch} of {total_batches} ({progress}%)")
+
+        try:
+            if review_module == "Building Regulations Review":
+                context = (
+                    "Project type: " + (", ".join(project_types) or "Not stated") +
+                    "\nSelected scope items: " + (", ".join(scope_items) or "Not stated") +
+                    "\nProposal summary: " + (proposal_summary or "Not stated") +
+                    "\nSpecific review focus / notes: " + (review_focus or "Not stated") +
+                    "\n" + drawing_priority_instruction
+                )
+                report = pdf_summary.analyze_pdf(
+                    temp_pdf_path,
+                    client_project_type=context,
+                    review_mode=review_mode,
+                    progress_callback=update_analysis_progress,
+                )
+            else:
+                smooth_progress(progress_bar, status_text, 25, 40, "Reading drawings and extracting planning data...", 0.8)
+                proposal_summary_for_ai = proposal_summary
+                if "Ground Floor Rear Extension" in project_types:
+                    depth_txt = f"approx. user-entered {rear_extension_depth_m:.1f}m depth from rear wall" if rear_extension_depth_m else ""
+                    height_txt = f"approx. user-entered {rear_extension_height_m:.1f}m overall height" if rear_extension_height_m else ""
+                    extra_bits = ", ".join([x for x in [depth_txt, height_txt] if x])
+                    if extra_bits:
+                        proposal_summary_for_ai = (proposal_summary_for_ai.strip() + " | " + extra_bits + " | Drawing dimensions take priority if different.").strip(" |")
+                if scope_items:
+                    proposal_summary_for_ai = (proposal_summary_for_ai.strip() + " | Selected scope items to cross-check: " + ", ".join(scope_items)).strip(" |")
+                if review_focus:
+                    proposal_summary_for_ai = (proposal_summary_for_ai.strip() + " | Specific review focus / notes: " + review_focus).strip(" |")
+                proposal_summary_for_ai = (proposal_summary_for_ai.strip() + " | " + drawing_priority_instruction).strip(" |")
+                pd_context = build_pd_context(project_types, property_type, rear_extension_depth_m, rear_extension_height_m, accuracy_answers)
+                accuracy_context = build_accuracy_context(accuracy_answers)
+                if accuracy_context:
+                    proposal_summary_for_ai = (proposal_summary_for_ai.strip() + " | Rule intake answers: " + accuracy_context).strip(" |")
+
+                # Run deterministic householder PD rule checks before the AI narrative.
+                # AI should explain these results, not replace them.
+                try:
+                    rule_facts = planning_rules.facts_from_app_context(
+                        project_types=project_types,
+                        property_type=property_type,
+                        proposal_summary=proposal_summary_for_ai,
+                        pd_context=pd_context,
+                        scope_items=scope_items,
+                    )
+                    rule_result = planning_rules.run_householder_pd_rules(rule_facts)
+                    rule_engine_summary = planning_rules.format_rule_result_for_prompt(rule_result)
+                except Exception as rule_error:
+                    rule_engine_summary = f"DETERMINISTIC RULE ENGINE RESULT: NEEDS CONFIRMATION\nSUMMARY: Rule engine could not complete: {rule_error}"
+
+                report = pdf_summary.analyze_planning_pdf(
+                    temp_pdf_path,
+                    client_project_types=project_types,
+                    property_type=property_type,
+                    proposal_summary=proposal_summary_for_ai,
+                    project_address=project_address,
+                    local_authority=local_authority,
+                    review_mode=review_mode,
+                    pd_context=pd_context,
+                    scope_items=scope_items,
+                    rule_engine_summary=rule_engine_summary,
+                )
+                smooth_progress(progress_bar, status_text, 40, 85, "Analyzing planning route and risks...", 0.8)
+        except Exception as e:
+            msg = str(e).lower()
+            if "insufficient_quota" in msg or "quota" in msg:
+                st.error("OpenAI API quota exceeded. Please add credits in your OpenAI billing dashboard.")
+            elif "rate limit" in msg or "429" in msg:
+                st.error("The AI analysis service is temporarily rate-limited. Please try again shortly.")
+            else:
+                st.error(f"Could not analyze this PDF: {e}")
+            st.stop()
+
+        valid, missing = validate_report_headings(report, config["required_headings"])
+        if not valid:
+            st.error(f"AI report validation failed. Missing headings: {', '.join(missing)}")
+            st.stop()
+
+        sections = parse_report_sections(report, config["required_headings"])
+        ai_confidence = calculate_ai_confidence(review_module, sections, rule_engine_summary)
+        extracted_report_address = extract_address_from_report(report, "Not provided")
+        clean_project_address = clean_input_value(project_address, extracted_report_address)
+        clean_client_name = clean_input_value(client_name, "Not provided")
+        clean_practice_name = "SY Design Studio"
+        report_id = str(uuid.uuid4())[:8].upper()
+
+        smooth_progress(progress_bar, status_text, 85, 95, "Preparing report files...", 0.6)
+        word_file = build_word_report(file.name, clean_project_address, clean_client_name, time.strftime("%Y-%m-%d"), clean_practice_name, report_id, sections, review_module)
+        pdf_file = build_pdf_report(file.name, clean_project_address, clean_client_name, time.strftime("%Y-%m-%d"), clean_practice_name, report_id, sections, review_module)
+
+        st.session_state.report = report
+        st.session_state.sections = sections
+        st.session_state.word_file = word_file
+        st.session_state.pdf_file = pdf_file
+        st.session_state.last_filename = file.name
+        st.session_state.report_id = report_id
+        st.session_state.active_module = review_module
+        st.session_state.ai_confidence = ai_confidence
+        st.session_state.rule_engine_summary = rule_engine_summary
+        st.session_state["planning_statement_text"] = None
+        st.session_state["planning_statement_file"] = None
+        if current_plan == "starter":
+            st.session_state["starter_review_count"] = st.session_state.get("starter_review_count", 0) + 1
+        add_saved_project({
+            "report_id": report_id,
+            "project_address": clean_project_address,
+            "client_name": clean_client_name,
+            "module": review_module,
+            "project_types": ", ".join(project_types) if project_types else "Not stated",
+            "property_type": property_type if review_module == "Planning Review" else "Not stated",
+            "filename": file.name,
+            "date": time.strftime("%Y-%m-%d"),
+            "plan": PLAN_LABELS.get(current_plan, "Solo"),
+            "local_authority": local_authority,
+            "pdf_bytes": pdf_file.getvalue(),
+            "word_bytes": word_file.getvalue(),
+            "ai_confidence": ai_confidence,
+            "pdf_unlocked": False,
+            "word_unlocked": False,
+            "credits_used": 0,
+        })
+        smooth_progress(progress_bar, status_text, 95, 100, "Finalising report...", 0.4)
+        status_text.text("Analysis complete. 100%")
+        progress_bar.progress(100)
+        st.success("Report created successfully. Open Reports or stay on this page to download it.")
+    finally:
+        if temp_pdf_path:
+            try:
+                os.remove(temp_pdf_path)
+            except Exception:
+                pass
+        gc.collect()
+
+def render_report_download_panel(module_name=None, show_sections=True):
+    if not st.session_state.get("sections"):
+        st.info("No report generated yet.")
+        return
+    sections = st.session_state.sections
+    report = st.session_state.report
+    report_id = st.session_state.report_id or "N/A"
+    module_name = module_name or st.session_state.get("active_module", "Planning Review")
+    st.markdown('<div class="sy-subtle-card"><div class="sy-section-label">Review Output</div><h3 style="margin:0 0 0.35rem 0;">Latest Professional Report</h3><div class="sy-muted">Download the branded PDF or review the AI report sections.</div></div>', unsafe_allow_html=True)
+    render_ai_confidence_card(st.session_state.get("ai_confidence"))
+    render_at_a_glance(sections, report_id, module_name)
+    base_filename = (st.session_state.last_filename or "drawing_pack").rsplit(".", 1)[0]
+    suffix = "Planning" if module_name == "Planning Review" else "BuildingRegs"
+    c1, c2 = st.columns(2)
+    pdf_cost = get_export_credit_cost(module_name, "pdf")
+    word_cost = get_export_credit_cost(module_name, "word")
+    with c1:
+        if is_report_unlocked(report_id, "pdf"):
+            st.download_button("Download Branded PDF Report", st.session_state.pdf_file, file_name=f"{base_filename}_{suffix}_AI_Review_Report.pdf", mime="application/pdf", use_container_width=True)
+        else:
+            if st.button(f"Unlock PDF Report — {pdf_cost} credits", use_container_width=True):
+                ok, msg = unlock_report_export(report_id, module_name, "pdf")
+                if ok:
+                    st.success(msg)
+                    st.rerun()
+                else:
+                    st.error(msg)
+    with c2:
+        if is_report_unlocked(report_id, "word"):
+            st.download_button("Download Word Report", st.session_state.word_file, file_name=f"{base_filename}_{suffix}_AI_Review_Report.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document", use_container_width=True)
+        else:
+            if st.button(f"Unlock Word Report — {word_cost} credit", use_container_width=True):
+                ok, msg = unlock_report_export(report_id, module_name, "word")
+                if ok:
+                    st.success(msg)
+                    st.rerun()
+                else:
+                    st.error(msg)
+    if show_sections:
+        render_sections(sections, report, module_name)
+
+page = render_left_navigation()
+
+# Main shell header
 st.markdown(
-    f"""
+    f'''
     <div class="sy-topbar">
         <div>
             <div class="sy-topbar-title">Architect AI Workspace</div>
-            <div class="sy-topbar-meta">ArchLens AI • Drawing-focused planning and building regulations review</div>
+            <div class="sy-topbar-meta">AI-powered planning and building regulations intelligence for UK projects</div>
         </div>
-        <div class="sy-topbar-meta">Mode: {review_module} | Plan: {PLAN_LABELS.get(current_plan, "Solo")}{(" | User: " + current_user_name) if current_user_name else ""}</div>
+        <div class="sy-topbar-meta">Credits: {get_credit_balance()} | Plan: {PLAN_LABELS.get(current_plan, "Solo")}{(" | User: " + current_user_name) if current_user_name else ""}</div>
     </div>
-    <div class="sy-hero">
-        <div class="sy-hero-simple">
-            <div class="sy-hero-copy" style="max-width:760px;">
-                <h1>ArchLens AI</h1>
-                {hero_welcome}
-                <div class="sy-muted" style="max-width:760px;">
-                    Upload a drawing pack, confirm the project details, and generate a cleaner planning or building regulations review from one workspace.
-                </div>
-                <div class="sy-badge-row">
-                    <div class="sy-badge">Drawing Pack Review</div>
-                    <div class="sy-badge">Planning Route Logic</div>
-                    <div class="sy-badge">Officer-Style Reports</div>
-                </div>
-            </div>
-        </div>
-    </div>
-    """,
+    ''',
     unsafe_allow_html=True,
 )
 
-with st.sidebar:
-    st.header("Project Setup")
-    st.caption("Keep the setup light. Add extra detail only where it improves route accuracy.")
-    st.caption(f"Current Plan: {PLAN_LABELS.get(current_plan, 'Solo')}")
-    review_module = st.selectbox(
-        "Review Module",
-        allowed_review_modules,
-        index=allowed_review_modules.index(default_module),
-    )
-    if current_plan == "starter":
-        st.caption("Building Regulations Review is available on Studio.")
-    project_types = st.multiselect("Project Type", PROJECT_TYPE_OPTIONS, default=[])
-
-    if review_module == "Planning Review":
-        property_type = st.selectbox("Property Type", PROPERTY_TYPE_OPTIONS, index=0)
+if page == "Dashboard":
+    st.markdown('<div class="sy-hero"><div class="sy-hero-copy"><h1>Dashboard</h1><div class="sy-muted">Monitor your project intake, recent reports and subscription access.</div></div></div>', unsafe_allow_html=True)
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Saved projects", len(st.session_state.get("saved_projects", [])))
+    c2.metric("Reports generated", len(st.session_state.get("saved_projects", [])))
+    c3.metric("Credits", get_credit_balance())
+    c4.metric("Current plan", PLAN_LABELS.get(current_plan, "Solo"))
+    st.markdown("### Recent projects")
+    saved_projects = st.session_state.get("saved_projects", [])
+    if saved_projects:
+        for item in saved_projects[:6]:
+            st.markdown(f"**{item.get('project_address', 'Not provided')}**")
+            conf = item.get("ai_confidence") or {}
+            status_text = f" • Status: {conf.get('label')}" if conf.get("label") else ""
+            st.caption(f"{item.get('module', '')} • {item.get('date', '')} • Report ID: {item.get('report_id', '')}{status_text}")
+            st.markdown("---")
     else:
-        property_type = "Not stated"
+        st.info("No projects yet. Go to Projects to start a new intake.")
 
-    proposal_summary = st.text_area(
-        "Proposal Description",
-        height=110,
-        placeholder="Briefly describe the proposal.",
-    )
-
-
-    rear_extension_depth_m = None
-    rear_extension_height_m = None
-    if review_module == "Planning Review" and "Ground Floor Rear Extension" in project_types:
-        rear_extension_depth_m = st.number_input(
-            "Rear extension depth from original rear wall (m)",
-            min_value=0.0,
-            max_value=12.0,
-            value=6.0,
-            step=0.1,
-            help="Enter the proposed rear projection measured from the original rear house wall.",
-        )
-        rear_extension_height_m = st.number_input(
-            "Rear extension overall height (m)",
-            min_value=0.0,
-            max_value=6.0,
-            value=4.0,
-            step=0.1,
-            help="Enter the proposed overall height of the rear extension.",
-        )
-
-    review_mode = st.selectbox("Report Mode", ["Architect / Professional", "Homeowner Summary"])
-    project_address = st.text_input("Project Address")
-    local_authority = detect_local_authority_for_display(project_address, proposal_summary)
-    practice_name = ""
-
-    client_name, review_date, accuracy_answers = render_improve_accuracy_section(project_types)
-
-    pd_route_label = "Not assessed"
-    pd_risk_label = "Medium"
-    pd_route_reason = "Add project details to improve the route snapshot."
-    if review_module == "Planning Review":
-        pd_route_label, pd_risk_label, pd_route_reason = get_planning_route_snapshot(
-            project_types,
-            property_type,
-            proposal_summary,
-            rear_extension_depth_m,
-            rear_extension_height_m,
-            accuracy_answers,
-        )
-
-    if st.button("Clear Report", key="clear_report_btn"):
-        for key, value in DEFAULT_STATE.items():
-            st.session_state[key] = value
-        st.session_state["planning_statement_text"] = None
-        st.session_state["planning_statement_file"] = None
-        st.info("Stored report cleared.")
-
-st.session_state.active_module = review_module
-if "starter_review_count" not in st.session_state:
-    st.session_state["starter_review_count"] = 0
-config = MODULE_CONFIG[review_module]
-if current_plan == "starter" and review_module == "Building Regulations Review":
-    st.warning(get_plan_upgrade_message("Building Regulations Review"))
-    st.stop()
-
-setup_tab, upload_tab, report_tab = st.tabs(["Project Setup", "Upload Drawing Pack", "AI Review Report"])
-
-with setup_tab:
-    st.markdown(f'<div class="sy-subtle-card"><div class="sy-section-label">Review Summary</div><h3 style="margin:0 0 0.35rem 0;">{config["title"]}</h3><div class="sy-muted">{config["disclaimer"]}</div></div>', unsafe_allow_html=True)
-    if review_module == "Planning Review":
-        st.markdown(f'<div class="sy-subtle-card"><strong>Auto route:</strong> {pd_route_label} &nbsp;&nbsp; <strong>Risk:</strong> {pd_risk_label}<br><span class="sy-muted">{pd_route_reason}</span></div>', unsafe_allow_html=True)
-    c1, c2 = st.columns([1.15, 0.85])
-    with c1:
-        st.markdown("**Current setup**")
-        st.write(f"Review module: {review_module}")
-        st.write(f"Report mode: {review_mode}")
-        st.write(f"Project type: {', '.join(project_types) if project_types else 'Not stated'}")
-        if review_module == "Planning Review":
-            st.write(f"Property type: {property_type or 'Not stated'}")
-            st.write(f"Local authority: {local_authority}")
-        st.write(f"Project address: {project_address or 'Not provided'}")
-        st.write(f"Proposal description: {proposal_summary or 'Not provided'}")
-        st.write(f"Client: {client_name or 'Not provided'}")
-    with c2:
-        if review_module == "Planning Review":
-            st.info("Use this module for officer-style reasoning, street precedent review, proposal recognition, PD / prior approval / full planning route review, route confidence scoring, and planning statement drafting.")
-            if current_plan == "starter":
-                st.caption("Solo includes planning review only and PDF exports.")
-        else:
-            st.info("Use this module for technical Building Regulations review including plans, sections, details, specifications, and structural sheets.")
-            if current_plan == "starter":
-                st.warning("Building Regulations Review is available on Studio only.")
-
-with upload_tab:
-    st.markdown('<div class="sy-subtle-card"><div class="sy-section-label">Upload + Analyse</div><h3 style="margin:0 0 0.35rem 0;">Drawing Workspace</h3><div class="sy-muted">Upload the active drawing pack, preview it, and run the review once the setup is complete.</div></div>', unsafe_allow_html=True)
-
-    uploaded_file = st.file_uploader(
-        "Upload Drawing PDF",
-        type=["pdf"],
-        accept_multiple_files=True,
-        key="drawing_pdf_upload",
-    )
-
-    workspace_col, assistant_col = st.columns([1.75, 0.85], gap="large")
-
-    with workspace_col:
-        st.markdown('<div class="sy-workspace">', unsafe_allow_html=True)
-        st.markdown('<div class="sy-workspace-header"><div><div class="sy-workspace-title">Drawing Pack Workspace</div><div class="sy-workspace-meta">Visual preview area for the active PDF and uploaded drawing set.</div></div></div>', unsafe_allow_html=True)
-
-        if review_module == "Planning Review" and review_mode == "Homeowner Summary":
-            st.info("Homeowners can upload a simple sketch or basic PDF. ArchLens AI will frame the output as a preliminary planning feasibility review, not a formal planning decision.")
-
-        preview_col, meta_col = st.columns([1.45, 0.75], gap="large")
-        with preview_col:
-            render_pdf_preview(uploaded_file)
-        with meta_col:
-            st.markdown("**Uploaded files**")
-            if uploaded_file:
-                for file in uploaded_file:
-                    file_size_mb = round(file.size / (1024 * 1024), 2)
-                    st.markdown(
-                        f'<div class="sy-upload-item"><strong>{file.name}</strong><br><span class="sy-muted">{file_size_mb} MB</span></div>',
-                        unsafe_allow_html=True,
-                    )
+elif page == "Projects":
+    st.markdown('<div class="sy-hero"><div class="sy-hero-copy"><h1>Projects</h1><div class="sy-muted">Create a structured project intake, upload drawings, and generate a professional AI review report.</div></div></div>', unsafe_allow_html=True)
+    step = int(st.session_state.get("project_step", 1))
+    steps = ["Module", "Details", "Type", "Scope", "Specifics", "Upload", "Report"]
+    st.progress(step / len(steps))
+    st.caption(" → ".join([f"**{name}**" if i + 1 == step else name for i, name in enumerate(steps)]))
+    main_col, side_col = st.columns([1.65, 0.82], gap="large")
+    with main_col:
+        if step == 1:
+            step_header(1, "Choose module", "Select whether this project needs a planning review or a building regulations review.")
+            previous_module = st.session_state.get("wizard_review_module", allowed_review_modules[0])
+            selected_module = st.selectbox("Review Module", allowed_review_modules, index=allowed_review_modules.index(previous_module if previous_module in allowed_review_modules else allowed_review_modules[0]))
+            st.session_state["wizard_review_module"] = selected_module
+            if selected_module == "Planning Review":
+                st.session_state["wizard_scope_items"] = []
+            st.caption("Downloads are unlocked using credits. Planning PDF = 3 credits. Building Regs PDF = 5 credits. Word export = 1 credit.")
+            st.session_state["wizard_review_mode"] = st.selectbox("Report Mode", ["Architect / Professional", "Homeowner Summary"], index=["Architect / Professional", "Homeowner Summary"].index(st.session_state.get("wizard_review_mode", "Architect / Professional")))
+            wizard_buttons()
+        elif step == 2:
+            step_header(2, "Project details", "Add the basic project and site information used in the report cover, council detection and AI context.")
+            st.session_state["wizard_project_name"] = st.text_input("Project name", value=st.session_state.get("wizard_project_name", ""), placeholder="e.g. 14 Lyon Road Rear Extension")
+            st.session_state["wizard_client_name"] = st.text_input("Client name", value=st.session_state.get("wizard_client_name", ""))
+            st.session_state["wizard_project_address"] = st.text_input("Project address", value=st.session_state.get("wizard_project_address", ""))
+            st.session_state["wizard_proposal_summary"] = st.text_area("Proposal description", value=st.session_state.get("wizard_proposal_summary", ""), height=120, placeholder="Briefly describe the proposal.")
+            wizard_buttons()
+        elif step == 3:
+            step_header(3, "Project type", "Select the relevant project and property type using clear check boxes.")
+            checkbox_grid("Project Type", PROJECT_TYPE_OPTIONS, "wizard_project_types", columns=2)
+            if st.session_state.get("wizard_review_module") == "Planning Review":
+                single_choice_cards("Property Type", PROPERTY_TYPE_OPTIONS, "wizard_property_type", columns=2)
             else:
-                st.markdown('<div class="sy-empty-preview">No drawing pack uploaded yet.</div>', unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    with assistant_col:
-        st.markdown('<div class="sy-sidepanel">', unsafe_allow_html=True)
-        st.markdown('<div class="sy-panel-title">Project Snapshot</div>', unsafe_allow_html=True)
-        st.markdown(f'<div class="sy-data-row"><span>Review module</span><strong>{review_module}</strong></div>', unsafe_allow_html=True)
-        st.markdown(f'<div class="sy-data-row"><span>Report mode</span><strong>{review_mode}</strong></div>', unsafe_allow_html=True)
-        st.markdown(f'<div class="sy-data-row"><span>Project type</span><strong>{", ".join(project_types) if project_types else "Not stated"}</strong></div>', unsafe_allow_html=True)
-        if review_module == "Planning Review":
-            st.markdown(f'<div class="sy-data-row"><span>Property type</span><strong>{property_type or "Not stated"}</strong></div>', unsafe_allow_html=True)
-            st.markdown(f'<div class="sy-data-row"><span>Local authority</span><strong>{local_authority or "Not clearly identified"}</strong></div>', unsafe_allow_html=True)
-        st.markdown(f'<div class="sy-data-row"><span>Project address</span><strong>{project_address or "Not provided"}</strong></div>', unsafe_allow_html=True)
-        st.markdown(f'<div class="sy-data-row"><span>Client</span><strong>{client_name or "Not provided"}</strong></div>', unsafe_allow_html=True)
-        st.markdown("")
-        if current_plan == "starter":
-            st.info("Solo plan: Planning Review + PDF exports. Upgrade to Studio for Building Regulations Review, Word exports, and unlimited reviews.")
-            st.link_button("Upgrade to Studio", WEBSITE_PRICING_URL, use_container_width=True)
-            st.link_button("Return to SY Design Studio", WEBSITE_HOME_URL, use_container_width=True)
-
-        if uploaded_file:
-            total_uploaded_mb = sum(f.size for f in uploaded_file) / (1024 * 1024)
-            if total_uploaded_mb > 20:
-                st.error("Drawing pack too large for the live app. Please keep the total upload size to 20MB or less, or split the pack into smaller PDFs.")
-                st.stop()
-
-            st.metric("Files uploaded", len(uploaded_file))
-            st.metric("Total size", f"{round(total_uploaded_mb, 2)} MB")
-            st.metric("Selected project types", len(project_types))
-            run_analysis = st.button("Analyse Drawing Pack", key="run_review_btn", use_container_width=True)
-        else:
-            st.markdown('<div class="sy-muted">Upload a drawing pack to enable the AI review controls.</div>', unsafe_allow_html=True)
-            run_analysis = False
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    if uploaded_file and run_analysis:
-        if current_plan == "starter" and st.session_state.get("starter_review_count", 0) >= STARTER_MONTHLY_REVIEW_LIMIT:
-            st.error("You have reached your 10 monthly reviews on Solo. Upgrade to Studio for unlimited project reviews.")
-            st.stop()
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        temp_pdf_path = None
-        file = uploaded_file[-1]
-
-        for file in uploaded_file:
-            if file.size > MAX_FILE_SIZE_MB * 1024 * 1024:
-                st.error(f"PDF too large. Maximum file size is {MAX_FILE_SIZE_MB}MB.")
-                st.stop()
-
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
-                tmp_file.write(file.getbuffer())
-                temp_pdf_path = tmp_file.name
-
-        try:
-            page_count = get_pdf_page_count(temp_pdf_path)
-            if page_count > MAX_PAGE_COUNT:
-                st.error(f"PDF has {page_count} pages. Maximum allowed is {MAX_PAGE_COUNT} pages.")
-                os.remove(temp_pdf_path)
-                st.stop()
-            if page_count > 12:
-                st.warning("Large drawing pack detected. The live app will analyse the first 12 pages only to keep processing stable.")
-
-            smooth_progress(progress_bar, status_text, 10, 25, "Preparing drawing analysis...", 0.6)
-
-            def update_analysis_progress(current_batch, total_batches):
-                start_pct = 25
-                end_pct = 85
-                progress = start_pct + int((current_batch / max(1, total_batches)) * (end_pct - start_pct))
-                progress_bar.progress(progress)
-                status_text.text(f"Step 3 of 4 — Analyzing drawing pages... Batch {current_batch} of {total_batches} ({progress}%)")
-
-            try:
-                if review_module == "Building Regulations Review":
-                    report = pdf_summary.analyze_pdf(
-                        temp_pdf_path,
-                        client_project_type=("Project type: " + (", ".join(project_types) or "Not stated") + "\nProposal summary: " + (proposal_summary or "Not stated")),
-                        review_mode=review_mode,
-                        progress_callback=update_analysis_progress,
-                    )
-                else:
-                    smooth_progress(progress_bar, status_text, 25, 40,
-                                    "Reading drawings and extracting planning data...", 0.8)
-
-                    proposal_summary_for_ai = proposal_summary
-                    if "Ground Floor Rear Extension" in project_types:
-                        depth_txt = f"{rear_extension_depth_m:.1f}m depth from original rear wall" if rear_extension_depth_m is not None else ""
-                        height_txt = f"{rear_extension_height_m:.1f}m overall height" if rear_extension_height_m is not None else ""
-                        extra_bits = ", ".join([x for x in [depth_txt, height_txt] if x])
-                        if extra_bits:
-                            proposal_summary_for_ai = (proposal_summary_for_ai.strip() + " | " + extra_bits).strip(" |")
-
-                    pd_context = build_pd_context(project_types, property_type, rear_extension_depth_m, rear_extension_height_m, accuracy_answers)
-                    accuracy_context = build_accuracy_context(accuracy_answers)
-                    if accuracy_context:
-                        proposal_summary_for_ai = (proposal_summary_for_ai.strip() + " | Improve Accuracy: " + accuracy_context).strip(" |")
-
-                    report = pdf_summary.analyze_planning_pdf(
-                        temp_pdf_path,
-                        client_project_types=project_types,
-                        property_type=property_type,
-                        proposal_summary=proposal_summary_for_ai,
-                        project_address=project_address,
-                        local_authority=local_authority,
-                        review_mode=review_mode,
-                        pd_context=pd_context,
-                    )
-
-                    smooth_progress(progress_bar, status_text, 40, 85, "Analyzing planning route and risks...", 0.8)
-            except Exception as e:
-                msg = str(e).lower()
-                if "insufficient_quota" in msg or "quota" in msg:
-                    st.error("OpenAI API quota exceeded. Please add credits in your OpenAI billing dashboard.")
-                elif "rate limit" in msg or "429" in msg:
-                    st.error("The AI analysis service is temporarily rate-limited. Please try again shortly.")
-                else:
-                    st.error(f"Could not analyze this PDF: {e}")
-                st.stop()
-
-            valid, missing = validate_report_headings(report, config["required_headings"])
-            if not valid:
-                st.error(f"AI report validation failed. Missing headings: {', '.join(missing)}")
-                st.stop()
-
-            sections = parse_report_sections(report, config["required_headings"])
-
-            extracted_report_address = extract_address_from_report(report, "Not provided")
-            clean_project_address = clean_input_value(project_address, extracted_report_address)
-            clean_client_name = clean_input_value(client_name, "Not provided")
-            clean_practice_name = clean_input_value(practice_name, "ArchLens AI")
-            report_id = str(uuid.uuid4())[:8].upper()
-
-            smooth_progress(progress_bar, status_text, 85, 95, "Preparing report files...", 0.6)
-
-            word_file = build_word_report(
-                file.name,
-                clean_project_address,
-                clean_client_name,
-                review_date,
-                clean_practice_name,
-                report_id,
-                sections,
-                review_module,
+                st.session_state["wizard_property_type"] = "Not stated"
+                st.info("Property type is mainly used for Planning Review. Building Regulations will focus on technical compliance and uploaded drawings.")
+            wizard_buttons()
+        elif step == 4:
+            if st.session_state.get("wizard_review_module") == "Building Regulations Review":
+                step_header(4, "Project scope", "Tick the works included. The AI will cross-check these selections against the uploaded plans and only rely on confirmed drawing information where there is a conflict.")
+                checkbox_grid("Scope items", SCOPE_ITEM_OPTIONS, "wizard_scope_items", columns=2)
+                if st.session_state.get("wizard_scope_items"):
+                    st.caption("Selected scope will be passed into the AI context and checked against the uploaded drawings.")
+                wizard_buttons()
+            else:
+                # Planning Review uses project type, property type, PD questions and drawings.
+                # Building Regulations scope items are intentionally hidden and not passed into planning reports.
+                st.session_state["wizard_scope_items"] = []
+                st.session_state.project_step = 5
+                st.rerun()
+        elif step == 5:
+            step_header(5, "Project specifics", "Enter the key follow-up information. User-entered measurements are reference only; if the uploaded plans show different dimensions, the plans take priority in the report.")
+            project_types = st.session_state.get("wizard_project_types", [])
+            if st.session_state.get("wizard_review_module") == "Planning Review" and "Ground Floor Rear Extension" in project_types:
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.session_state["wizard_rear_depth"] = st.number_input("Approx. depth from rear wall (metres)", min_value=0.0, max_value=12.0, value=float(st.session_state.get("wizard_rear_depth", 6.0)), step=0.1)
+                with c2:
+                    st.session_state["wizard_rear_height"] = st.number_input("Approx. maximum height (metres)", min_value=0.0, max_value=6.0, value=float(st.session_state.get("wizard_rear_height", 4.0)), step=0.1)
+                st.caption("These dimensions help the initial route check. The uploaded plan measurements take priority if there is any difference.")
+            if st.session_state.get("wizard_review_module") == "Planning Review":
+                st.session_state["wizard_accuracy_answers"] = get_required_accuracy_answers(project_types)
+            else:
+                st.session_state["wizard_accuracy_answers"] = {}
+                st.info("Building Regulations mode will use the uploaded plans, specification notes and selected scope to focus the compliance review.")
+            st.session_state["wizard_review_focus"] = st.text_area(
+                "Specific review focus / planning notes",
+                value=st.session_state.get("wizard_review_focus", ""),
+                height=115,
+                placeholder="Example: Focus on PD Class A limits, prior approval risk, Part K stair geometry, Part M accessibility, fire escape strategy, or any specific issue the report should concentrate on."
             )
-
-            pdf_file = build_pdf_report(
-                file.name,
-                clean_project_address,
-                clean_client_name,
-                review_date,
-                clean_practice_name,
-                report_id,
-                sections,
-                review_module,
-            )
-
-            st.session_state.report = report
-            st.session_state.sections = sections
-            st.session_state.word_file = word_file
-            st.session_state.pdf_file = pdf_file
-            st.session_state.last_filename = file.name
-            st.session_state.last_error = None
-            st.session_state.report_id = report_id
-            st.session_state.active_module = review_module
-            st.session_state["planning_statement_text"] = None
-            st.session_state["planning_statement_file"] = None
-            if current_plan == "starter":
-                st.session_state["starter_review_count"] = st.session_state.get("starter_review_count", 0) + 1
-
-            add_saved_project(
-                {
-                    "report_id": report_id,
-                    "project_address": clean_project_address,
-                    "client_name": clean_client_name,
-                    "module": review_module,
-                    "project_types": ", ".join(project_types) if project_types else "Not stated",
-                    "property_type": property_type if review_module == "Planning Review" else "Not stated",
-                    "filename": file.name,
-                    "date": str(review_date),
-                    "plan": PLAN_LABELS.get(current_plan, "Solo"),
-                }
-            )
-
-            smooth_progress(progress_bar, status_text, 95, 100, "Finalising report...", 0.4)
-            status_text.text("Analysis complete. 100%")
-            progress_bar.progress(100)
-            st.success("Report created successfully. Open the AI Review Report tab.")
-        finally:
-            if temp_pdf_path:
-                try:
-                    os.remove(temp_pdf_path)
-                except Exception:
-                    pass
-            gc.collect()
-
-with report_tab:
-    if st.session_state.sections and st.session_state.active_module == review_module:
-        sections = st.session_state.sections
-        report = st.session_state.report
-        word_file = st.session_state.word_file
-        pdf_file = st.session_state.pdf_file
-        report_id = st.session_state.report_id or "N/A"
-
-        panel_title = "Professional report summary"
-        panel_note = "Use the cards below for a quick read, then open the collapsible sections for the detailed report."
-        if review_module == "Planning Review" and review_mode == "Homeowner Summary":
-            panel_title = "Homeowner planning feasibility summary"
-            panel_note = "This is a preliminary feasibility-style review based on the uploaded sketch or drawing pack. It is not a formal planning decision."
-
-        st.markdown(f'<div class="sy-subtle-card"><div class="sy-section-label">Review Output</div><h3 style="margin:0 0 0.35rem 0;">{panel_title}</h3><div class="sy-muted">{panel_note}</div></div>', unsafe_allow_html=True)
-
-        report_col, insight_col = st.columns([1.65, 0.95], gap="large")
-
-        with report_col:
-            render_at_a_glance(sections, report_id, review_module)
+            wizard_buttons()
+        elif step == 6:
+            step_header(6, "Upload files", "Upload drawings and supporting information. PDF drawing packs work best for the live review.")
+            uploaded = st.file_uploader("Drop files here or click to browse", type=["pdf"], accept_multiple_files=True, key="wizard_pdf_upload")
+            if uploaded:
+                st.session_state["wizard_uploaded_files"] = uploaded
+                for f in uploaded:
+                    st.markdown(f'<div class="sy-upload-item"><strong>{f.name}</strong><br><span class="sy-muted">{round(f.size/(1024*1024),2)} MB</span></div>', unsafe_allow_html=True)
+                render_pdf_preview(uploaded)
+            else:
+                st.info("No files attached yet. Upload at least one drawing PDF before generating the report.")
+            wizard_buttons()
+        elif step == 7:
+            step_header(7, "Generate report", "Run the AI review first, then unlock PDF or Word exports using credits.")
+            uploaded_files = st.session_state.get("wizard_uploaded_files", [])
+            if uploaded_files:
+                st.success(f"{len(uploaded_files)} file(s) ready for analysis.")
+            else:
+                st.warning("No file uploaded yet. Go back to Step 6.")
+            if st.button("Analyse Drawing Pack", use_container_width=True):
+                run_archlens_analysis(uploaded_files)
             st.markdown("")
-            render_sections(sections, report, review_module)
+            render_report_download_panel(st.session_state.get("active_module", st.session_state.get("wizard_review_module")))
+            wizard_buttons()
+    with side_col:
+        render_intake_panel()
 
-        with insight_col:
-            values = extract_summary_values(sections, review_module)
-            st.markdown('<div class="sy-sidepanel">', unsafe_allow_html=True)
-            st.markdown('<div class="sy-panel-title">AI Insights Panel</div>', unsafe_allow_html=True)
-            st.markdown(f'<div class="sy-data-row"><span>Report ID</span><strong>{report_id}</strong></div>', unsafe_allow_html=True)
-            st.markdown(f'<div class="sy-data-row"><span>Review module</span><strong>{review_module}</strong></div>', unsafe_allow_html=True)
-            st.markdown(f'<div class="sy-data-row"><span>Plan</span><strong>{PLAN_LABELS.get(current_plan, "Solo")}</strong></div>', unsafe_allow_html=True)
-            st.markdown(f'<div class="sy-data-row"><span>Application / status</span><strong>{values["route"]}</strong></div>', unsafe_allow_html=True)
-            if review_module == "Planning Review":
-                st.markdown(f'<div class="sy-data-row"><span>Local authority</span><strong>{values["authority"]}</strong></div>', unsafe_allow_html=True)
-                st.markdown(f'<div class="sy-data-row"><span>Route confidence</span><strong>{values["probability"]}</strong></div>', unsafe_allow_html=True)
-            else:
-                st.markdown(f'<div class="sy-data-row"><span>Authority / confidence</span><strong>{values["authority"]}</strong></div>', unsafe_allow_html=True)
-            st.markdown(f'<div class="sy-data-row"><span>Submission position</span><strong>{"Ready to submit" if "READY TO SUBMIT" in sections.get(config["readiness_key"], "").upper() else "Review required"}</strong></div>', unsafe_allow_html=True)
-            st.markdown("")
-            st.markdown('<div class="sy-panel-title">Quick Actions</div>', unsafe_allow_html=True)
-
-            base_filename = (st.session_state.last_filename or "drawing_pack").rsplit(".", 1)[0]
-            suffix = "Planning" if review_module == "Planning Review" else "BuildingRegs"
-
-            if current_plan == "pro":
-                st.download_button(
-                    label=("Download Homeowner Feasibility Report (.docx)" if review_module == "Planning Review" and review_mode == "Homeowner Summary" else "Download Professional Report (.docx)"),
-                    data=word_file,
-                    file_name=f"{base_filename}_{suffix}_AI_Review_Report.docx",
-                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    key="download_docx",
-                    use_container_width=True,
-                )
-            else:
-                st.button("Download Word Report (.docx) 🔒 Studio", key="download_docx_locked", disabled=True, use_container_width=True)
-            st.download_button(
-                label=("Download Homeowner Feasibility Report (.pdf)" if review_module == "Planning Review" and review_mode == "Homeowner Summary" else "Download Professional Report (.pdf)"),
-                data=pdf_file,
-                file_name=f"{base_filename}_{suffix}_AI_Review_Report.pdf",
-                mime="application/pdf",
-                key="download_pdf",
-                use_container_width=True,
-            )
-
-            if review_module == "Planning Review":
-                st.markdown("")
-                if current_plan == "starter":
-                    st.caption("Solo includes planning statement drafting, but Word download is available on Studio only.")
-                if st.button("Generate Planning Statement", key="generate_planning_statement_btn", use_container_width=True):
-                    statement_text = pdf_summary.generate_planning_statement(
-                        report_text=report,
-                        sections=sections,
-                        project_address=project_address or "Not provided",
-                        client_name=client_name or "Not provided",
-                        local_authority=local_authority or "",
-                        review_mode=review_mode,
-                    )
-                    st.session_state["planning_statement_text"] = statement_text
-                    st.session_state["planning_statement_file"] = build_simple_word_doc("Draft Planning Statement", statement_text)
-
-                if st.session_state.get("planning_statement_text"):
-                    if current_plan == "pro":
-                        st.download_button(
-                            label="Download Planning Statement (.docx)",
-                            data=st.session_state["planning_statement_file"],
-                            file_name=f"{base_filename}_Planning_Statement.docx",
-                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                            key="download_planning_statement_docx",
-                            use_container_width=True,
-                        )
-                    else:
-                        st.button("Download Planning Statement (.docx) 🔒 Studio", key="download_planning_statement_docx_locked", disabled=True, use_container_width=True)
-            if current_plan == "starter":
-                st.markdown(f'<div class="sy-data-row"><span>Monthly reviews used</span><strong>{st.session_state.get("starter_review_count", 0)} / {STARTER_MONTHLY_REVIEW_LIMIT}</strong></div>', unsafe_allow_html=True)
-                st.link_button("Upgrade to Studio", WEBSITE_PRICING_URL, use_container_width=True)
-            st.link_button("Return to SY Design Studio", WEBSITE_HOME_URL, use_container_width=True)
+elif page == "Reports":
+    st.markdown('<div class="sy-hero"><div class="sy-hero-copy"><h1>Reports</h1><div class="sy-muted">Your generated report library. Download previous Planning and Building Regulations reports again without showing the full report output.</div></div></div>', unsafe_allow_html=True)
+    saved_projects = st.session_state.get("saved_projects", [])
+    if saved_projects:
+        for item in saved_projects:
+            st.markdown('<div class="sy-report-card">', unsafe_allow_html=True)
+            c1, c2, c3 = st.columns([1.4, 0.9, 0.9])
+            with c1:
+                st.markdown(f"**{item.get('project_address', 'Not provided')}**")
+                st.caption(f"Report ID: {item.get('report_id', '')} • {item.get('filename', '')}")
+            with c2:
+                st.write(item.get("module", ""))
+                conf = item.get("ai_confidence") or {}
+                if conf.get("label"):
+                    st.caption(f"Status: {conf.get('label')}")
+                st.caption(f"Council: {item.get('local_authority', 'Not detected')}")
+            with c3:
+                st.write(item.get("date", ""))
+                st.caption(item.get("plan", ""))
+            d1, d2 = st.columns(2)
+            pdf_bytes = item.get("pdf_bytes")
+            word_bytes = item.get("word_bytes")
+            report_id_item = item.get("report_id", "")
+            module_item = item.get("module", "Planning Review")
+            with d1:
+                if pdf_bytes and item.get("pdf_unlocked"):
+                    st.download_button("Download PDF", pdf_bytes, file_name=f"{report_id_item or 'report'}_ArchLens_Report.pdf", mime="application/pdf", use_container_width=True, key=f"pdf_{report_id_item}")
+                elif pdf_bytes:
+                    cost = get_export_credit_cost(module_item, "pdf")
+                    if st.button(f"Unlock PDF — {cost} credits", use_container_width=True, key=f"unlock_pdf_{report_id_item}"):
+                        ok, msg = unlock_report_export(report_id_item, module_item, "pdf")
+                        if ok:
+                            st.success(msg)
+                            st.rerun()
+                        else:
+                            st.error(msg)
+                else:
+                    st.caption("PDF download available for reports generated after this update.")
+            with d2:
+                if word_bytes and item.get("word_unlocked"):
+                    st.download_button("Download Word", word_bytes, file_name=f"{report_id_item or 'report'}_ArchLens_Report.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document", use_container_width=True, key=f"docx_{report_id_item}")
+                elif word_bytes:
+                    cost = get_export_credit_cost(module_item, "word")
+                    if st.button(f"Unlock Word — {cost} credit", use_container_width=True, key=f"unlock_word_{report_id_item}"):
+                        ok, msg = unlock_report_export(report_id_item, module_item, "word")
+                        if ok:
+                            st.success(msg)
+                            st.rerun()
+                        else:
+                            st.error(msg)
+                else:
+                    st.caption("Word download available for reports generated after this update.")
             st.markdown('</div>', unsafe_allow_html=True)
-
-        st.markdown("")
-        with st.expander("Saved Projects History", expanded=False):
-            saved_projects = st.session_state.get("saved_projects", [])
-            if saved_projects:
-                for item in saved_projects:
-                    st.write(item.get("project_address", "Not provided"))
-                    st.caption(f"Report ID: {item.get('report_id', '')}")
-                    st.caption(f"Module: {item.get('module', '')}")
-                    st.caption(f"Project Type: {item.get('project_types', '')}")
-                    st.caption(f"File: {item.get('filename', '')}")
-                    st.caption(f"Date: {item.get('date', '')}")
-                    st.caption(f"Plan: {item.get('plan', '')}")
-                    st.markdown("---")
-            else:
-                st.info("No saved projects yet. Run a review to build your project history.")
-
-        if review_module == "Planning Review" and st.session_state.get("planning_statement_text"):
-            st.markdown("")
-            with st.expander("Show planning statement draft", expanded=False):
-                st.text(st.session_state["planning_statement_text"])
     else:
-        st.info("No report generated yet. Complete the setup, upload the drawing pack, and run the review.")
+        st.info("No reports generated yet. Go to Projects and run your first review.")
+
+elif page == "Settings":
+    st.markdown('<div class="sy-hero"><div class="sy-hero-copy"><h1>Settings</h1><div class="sy-muted">Control your account, branding and app appearance.</div></div></div>', unsafe_allow_html=True)
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown("### Account")
+        st.write(f"Current plan: **{PLAN_LABELS.get(current_plan, 'Solo')}**")
+        st.write(f"User: **{current_user_name or 'Not shown'}**")
+        st.write(f"Credits available: **{get_credit_balance()}**")
+        st.caption("This version uses session-based credits for testing. Live credits should be moved to Supabase/Stripe so balances persist.")
+        st.markdown("### Appearance")
+        selected_theme = st.radio("App theme", ["Dark", "Light"], index=["Dark", "Light"].index(st.session_state.get("app_theme", "Dark")), horizontal=True)
+        if selected_theme != st.session_state.get("app_theme", "Dark"):
+            st.session_state["app_theme"] = selected_theme
+            st.rerun()
+        st.caption("Light mode uses dark text on light surfaces. Dark mode uses light text on dark surfaces for readability.")
+    with c2:
+        st.markdown("### Branding")
+        logo_bytes = get_brand_logo_bytes_for_ui()
+        if logo_bytes:
+            st.image(logo_bytes, width=220)
+            st.success("SY Design Studio logo is loaded for branded PDF exports.")
+        else:
+            st.warning("Logo file not found. Add assets/sy_design_studio_logo.png to your project.")
+    st.markdown("---")
+    render_buy_credits_panel()
+
+    st.markdown("---")
+    st.markdown("### Credit Transactions")
+    transactions = st.session_state.get("credit_transactions", []) or []
+    if transactions:
+        for tx in transactions[:8]:
+            sign = "+" if int(tx.get("amount", 0)) > 0 else ""
+            st.caption(f"{tx.get('date')} • {sign}{tx.get('amount')} credits • {tx.get('reason')} • Balance: {tx.get('balance_after')}")
+    else:
+        st.caption("No credit transactions yet.")
+
+    if st.button("Clear current project/report"):
+        # Do not reset credit balance, credit transactions, unlocked reports or report library.
+        # Credits are money-related and must persist in the user session.
+        preserve_keys = {"credit_balance", "credit_transactions", "unlocked_reports", "saved_projects", "report_library"}
+        for key, value in DEFAULT_STATE.items():
+            if key not in preserve_keys:
+                st.session_state[key] = value
+        for key in list(st.session_state.keys()):
+            if key.startswith("wizard_"):
+                st.session_state[key] = WIZARD_DEFAULTS.get(key, "")
+        st.session_state["project_step"] = 1
+        st.success("Current project cleared. Credits and previously generated report library were kept.")
