@@ -34,6 +34,8 @@ DEFAULT_STATE = {
     "report_library": [],
     "app_theme": "Dark",
     "brand_logo_bytes": None,
+    "ai_confidence": None,
+    "rule_engine_summary": None,
 }
 for key, value in DEFAULT_STATE.items():
     if key not in st.session_state:
@@ -474,6 +476,201 @@ def build_pd_context(project_types: List[str], property_type: str, rear_extensio
     return pd_context
 
 
+
+
+
+# -----------------------------------------------------------------------------
+# AI CONFIDENCE SYSTEM
+# Rule-engine-first confidence labels. These are not legal certainty scores.
+# They are user-facing status labels based on deterministic checks, drawing
+# completeness, report sections and missing information.
+# -----------------------------------------------------------------------------
+PLANNING_CONFIDENCE_LABELS = [
+    "PASS",
+    "LIKELY PD",
+    "LIKELY PRIOR APPROVAL",
+    "FULL PLANNING ADVISED",
+    "FAIL",
+    "MANUAL REVIEW ADVISED",
+]
+
+BUILDING_CONFIDENCE_LABELS = [
+    "LIKELY COMPLIANT",
+    "PARTIAL INFORMATION",
+    "NON-COMPLIANT ITEMS FOUND",
+    "STRUCTURAL REVIEW REQUIRED",
+    "FIRE STRATEGY REVIEW REQUIRED",
+    "BUILDING CONTROL REVIEW ADVISED",
+]
+
+
+def _normalise_text(value) -> str:
+    return str(value or "").strip()
+
+
+def _extract_route_from_rule_summary(rule_summary: str) -> str:
+    """Pull a stable route/status label from the deterministic rule summary."""
+    text = _normalise_text(rule_summary).upper()
+    if "LIKELY PRIOR APPROVAL" in text or "PRIOR APPROVAL" in text:
+        return "LIKELY PRIOR APPROVAL"
+    if "FULL PLANNING" in text:
+        return "FULL PLANNING ADVISED"
+    if "FAIL" in text:
+        return "FAIL"
+    if "PASS" in text:
+        return "PASS"
+    if "LIKELY PD" in text or "PD / LDC" in text or "PERMITTED DEVELOPMENT" in text:
+        return "LIKELY PD"
+    if "NEEDS CONFIRMATION" in text or "MANUAL" in text:
+        return "MANUAL REVIEW ADVISED"
+    return "MANUAL REVIEW ADVISED"
+
+
+def _count_report_signals(sections: Dict[str, str], needles: List[str]) -> int:
+    combined = "\n".join(sections.values()).upper()
+    return sum(1 for n in needles if n.upper() in combined)
+
+
+def calculate_planning_confidence(sections: Dict[str, str], rule_summary: str = "") -> Dict[str, object]:
+    """Return user-facing planning confidence label and explanation.
+
+    This avoids fake percentage certainty. The label is based on the deterministic
+    rule-engine result first, then adjusted for missing information and drawing readiness.
+    """
+    route_label = _extract_route_from_rule_summary(rule_summary)
+    missing_text = _normalise_text(sections.get("MISSING INFORMATION", "")).upper()
+    risk_text = _normalise_text(sections.get("KEY RISKS", "")).upper()
+    readiness_text = _normalise_text(sections.get("SUBMISSION READINESS", "")).upper()
+    route_text = _normalise_text(sections.get("PD / PRIOR APPROVAL / PLANNING ROUTE", "")).upper()
+    combined = "\n".join([missing_text, risk_text, readiness_text, route_text, _normalise_text(rule_summary).upper()])
+
+    blockers = _count_report_signals(sections, [
+        "NOT CLEARLY SHOWN",
+        "NOT CLEARLY DIMENSIONED",
+        "INSUFFICIENT",
+        "REQUIRES CONFIRMATION",
+        "CONFIRM",
+        "MISSING",
+    ])
+    high_risk = "HIGH" in risk_text or "FAIL" in combined or "NOT READY" in readiness_text
+
+    if route_label == "PASS" and blockers <= 1 and not high_risk:
+        label = "PASS"
+    elif route_label == "LIKELY PRIOR APPROVAL" and not high_risk:
+        label = "LIKELY PRIOR APPROVAL"
+    elif route_label == "LIKELY PD" and blockers <= 3 and not high_risk:
+        label = "LIKELY PD"
+    elif route_label == "FULL PLANNING ADVISED" or "FULL PLANNING" in combined:
+        label = "FULL PLANNING ADVISED"
+    elif route_label == "FAIL" or high_risk:
+        label = "FAIL"
+    else:
+        label = "MANUAL REVIEW ADVISED"
+
+    triggers = []
+    if rule_summary:
+        triggers.append("Deterministic PD rule checks were used before AI wording.")
+    if "PRIOR APPROVAL" in combined:
+        triggers.append("Larger Home Extension / prior approval route appears relevant.")
+    if "FULL PLANNING" in combined:
+        triggers.append("One or more items appear outside straightforward PD/PA route.")
+    if blockers:
+        triggers.append("Some dimensions or constraints still need confirmation from the drawings or site checks.")
+    if not triggers:
+        triggers.append("No major route conflict was identified from the current intake and report sections.")
+
+    return {
+        "module": "Planning Review",
+        "label": label,
+        "basis": "Rule engine + drawing/report checks",
+        "triggers": triggers[:4],
+        "note": "This is a review status, not a guarantee of lawful development or planning approval.",
+    }
+
+
+def calculate_building_confidence(sections: Dict[str, str]) -> Dict[str, object]:
+    combined = "\n".join(sections.values()).upper()
+    compliance = _normalise_text(sections.get("COMPLIANCE STATUS BY APPROVED DOCUMENT", "")).upper()
+    missing = _normalise_text(sections.get("MISSING INFORMATION", "")).upper()
+    risks = _normalise_text(sections.get("KEY RISKS", "")).upper()
+
+    fail_count = compliance.count("FAIL") + combined.count("NON-COMPLIANT")
+    partial_count = compliance.count("PARTLY") + compliance.count("REVIEW REQUIRED") + missing.count("NOT CLEARLY")
+
+    if "STRUCTURAL" in risks and any(x in risks for x in ["REQUIRED", "CALC", "ENGINEER"]):
+        label = "STRUCTURAL REVIEW REQUIRED"
+    elif "FIRE" in risks and any(x in risks for x in ["UNCLEAR", "REQUIRED", "ESCAPE", "STRATEGY"]):
+        label = "FIRE STRATEGY REVIEW REQUIRED"
+    elif fail_count > 0:
+        label = "NON-COMPLIANT ITEMS FOUND"
+    elif partial_count > 0 or "MISSING" in missing:
+        label = "PARTIAL INFORMATION"
+    elif "READY" in _normalise_text(sections.get("BUILDING CONTROL SUBMISSION READINESS", "")).upper():
+        label = "LIKELY COMPLIANT"
+    else:
+        label = "BUILDING CONTROL REVIEW ADVISED"
+
+    triggers = []
+    if fail_count:
+        triggers.append("One or more Approved Document checks are marked as fail/non-compliant.")
+    if partial_count:
+        triggers.append("Some compliance items require further details or confirmation.")
+    if "STRUCTURAL" in combined:
+        triggers.append("Structural information or engineer confirmation is relevant.")
+    if "FIRE" in combined:
+        triggers.append("Fire strategy information is relevant to the review.")
+    if not triggers:
+        triggers.append("No major issue was identified from the visible report sections.")
+
+    return {
+        "module": "Building Regulations Review",
+        "label": label,
+        "basis": "Drawing/report checks",
+        "triggers": triggers[:4],
+        "note": "This is an AI-assisted review status. Formal Building Control approval is still required.",
+    }
+
+
+def calculate_ai_confidence(module_name: str, sections: Dict[str, str], rule_summary: str = "") -> Dict[str, object]:
+    if module_name == "Planning Review":
+        return calculate_planning_confidence(sections, rule_summary)
+    return calculate_building_confidence(sections)
+
+
+def confidence_badge_style(label: str) -> str:
+    label_u = _normalise_text(label).upper()
+    if label_u in {"PASS", "LIKELY PD", "LIKELY PRIOR APPROVAL", "LIKELY COMPLIANT"}:
+        return "background:#DDF3E4;color:#14532D;border-color:#B7E4C7;"
+    if label_u in {"FULL PLANNING ADVISED", "PARTIAL INFORMATION", "STRUCTURAL REVIEW REQUIRED", "FIRE STRATEGY REVIEW REQUIRED", "MANUAL REVIEW ADVISED", "BUILDING CONTROL REVIEW ADVISED"}:
+        return "background:#FFF3CD;color:#6B4E00;border-color:#F1D48A;"
+    return "background:#F8D7DA;color:#842029;border-color:#F1AEB5;"
+
+
+def render_ai_confidence_card(confidence):
+    if not confidence:
+        return
+    label = _normalise_text(confidence.get("label", "MANUAL REVIEW ADVISED"))
+    style = confidence_badge_style(label)
+    triggers = confidence.get("triggers", []) or []
+    st.markdown(
+        f"""
+        <div class="sy-subtle-card">
+            <div class="sy-section-label">AI Confidence System</div>
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap;">
+                <h3 style="margin:0;">Review Status</h3>
+                <span style="display:inline-block;padding:0.42rem 0.72rem;border-radius:999px;border:1px solid; font-weight:800; letter-spacing:0.02em; {style}">{label}</span>
+            </div>
+            <div class="sy-muted" style="margin-top:0.45rem;">Basis: {confidence.get('basis', 'Rule and drawing checks')}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    if triggers:
+        st.markdown("**What caused this result?**")
+        for t in triggers:
+            st.markdown(f"- {t}")
+    if confidence.get("note"):
+        st.caption(str(confidence.get("note")))
 
 PLAN_LABELS = {
     "starter": "Solo",
@@ -1745,15 +1942,20 @@ def get_required_accuracy_answers(project_types):
 
 def render_left_navigation():
     logo_uri = app_logo_data_uri()
+    theme = st.session_state.get("app_theme", "Dark")
+    light_mode = str(theme).lower().startswith("light")
+    logo_box_bg = "transparent" if light_mode else "#061225"
+    logo_padding = "0px" if light_mode else "8px"
+    logo_subtitle_colour = "#6B7280" if light_mode else "#9FB2D8"
     with st.sidebar:
         if logo_uri:
             st.markdown(
                 f'''
-                <div style="display:flex;align-items:center;gap:0.7rem;margin:0.6rem 0 1.1rem 0;">
-                    <img src="{logo_uri}" style="width:72px;height:72px;object-fit:contain;border-radius:16px;background:#061225;padding:6px;" />
+                <div style="display:flex;align-items:center;gap:1rem;margin:0.9rem 0 1.45rem 0;">
+                    <img src="{logo_uri}" style="width:112px;height:112px;object-fit:contain;border-radius:18px;background:{logo_box_bg};padding:{logo_padding};" />
                     <div>
-                        <div style="font-weight:800;font-size:1.1rem;">ArchLens AI</div>
-                        <div style="font-size:0.75rem;color:#9FB2D8;">SY Design Studio</div>
+                        <div style="font-weight:850;font-size:1.28rem;line-height:1.15;">ArchLens AI</div>
+                        <div style="font-size:0.86rem;color:{logo_subtitle_colour};margin-top:0.25rem;">SY Design Studio</div>
                     </div>
                 </div>
                 ''',
@@ -1857,6 +2059,7 @@ def run_archlens_analysis(uploaded_files):
     accuracy_answers = st.session_state.get("wizard_accuracy_answers", {}) or {}
     scope_items = st.session_state.get("wizard_scope_items", []) or []
     review_focus = st.session_state.get("wizard_review_focus") or ""
+    rule_engine_summary = ""
     drawing_priority_instruction = (
         "Important instruction: cross-check all user-entered project type, scope items and measurements against the uploaded drawing PDF. "
         "If the uploaded plans show different dimensions or scope, the uploaded plans take priority. "
@@ -1989,6 +2192,7 @@ def run_archlens_analysis(uploaded_files):
             st.stop()
 
         sections = parse_report_sections(report, config["required_headings"])
+        ai_confidence = calculate_ai_confidence(review_module, sections, rule_engine_summary)
         extracted_report_address = extract_address_from_report(report, "Not provided")
         clean_project_address = clean_input_value(project_address, extracted_report_address)
         clean_client_name = clean_input_value(client_name, "Not provided")
@@ -2006,6 +2210,8 @@ def run_archlens_analysis(uploaded_files):
         st.session_state.last_filename = file.name
         st.session_state.report_id = report_id
         st.session_state.active_module = review_module
+        st.session_state.ai_confidence = ai_confidence
+        st.session_state.rule_engine_summary = rule_engine_summary
         st.session_state["planning_statement_text"] = None
         st.session_state["planning_statement_file"] = None
         if current_plan == "starter":
@@ -2023,6 +2229,7 @@ def run_archlens_analysis(uploaded_files):
             "local_authority": local_authority,
             "pdf_bytes": pdf_file.getvalue(),
             "word_bytes": word_file.getvalue(),
+            "ai_confidence": ai_confidence,
         })
         smooth_progress(progress_bar, status_text, 95, 100, "Finalising report...", 0.4)
         status_text.text("Analysis complete. 100%")
@@ -2045,6 +2252,7 @@ def render_report_download_panel(module_name=None, show_sections=True):
     report_id = st.session_state.report_id or "N/A"
     module_name = module_name or st.session_state.get("active_module", "Planning Review")
     st.markdown('<div class="sy-subtle-card"><div class="sy-section-label">Review Output</div><h3 style="margin:0 0 0.35rem 0;">Latest Professional Report</h3><div class="sy-muted">Download the branded PDF or review the AI report sections.</div></div>', unsafe_allow_html=True)
+    render_ai_confidence_card(st.session_state.get("ai_confidence"))
     render_at_a_glance(sections, report_id, module_name)
     base_filename = (st.session_state.last_filename or "drawing_pack").rsplit(".", 1)[0]
     suffix = "Planning" if module_name == "Planning Review" else "BuildingRegs"
@@ -2087,7 +2295,9 @@ if page == "Dashboard":
     if saved_projects:
         for item in saved_projects[:6]:
             st.markdown(f"**{item.get('project_address', 'Not provided')}**")
-            st.caption(f"{item.get('module', '')} • {item.get('date', '')} • Report ID: {item.get('report_id', '')}")
+            conf = item.get("ai_confidence") or {}
+            status_text = f" • Status: {conf.get('label')}" if conf.get("label") else ""
+            st.caption(f"{item.get('module', '')} • {item.get('date', '')} • Report ID: {item.get('report_id', '')}{status_text}")
             st.markdown("---")
     else:
         st.info("No projects yet. Go to Projects to start a new intake.")
@@ -2189,6 +2399,9 @@ elif page == "Reports":
                 st.caption(f"Report ID: {item.get('report_id', '')} • {item.get('filename', '')}")
             with c2:
                 st.write(item.get("module", ""))
+                conf = item.get("ai_confidence") or {}
+                if conf.get("label"):
+                    st.caption(f"Status: {conf.get('label')}")
                 st.caption(f"Council: {item.get('local_authority', 'Not detected')}")
             with c3:
                 st.write(item.get("date", ""))
