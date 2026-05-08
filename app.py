@@ -69,6 +69,7 @@ FREE_PREVIEW_NOTE = "Analysis preview is available first. Credits are used when 
 
 ARCHLENS_API_URL = os.getenv("ARCHLENS_API_URL", "https://archlens-api.onrender.com").rstrip("/")
 ARCHLENS_WEBHOOK_SECRET = os.getenv("ARCHLENS_WEBHOOK_SECRET", "archlens_secure_2026_SYDS_92838")
+ARCHLENS_BUY_CREDITS_URL = os.getenv("ARCHLENS_BUY_CREDITS_URL", "https://www.sydesignstudio.co.uk/category/archlens-ai-credits")
 
 
 def normalise_user_email(email: str) -> str:
@@ -101,7 +102,7 @@ def api_deduct_credits(email: str, amount: int, report_id: str = "", export_type
             "message": "User email not found. Please launch ArchLens from your Wix member account.",
         }
     if amount <= 0:
-        return {"success": True, "credits": api_get_credit_balance(clean_email), "message": "No credits required."}
+        return {"success": True, "credits": api_get_credit_balance(clean_email) or 0, "message": "No credits required."}
 
     try:
         response = requests.post(
@@ -135,7 +136,6 @@ def api_deduct_credits(email: str, amount: int, report_id: str = "", export_type
             "success": False,
             "message": data.get("detail") or data.get("message") or "Credit deduction failed.",
         }
-
     except Exception as exc:
         return {
             "success": False,
@@ -147,7 +147,7 @@ def sync_credit_balance_from_api(email: str):
     api_balance = api_get_credit_balance(email)
     if api_balance is not None:
         st.session_state["credit_balance"] = api_balance
-    return st.session_state.get("credit_balance", 0)
+    return int(st.session_state.get("credit_balance", 0) or 0)
 
 
 BUILDING_REQUIRED_HEADINGS = [
@@ -591,11 +591,12 @@ def build_pd_context(project_types: List[str], property_type: str, rear_extensio
 # completeness, report sections and missing information.
 # -----------------------------------------------------------------------------
 PLANNING_CONFIDENCE_LABELS = [
-    "LIKELY COMPLIANT",
-    "LIKELY COMPLIANT SUBJECT TO MINOR CHECKS",
+    "PASS",
+    "LIKELY PD",
     "LIKELY PRIOR APPROVAL",
-    "REQUIRES FURTHER REVIEW",
-    "LIKELY PLANNING PERMISSION REQUIRED",
+    "FULL PLANNING ADVISED",
+    "FAIL",
+    "MANUAL REVIEW ADVISED",
 ]
 
 BUILDING_CONFIDENCE_LABELS = [
@@ -612,55 +613,23 @@ def _normalise_text(value) -> str:
     return str(value or "").strip()
 
 
-
-
-def _is_minor_class_b_condition_issue_text(text_value: str) -> bool:
-    """Detect Class B/C loft cases where the only issue is a side-window
-    obscurity/non-opening annotation. This should not be presented as full
-    planning required where the main PD/LDC route remains available.
-    """
-    text = _normalise_text(text_value).upper()
-    if not any(t in text for t in ["CLASS B", "DORMER", "LOFT", "ROOF ENLARGEMENT", "ROOFLIGHT"]):
-        return False
-    if not any(t in text for t in ["SIDE WINDOWS", "SIDE-FACING", "SIDE ROOF WINDOWS", "OBSCURE", "1.7M"]):
-        return False
-    hard_fail_terms = [
-        "FRONT-FACING ROOF ENLARGEMENT",
-        "PRINCIPAL ELEVATION AND FRONTS A HIGHWAY",
-        "ABOVE THE HIGHEST PART",
-        "EXCEEDS HIGHEST ROOF",
-        "OVER LIMIT",
-        "ROOF VOLUME EXCEEDS",
-        "BALCONY",
-        "VERANDAH",
-        "RAISED PLATFORM",
-        "ARTICLE 4",
-        "LISTED BUILDING",
-        "FLAT OR MAISONETTE",
-        "NOT A SINGLE DWELLINGHOUSE",
-    ]
-    return not any(term in text for term in hard_fail_terms)
-
 def _extract_route_from_rule_summary(rule_summary: str) -> str:
-    """Pull a stable route/status label from the deterministic rule summary.
-
-    Planning reports should use professional status wording rather than hard PASS/FAIL labels.
-    Missing minor confirmations should not create a fail result for otherwise typical PD schemes.
-    """
+    """Pull a stable route/status label from the deterministic rule summary."""
     text = _normalise_text(rule_summary).upper()
-    if _is_minor_class_b_condition_issue_text(text):
-        return "LIKELY COMPLIANT SUBJECT TO MINOR CHECKS"
-    if "PRIOR APPROVAL" in text:
+    if "LIKELY PRIOR APPROVAL" in text or "PRIOR APPROVAL" in text:
         return "LIKELY PRIOR APPROVAL"
-    if "FULL PLANNING" in text or "PLANNING PERMISSION" in text:
-        return "LIKELY PLANNING PERMISSION REQUIRED"
-    if "PD / LDC" in text or "PERMITTED DEVELOPMENT" in text or "PD POSSIBLE" in text or "LIKELY PD" in text or "PASS" in text:
-        return "LIKELY COMPLIANT"
+    if "FULL PLANNING" in text:
+        return "FULL PLANNING ADVISED"
     if "FAIL" in text:
-        return "LIKELY PLANNING PERMISSION REQUIRED"
+        return "FAIL"
+    if "PASS" in text:
+        return "PASS"
+    if "LIKELY PD" in text or "PD / LDC" in text or "PERMITTED DEVELOPMENT" in text:
+        return "LIKELY PD"
     if "NEEDS CONFIRMATION" in text or "MANUAL" in text:
-        return "REQUIRES FURTHER REVIEW"
-    return "REQUIRES FURTHER REVIEW"
+        return "MANUAL REVIEW ADVISED"
+    return "MANUAL REVIEW ADVISED"
+
 
 def _count_report_signals(sections: Dict[str, str], needles: List[str]) -> int:
     combined = "\n".join(sections.values()).upper()
@@ -670,79 +639,59 @@ def _count_report_signals(sections: Dict[str, str], needles: List[str]) -> int:
 def calculate_planning_confidence(sections: Dict[str, str], rule_summary: str = "") -> Dict[str, object]:
     """Return user-facing planning confidence label and explanation.
 
-    This avoids fake percentage certainty and avoids harsh FAIL/PASS wording.
-    The label is based on the deterministic rule-engine result first, then adjusted
-    for actual report findings. Typical PD/LDC schemes with minor missing checks
-    should show as likely compliant subject to minor checks, not failed.
+    This avoids fake percentage certainty. The label is based on the deterministic
+    rule-engine result first, then adjusted for missing information and drawing readiness.
     """
     route_label = _extract_route_from_rule_summary(rule_summary)
     missing_text = _normalise_text(sections.get("MISSING INFORMATION", "")).upper()
     risk_text = _normalise_text(sections.get("KEY RISKS", "")).upper()
     readiness_text = _normalise_text(sections.get("SUBMISSION READINESS", "")).upper()
     route_text = _normalise_text(sections.get("PD / PRIOR APPROVAL / PLANNING ROUTE", "")).upper()
-    top_text = _normalise_text(sections.get("TOP SUMMARY", "")).upper()
-    combined = "\n".join([missing_text, risk_text, readiness_text, route_text, top_text, _normalise_text(rule_summary).upper()])
+    combined = "\n".join([missing_text, risk_text, readiness_text, route_text, _normalise_text(rule_summary).upper()])
 
     blockers = _count_report_signals(sections, [
         "NOT CLEARLY SHOWN",
         "NOT CLEARLY DIMENSIONED",
         "INSUFFICIENT",
         "REQUIRES CONFIRMATION",
+        "CONFIRM",
         "MISSING",
     ])
-    minor_class_b_condition_only = _is_minor_class_b_condition_issue_text(combined)
-    clear_policy_issue = any(x in combined for x in [
-        "FULL PLANNING REQUIRED",
-        "LIKELY PLANNING PERMISSION REQUIRED",
-        "EXCEEDS",
-        "OUTSIDE CLASS",
-        "FRONT-FACING ROOF ENLARGEMENT",
-        "ABOVE THE HIGHEST PART",
-        "ARTICLE 4",
-        "LISTED BUILDING",
-    ])
-    if minor_class_b_condition_only:
-        clear_policy_issue = False
-    high_risk = "HIGH" in risk_text or "NOT READY" in readiness_text
+    high_risk = "HIGH" in risk_text or "FAIL" in combined or "NOT READY" in readiness_text
 
-    if minor_class_b_condition_only:
-        label = "LIKELY COMPLIANT SUBJECT TO MINOR CHECKS"
-    elif route_label == "LIKELY PRIOR APPROVAL" and not clear_policy_issue:
+    if route_label == "PASS" and blockers <= 1 and not high_risk:
+        label = "PASS"
+    elif route_label == "LIKELY PRIOR APPROVAL" and not high_risk:
         label = "LIKELY PRIOR APPROVAL"
-    elif route_label == "LIKELY PLANNING PERMISSION REQUIRED" or clear_policy_issue:
-        label = "LIKELY PLANNING PERMISSION REQUIRED"
-    elif route_label == "LIKELY COMPLIANT":
-        label = "LIKELY COMPLIANT" if blockers <= 1 and not high_risk else "LIKELY COMPLIANT SUBJECT TO MINOR CHECKS"
-    elif route_label == "LIKELY COMPLIANT SUBJECT TO MINOR CHECKS":
-        label = "LIKELY COMPLIANT SUBJECT TO MINOR CHECKS"
-    elif blockers <= 3 and ("PD / LDC" in combined or "CLASS B" in combined or "PERMITTED DEVELOPMENT" in combined):
-        label = "LIKELY COMPLIANT SUBJECT TO MINOR CHECKS"
+    elif route_label == "LIKELY PD" and blockers <= 3 and not high_risk:
+        label = "LIKELY PD"
+    elif route_label == "FULL PLANNING ADVISED" or "FULL PLANNING" in combined:
+        label = "FULL PLANNING ADVISED"
+    elif route_label == "FAIL" or high_risk:
+        label = "FAIL"
     else:
-        label = "REQUIRES FURTHER REVIEW"
+        label = "MANUAL REVIEW ADVISED"
 
     triggers = []
-    if minor_class_b_condition_only:
-        triggers.append("Loft/dormer proposal appears capable of a PD/LDC route, subject to side-window annotation checks.")
-    elif "CLASS B" in combined or "DORMER" in combined or "ROOF" in combined:
-        triggers.append("Roof enlargement checks appear to be the main planning route issue.")
-    elif "PRIOR APPROVAL" in combined:
-        triggers.append("Larger home extension / prior approval route appears relevant.")
-    elif "FULL PLANNING" in combined:
-        triggers.append("The proposal may require a householder planning application.")
-    else:
-        triggers.append("Planning route has been assessed using the uploaded drawings and rule checks.")
+    if rule_summary:
+        triggers.append("Deterministic PD rule checks were used before AI wording.")
+    if "PRIOR APPROVAL" in combined:
+        triggers.append("Larger Home Extension / prior approval route appears relevant.")
+    if "FULL PLANNING" in combined:
+        triggers.append("One or more items appear outside straightforward PD/PA route.")
     if blockers:
-        triggers.append("Some standard confirmation items may still need checking before submission.")
-    if "PD / LDC" in combined or "PERMITTED DEVELOPMENT" in combined:
-        triggers.append("A Lawful Development Certificate route may be appropriate where PD criteria are met.")
+        triggers.append("Some dimensions or constraints still need confirmation from the drawings or site checks.")
+    if not triggers:
+        triggers.append("No major route conflict was identified from the current intake and report sections.")
 
     return {
         "module": "Planning Review",
         "label": label,
-        "basis": "Planning rules + drawing review",
-        "triggers": triggers[:3],
-        "note": "Indicative review only. The local authority makes the final decision.",
+        "basis": "Rule engine + drawing/report checks",
+        "triggers": triggers[:4],
+        "note": "This is a review status, not a guarantee of lawful development or planning approval.",
     }
+
 
 def calculate_building_confidence(sections: Dict[str, str]) -> Dict[str, object]:
     combined = "\n".join(sections.values()).upper()
@@ -795,9 +744,9 @@ def calculate_ai_confidence(module_name: str, sections: Dict[str, str], rule_sum
 
 def confidence_badge_style(label: str) -> str:
     label_u = _normalise_text(label).upper()
-    if label_u in {"LIKELY COMPLIANT", "LIKELY COMPLIANT SUBJECT TO MINOR CHECKS", "LIKELY PRIOR APPROVAL"}:
+    if label_u in {"PASS", "LIKELY PD", "LIKELY PRIOR APPROVAL", "LIKELY COMPLIANT"}:
         return "background:#DDF3E4;color:#14532D;border-color:#B7E4C7;"
-    if label_u in {"LIKELY PLANNING PERMISSION REQUIRED", "REQUIRES FURTHER REVIEW", "PARTIAL INFORMATION", "STRUCTURAL REVIEW REQUIRED", "FIRE STRATEGY REVIEW REQUIRED", "BUILDING CONTROL REVIEW ADVISED"}:
+    if label_u in {"FULL PLANNING ADVISED", "PARTIAL INFORMATION", "STRUCTURAL REVIEW REQUIRED", "FIRE STRATEGY REVIEW REQUIRED", "MANUAL REVIEW ADVISED", "BUILDING CONTROL REVIEW ADVISED"}:
         return "background:#FFF3CD;color:#6B4E00;border-color:#F1D48A;"
     return "background:#F8D7DA;color:#842029;border-color:#F1AEB5;"
 
@@ -811,7 +760,7 @@ def render_ai_confidence_card(confidence):
     st.markdown(
         f"""
         <div class="sy-subtle-card">
-            <div class="sy-section-label">Planning Confidence</div>
+            <div class="sy-section-label">AI Confidence System</div>
             <div style="display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap;">
                 <h3 style="margin:0;">Review Status</h3>
                 <span style="display:inline-block;padding:0.42rem 0.72rem;border-radius:999px;border:1px solid; font-weight:800; letter-spacing:0.02em; {style}">{label}</span>
@@ -909,16 +858,12 @@ def grant_credits(amount: int, reason: str = "Credits added"):
 def spend_credits(amount: int, reason: str, report_id: str = "", export_type: str = ""):
     amount = int(amount)
     balance = get_credit_balance()
-
     if amount <= 0:
         return True, "No credits required."
-
     if balance < amount:
         return False, f"Not enough credits. You need {amount} credits but only have {balance}."
 
     user_email = normalise_user_email(st.session_state.get("auth_user_name", ""))
-
-    # Live persistence: deduct from ArchLens API first, then update Streamlit session.
     api_result = api_deduct_credits(
         user_email,
         amount,
@@ -1912,13 +1857,12 @@ def build_word_report(file_name, address, client, date, practice_name, report_id
 def extract_summary_value(sections: Dict[str, str], module_name: str):
     top_summary_rows = {k.upper(): v for k, v in parse_key_value_lines(sections.get("TOP SUMMARY", "")) if k}
     if module_name == "Planning Review":
-        authority_value = top_summary_rows.get("LOCAL AUTHORITY", "Unknown")
-        if authority_value == "Unknown":
-            for line in sections.get("TOP SUMMARY", "").splitlines():
-                stripped = line.strip()
-                if stripped and ":" not in stripped:
-                    authority_value = stripped
-                    break
+        authority_value = "Unknown"
+        for line in sections.get("TOP SUMMARY", "").splitlines():
+            stripped = line.strip()
+            if stripped and ":" not in stripped:
+                authority_value = stripped
+                break
         return (
             "Not shown",
             top_summary_rows.get("APPLICATION TYPE", top_summary_rows.get("LIKELY ROUTE", "Unknown")),
@@ -1946,13 +1890,12 @@ def render_kpi_cards(sections: Dict[str, str], report_id: str, module_name: str)
 def extract_summary_values(sections: Dict[str, str], module_name: str):
     top_summary_rows = {k.upper(): v for k, v in parse_key_value_lines(sections.get("TOP SUMMARY", "")) if k}
     if module_name == "Planning Review":
-        authority_value = top_summary_rows.get("LOCAL AUTHORITY", "Unknown")
-        if authority_value == "Unknown":
-            for line in sections.get("TOP SUMMARY", "").splitlines():
-                stripped = line.strip()
-                if stripped and ":" not in stripped:
-                    authority_value = stripped
-                    break
+        authority_value = "Unknown"
+        for line in sections.get("TOP SUMMARY", "").splitlines():
+            stripped = line.strip()
+            if stripped and ":" not in stripped:
+                authority_value = stripped
+                break
         return {
             "risk": "Not shown",
             "route": top_summary_rows.get("APPLICATION TYPE", top_summary_rows.get("LIKELY ROUTE", "Unknown")),
@@ -2249,7 +2192,7 @@ def render_left_navigation():
         st.session_state["app_page"] = page
         st.markdown("---")
         st.link_button("Return to SY Design Studio", WEBSITE_HOME_URL, use_container_width=True)
-        st.link_button("Buy Credits", WEBSITE_PRICING_URL, use_container_width=True)
+        st.link_button("Buy Credits", ARCHLENS_BUY_CREDITS_URL, use_container_width=True)
     return page
 
 def intake_items():
@@ -2408,16 +2351,14 @@ def run_archlens_analysis(uploaded_files):
                     if extra_bits:
                         proposal_summary_for_ai = (proposal_summary_for_ai.strip() + " | " + extra_bits + " | Drawing dimensions take priority if different.").strip(" |")
                 if scope_items:
-                    proposal_summary_for_ai = (proposal_summary_for_ai.strip() + " | Scope noted: " + ", ".join(scope_items)).strip(" |")
+                    proposal_summary_for_ai = (proposal_summary_for_ai.strip() + " | Selected scope items to cross-check: " + ", ".join(scope_items)).strip(" |")
                 if review_focus:
                     proposal_summary_for_ai = (proposal_summary_for_ai.strip() + " | Specific review focus / notes: " + review_focus).strip(" |")
-                # Do not pass internal drawing-priority instructions into report wording.
-                # The report prompt already includes this rule internally.
-                proposal_summary_for_ai = proposal_summary_for_ai.strip(" |")
+                proposal_summary_for_ai = (proposal_summary_for_ai.strip() + " | " + drawing_priority_instruction).strip(" |")
                 pd_context = build_pd_context(project_types, property_type, rear_extension_depth_m, rear_extension_height_m, accuracy_answers)
                 accuracy_context = build_accuracy_context(accuracy_answers)
                 if accuracy_context:
-                    proposal_summary_for_ai = (proposal_summary_for_ai.strip() + " | PD answers: " + accuracy_context).strip(" |")
+                    proposal_summary_for_ai = (proposal_summary_for_ai.strip() + " | Rule intake answers: " + accuracy_context).strip(" |")
 
                 # Run deterministic householder PD rule checks before the AI narrative.
                 # AI should explain these results, not replace them.
