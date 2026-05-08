@@ -6,3 +6,5 @@ reportlab
 python-dotenv
 openai
 PyJWT
+fastapi
+uvicorn
