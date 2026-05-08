@@ -10,6 +10,8 @@ import pdfplumber
 from dotenv import load_dotenv
 from openai import OpenAI
 
+import planning_rules
+
 load_dotenv()
 
 LIVE_ANALYSIS_MAX_PAGES = 12
@@ -942,6 +944,8 @@ def analyze_planning_pdf(
     local_authority: str = "",
     review_mode: str = "Architect / Professional",
     pd_context: Optional[Dict[str, str]] = None,
+    scope_items: Optional[List[str]] = None,
+    rule_engine_summary: str = "",
 ) -> str:
     text = extract_text_from_pdf(pdf_path)
     page_data = extract_text_by_page(pdf_path)
@@ -978,6 +982,34 @@ def analyze_planning_pdf(
     if pd_route:
         application_type_value = pd_route
 
+    # Deterministic PD rule engine. This runs before the AI narrative so PASS / FAIL /
+    # NEEDS CONFIRMATION decisions are based on rules, not free-form AI wording.
+    try:
+        if not rule_engine_summary:
+            rule_facts = planning_rules.facts_from_app_context(
+                project_types=client_project_types or [],
+                property_type=property_type_text,
+                proposal_summary=proposal_summary_text,
+                pd_context=pd_context or {},
+                scope_items=scope_items or [],
+            )
+            rule_result = planning_rules.run_householder_pd_rules(rule_facts)
+            rule_engine_summary = planning_rules.format_rule_result_for_prompt(rule_result)
+        else:
+            rule_result = None
+    except Exception as rule_error:
+        rule_result = None
+        rule_engine_summary = f"DETERMINISTIC RULE ENGINE RESULT: NEEDS CONFIRMATION\nSUMMARY: Rule engine could not complete: {rule_error}"
+
+    rule_summary_upper = (rule_engine_summary or "").upper()
+    if "FULL PLANNING REQUIRED" in rule_summary_upper:
+        application_type_value = "FULL PLANNING"
+        pd_refusal_risk = "HIGH"
+    elif "PRIOR APPROVAL POSSIBLE" in rule_summary_upper or "LARGER HOME EXTENSION PRIOR APPROVAL" in rule_summary_upper:
+        application_type_value = "PRIOR APPROVAL"
+    elif "PD POSSIBLE" in rule_summary_upper or "PERMITTED DEVELOPMENT / LDC POSSIBLE" in rule_summary_upper:
+        application_type_value = "PD / LDC"
+
     prompt = f"""
 You are reviewing a UK residential planning drawing pack.
 
@@ -1000,6 +1032,16 @@ Local authority input:
 
 Structured PD questionnaire answers:
 {format_pd_context_for_prompt(pd_context)}
+
+Deterministic rule engine result:
+{rule_engine_summary}
+
+Rule engine instructions:
+- Treat the deterministic rule engine result as the primary source for PD / Prior Approval / Full Planning route.
+- Do not override PASS / FAIL / NEEDS CONFIRMATION outcomes unless the uploaded drawings clearly prove the rule fact is wrong.
+- Where a rule fails, explain the failure briefly and state that full planning is likely required.
+- Where information is missing, state NEEDS CONFIRMATION rather than guessing.
+- Keep rule explanations simple and cite the relevant Class reference, e.g. Class A, Class B, Class C.
 
 Planning reasoning requirements:
 - Keep the report SIMPLE, SHORT and decision-focused. Do not include background commentary that does not help the reader decide what to do next.
@@ -1079,7 +1121,10 @@ LOCAL AUTHORITY CONTEXT
 - Where constraints mapping is not available, state that conservation area, Article 4 and other site constraints should still be confirmed.
 
 PD / PRIOR APPROVAL / PLANNING ROUTE
-- State the most likely route.
+- Start with a short PASS / FAIL / NEEDS CONFIRMATION rule check summary.
+- State the most likely route using the deterministic rule engine first.
+- If the rule engine identifies failure, do not soften it; say full planning is likely required.
+- If the rule engine says information is missing, say the route cannot be confirmed until that item is shown on the drawings.
 - If the structured PD questionnaire provides a clearer route basis than the drawing text, explain that clearly and use it.
 - Give a short route explanation in formal professional wording.
 - For homeowner mode, explain the likely route in simple plain English.
@@ -1127,13 +1172,18 @@ Detected pages:
     fire_status = infer_fire_statement_status(text, page_summary)
     output_text = polish_planning_report_text(output_text, address_text, fire_status, authority_value)
 
-    if pd_route_reason and "PD / PRIOR APPROVAL / PLANNING ROUTE" in output_text:
-        output_text = output_text.replace(
-            "PD / PRIOR APPROVAL / PLANNING ROUTE\n",
-            "PD / PRIOR APPROVAL / PLANNING ROUTE\nStructured PD route logic:\n"
-            + pd_route_reason + "\nRefusal / approval risk from questionnaire: " + pd_refusal_risk + "\n\n",
-            1,
-        )
+    if "PD / PRIOR APPROVAL / PLANNING ROUTE" in output_text:
+        route_insert = ""
+        if rule_engine_summary:
+            route_insert = "Rule-based PD check:\n" + rule_engine_summary + "\n\n"
+        elif pd_route_reason:
+            route_insert = "Structured PD route logic:\n" + pd_route_reason + "\nRefusal / approval risk from questionnaire: " + pd_refusal_risk + "\n\n"
+        if route_insert:
+            output_text = output_text.replace(
+                "PD / PRIOR APPROVAL / PLANNING ROUTE\n",
+                "PD / PRIOR APPROVAL / PLANNING ROUTE\n" + route_insert,
+                1,
+            )
     top_summary_pattern = r"TOP SUMMARY\n([\s\S]*?)(?=\n[A-Z][A-Z /\-]+\n)"
     top_summary_replacement = (
         "TOP SUMMARY\n"

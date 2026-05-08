@@ -13,6 +13,7 @@ from typing import Dict, List, Tuple
 import fitz
 import streamlit as st
 import pdf_summary
+import planning_rules
 from docx import Document
 from docx.enum.table import WD_ALIGN_VERTICAL, WD_TABLE_ALIGNMENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -1942,7 +1943,23 @@ def run_archlens_analysis(uploaded_files):
                 pd_context = build_pd_context(project_types, property_type, rear_extension_depth_m, rear_extension_height_m, accuracy_answers)
                 accuracy_context = build_accuracy_context(accuracy_answers)
                 if accuracy_context:
-                    proposal_summary_for_ai = (proposal_summary_for_ai.strip() + " | Improve Accuracy: " + accuracy_context).strip(" |")
+                    proposal_summary_for_ai = (proposal_summary_for_ai.strip() + " | Rule intake answers: " + accuracy_context).strip(" |")
+
+                # Run deterministic householder PD rule checks before the AI narrative.
+                # AI should explain these results, not replace them.
+                try:
+                    rule_facts = planning_rules.facts_from_app_context(
+                        project_types=project_types,
+                        property_type=property_type,
+                        proposal_summary=proposal_summary_for_ai,
+                        pd_context=pd_context,
+                        scope_items=scope_items,
+                    )
+                    rule_result = planning_rules.run_householder_pd_rules(rule_facts)
+                    rule_engine_summary = planning_rules.format_rule_result_for_prompt(rule_result)
+                except Exception as rule_error:
+                    rule_engine_summary = f"DETERMINISTIC RULE ENGINE RESULT: NEEDS CONFIRMATION\nSUMMARY: Rule engine could not complete: {rule_error}"
+
                 report = pdf_summary.analyze_planning_pdf(
                     temp_pdf_path,
                     client_project_types=project_types,
@@ -1952,6 +1969,8 @@ def run_archlens_analysis(uploaded_files):
                     local_authority=local_authority,
                     review_mode=review_mode,
                     pd_context=pd_context,
+                    scope_items=scope_items,
+                    rule_engine_summary=rule_engine_summary,
                 )
                 smooth_progress(progress_bar, status_text, 40, 85, "Analyzing planning route and risks...", 0.8)
         except Exception as e:
