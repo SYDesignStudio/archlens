@@ -1000,6 +1000,70 @@ def polish_planning_report_text(report_text: str, address_text: str, fire_status
     text = re.sub(r"\n{3,}", "\n\n", text).strip()
     return text
 
+
+
+def is_minor_class_b_condition_issue(rule_engine_summary: str, pd_context: Optional[Dict[str, str]] = None, project_types_text: str = "", proposal_summary_text: str = "") -> bool:
+    """Return True where a loft/dormer scheme is broadly Class B/C capable but the
+    rule engine has escalated a minor condition/annotation issue too harshly.
+
+    Example: side-facing roof window not yet annotated as obscure glazed and
+    non-opening below 1.7m should be treated as a minor PD condition/check, not
+    as an automatic full-planning route where all core Class B criteria pass.
+    """
+    combined_project = f"{project_types_text} {proposal_summary_text}".lower()
+    summary_u = (rule_engine_summary or "").upper()
+    ctx = pd_context or {}
+    family = str(ctx.get("pd_question_family", "")).lower()
+    is_roof_project = family == "class_b" or any(t in combined_project for t in ["loft", "dormer", "rooflight", "roof light", "roof enlargement"])
+    if not is_roof_project:
+        return False
+
+    side_issue = any(t in summary_u for t in ["SIDE WINDOWS", "SIDE-FACING", "SIDE ROOF WINDOWS", "OBSCURE", "1.7M"])
+    if not side_issue:
+        return False
+
+    hard_fail_terms = [
+        "FRONT-FACING ROOF ENLARGEMENT",
+        "PRINCIPAL ELEVATION AND FRONTS A HIGHWAY",
+        "ABOVE THE HIGHEST PART",
+        "EXCEEDS HIGHEST ROOF",
+        "OVER LIMIT",
+        "EXCEEDS NORMAL CLASS B ALLOWANCE",
+        "ROOF VOLUME EXCEEDS",
+        "BALCONY",
+        "VERANDAH",
+        "RAISED PLATFORM",
+        "ARTICLE 4",
+        "LISTED BUILDING",
+        "FLAT OR MAISONETTE",
+        "NOT A SINGLE DWELLINGHOUSE",
+        "CONSERVATION AREA / ARTICLE 2(3)",
+    ]
+    if any(term in summary_u for term in hard_fail_terms):
+        return False
+
+    front_ok = str(ctx.get("front_roof_plane_highway", "")).lower() in {"no", "not applicable", ""}
+    highest_ok = str(ctx.get("above_existing_roof_height", "")).lower() in {"no", "not applicable", ""}
+    volume_ok = "over limit" not in str(ctx.get("roof_volume_band", "")).lower()
+    return front_ok and highest_ok and volume_ok
+
+
+def normalise_minor_class_b_route_text(text: str) -> str:
+    """Clean AI wording where minor Class B condition issues have been wrongly
+    phrased as a full planning trigger.
+    """
+    if not text:
+        return text
+    replacements = [
+        (r"Planning permission likely required as currently shown due to side-facing roof window\(s\)[^\n.]*[.]?", "PD/LDC appears likely subject to adding a clear note that any side-facing roof window is obscure-glazed and non-opening below 1.7m."),
+        (r"Likely planning permission required as currently shown due to side-facing roof window\(s\)[^\n.]*[.]?", "Likely compliant subject to minor drawing notes for any side-facing roof window."),
+        (r"full planning is likely required due to side-facing roof window\(s\)[^\n.]*[.]?", "a Lawful Development Certificate route appears likely, subject to side-facing roof window notes."),
+        (r"FULL PLANNING\s*\n\s*COMPLIANCE POSITION\s*\n\s*Likely planning permission required", "PD / LDC\nCOMPLIANCE POSITION\nLikely compliant subject to minor checks"),
+    ]
+    for pattern, repl in replacements:
+        text = re.sub(pattern, repl, text, flags=re.IGNORECASE)
+    return text
+
 def analyze_planning_pdf(
     pdf_path: str,
     client_project_types: Optional[List[str]] = None,
@@ -1067,7 +1131,13 @@ def analyze_planning_pdf(
         rule_engine_summary = f"DETERMINISTIC RULE ENGINE RESULT: NEEDS CONFIRMATION\nSUMMARY: Rule engine could not complete: {rule_error}"
 
     rule_summary_upper = (rule_engine_summary or "").upper()
-    if "FULL PLANNING REQUIRED" in rule_summary_upper:
+    minor_class_b_condition_only = is_minor_class_b_condition_issue(
+        rule_engine_summary, pd_context, project_types_text, proposal_summary_text
+    )
+    if minor_class_b_condition_only:
+        application_type_value = "PD / LDC"
+        pd_refusal_risk = "LOW"
+    elif "FULL PLANNING REQUIRED" in rule_summary_upper:
         application_type_value = "FULL PLANNING"
         pd_refusal_risk = "HIGH"
     elif "PRIOR APPROVAL POSSIBLE" in rule_summary_upper or "LARGER HOME EXTENSION PRIOR APPROVAL" in rule_summary_upper:
@@ -1137,6 +1207,7 @@ Planning reasoning requirements:
 Important route logic:
 - If PD criteria appear clearly met, say PD may be available subject to full dimensional confirmation.
 - If PD criteria are not met, are uncertain, or mixed works go beyond PD, state that full planning is likely required.
+- For Class B loft/dormer schemes, side-facing window obscurity/non-opening wording is normally a minor PD condition/drawing-note issue, not a full planning trigger, where the core roof volume, ridge height, front roof slope and eaves setback tests are otherwise acceptable.
 - For larger home extensions, distinguish between standard PD and prior approval larger home extension.
 - If the scheme appears to include side extension, wraparound form, roof changes beyond PD limits, front-facing changes, flats, or other non-PD triggers, explain why full planning is likely required.
 
@@ -1232,6 +1303,8 @@ Detected pages:
     output_text = response.output_text
     fire_status = infer_fire_statement_status(text, page_summary)
     output_text = polish_planning_report_text(output_text, address_text, fire_status, authority_value)
+    if minor_class_b_condition_only:
+        output_text = normalise_minor_class_b_route_text(output_text)
 
     if "PD / PRIOR APPROVAL / PLANNING ROUTE" in output_text and pd_route_reason:
         route_insert = "Route position:\n" + pd_route_reason + "\n\n"
@@ -1242,6 +1315,9 @@ Detected pages:
         )
     top_summary_pattern = r"TOP SUMMARY\n([\s\S]*?)(?=\n[A-Z][A-Z /\-]+\n)"
     compliance_position = "Likely compliant subject to minor checks" if application_type_value == "PD / LDC" else ("Likely prior approval route" if application_type_value == "PRIOR APPROVAL" else "Likely planning permission required")
+    if minor_class_b_condition_only:
+        application_type_value = "PD / LDC"
+        compliance_position = "Likely compliant subject to minor checks"
     top_summary_replacement = (
         "TOP SUMMARY\n"
         f"Project Summary: {project_summary_value}\n"
@@ -1263,6 +1339,9 @@ Detected pages:
         output_text = polish_planning_report_text(output_text, address_text, fire_status, authority_value)
         top_summary_pattern = r"TOP SUMMARY\n([\s\S]*?)(?=\n[A-Z][A-Z /\-]+\n)"
         compliance_position = "Likely compliant subject to minor checks" if application_type_value == "PD / LDC" else ("Likely prior approval route" if application_type_value == "PRIOR APPROVAL" else "Likely planning permission required")
+    if minor_class_b_condition_only:
+        application_type_value = "PD / LDC"
+        compliance_position = "Likely compliant subject to minor checks"
         top_summary_replacement = (
             "TOP SUMMARY\n"
             f"Project Summary: {project_summary_value}\n"
@@ -1310,6 +1389,7 @@ def simplify_report_text(report_text: str, max_bullets_per_section: int = 6) -> 
     text = re.sub(r"Rule intake answers\s*:[^\n]*", "", text, flags=re.IGNORECASE)
     text = re.sub(r"PD answers\s*:[^\n]*", "", text, flags=re.IGNORECASE)
     text = re.sub(r"Planning Route Confidence Score\s*:[^\n]*\n?", "", text, flags=re.IGNORECASE)
+    text = normalise_minor_class_b_route_text(text)
     text = re.sub(r"Detected proposal label\s*=.*", "", text, flags=re.IGNORECASE)
     text = re.sub(r"Street precedent signal\s*=.*", "", text, flags=re.IGNORECASE)
     text = re.sub(r"^(Actual|Required):.*$\n?", "", text, flags=re.MULTILINE | re.IGNORECASE)

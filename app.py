@@ -528,6 +528,35 @@ def _normalise_text(value) -> str:
     return str(value or "").strip()
 
 
+
+
+def _is_minor_class_b_condition_issue_text(text_value: str) -> bool:
+    """Detect Class B/C loft cases where the only issue is a side-window
+    obscurity/non-opening annotation. This should not be presented as full
+    planning required where the main PD/LDC route remains available.
+    """
+    text = _normalise_text(text_value).upper()
+    if not any(t in text for t in ["CLASS B", "DORMER", "LOFT", "ROOF ENLARGEMENT", "ROOFLIGHT"]):
+        return False
+    if not any(t in text for t in ["SIDE WINDOWS", "SIDE-FACING", "SIDE ROOF WINDOWS", "OBSCURE", "1.7M"]):
+        return False
+    hard_fail_terms = [
+        "FRONT-FACING ROOF ENLARGEMENT",
+        "PRINCIPAL ELEVATION AND FRONTS A HIGHWAY",
+        "ABOVE THE HIGHEST PART",
+        "EXCEEDS HIGHEST ROOF",
+        "OVER LIMIT",
+        "ROOF VOLUME EXCEEDS",
+        "BALCONY",
+        "VERANDAH",
+        "RAISED PLATFORM",
+        "ARTICLE 4",
+        "LISTED BUILDING",
+        "FLAT OR MAISONETTE",
+        "NOT A SINGLE DWELLINGHOUSE",
+    ]
+    return not any(term in text for term in hard_fail_terms)
+
 def _extract_route_from_rule_summary(rule_summary: str) -> str:
     """Pull a stable route/status label from the deterministic rule summary.
 
@@ -535,6 +564,8 @@ def _extract_route_from_rule_summary(rule_summary: str) -> str:
     Missing minor confirmations should not create a fail result for otherwise typical PD schemes.
     """
     text = _normalise_text(rule_summary).upper()
+    if _is_minor_class_b_condition_issue_text(text):
+        return "LIKELY COMPLIANT SUBJECT TO MINOR CHECKS"
     if "PRIOR APPROVAL" in text:
         return "LIKELY PRIOR APPROVAL"
     if "FULL PLANNING" in text or "PLANNING PERMISSION" in text:
@@ -575,6 +606,7 @@ def calculate_planning_confidence(sections: Dict[str, str], rule_summary: str = 
         "REQUIRES CONFIRMATION",
         "MISSING",
     ])
+    minor_class_b_condition_only = _is_minor_class_b_condition_issue_text(combined)
     clear_policy_issue = any(x in combined for x in [
         "FULL PLANNING REQUIRED",
         "LIKELY PLANNING PERMISSION REQUIRED",
@@ -585,21 +617,29 @@ def calculate_planning_confidence(sections: Dict[str, str], rule_summary: str = 
         "ARTICLE 4",
         "LISTED BUILDING",
     ])
+    if minor_class_b_condition_only:
+        clear_policy_issue = False
     high_risk = "HIGH" in risk_text or "NOT READY" in readiness_text
 
-    if route_label == "LIKELY PRIOR APPROVAL" and not clear_policy_issue:
+    if minor_class_b_condition_only:
+        label = "LIKELY COMPLIANT SUBJECT TO MINOR CHECKS"
+    elif route_label == "LIKELY PRIOR APPROVAL" and not clear_policy_issue:
         label = "LIKELY PRIOR APPROVAL"
     elif route_label == "LIKELY PLANNING PERMISSION REQUIRED" or clear_policy_issue:
         label = "LIKELY PLANNING PERMISSION REQUIRED"
     elif route_label == "LIKELY COMPLIANT":
         label = "LIKELY COMPLIANT" if blockers <= 1 and not high_risk else "LIKELY COMPLIANT SUBJECT TO MINOR CHECKS"
+    elif route_label == "LIKELY COMPLIANT SUBJECT TO MINOR CHECKS":
+        label = "LIKELY COMPLIANT SUBJECT TO MINOR CHECKS"
     elif blockers <= 3 and ("PD / LDC" in combined or "CLASS B" in combined or "PERMITTED DEVELOPMENT" in combined):
         label = "LIKELY COMPLIANT SUBJECT TO MINOR CHECKS"
     else:
         label = "REQUIRES FURTHER REVIEW"
 
     triggers = []
-    if "CLASS B" in combined or "DORMER" in combined or "ROOF" in combined:
+    if minor_class_b_condition_only:
+        triggers.append("Loft/dormer proposal appears capable of a PD/LDC route, subject to side-window annotation checks.")
+    elif "CLASS B" in combined or "DORMER" in combined or "ROOF" in combined:
         triggers.append("Roof enlargement checks appear to be the main planning route issue.")
     elif "PRIOR APPROVAL" in combined:
         triggers.append("Larger home extension / prior approval route appears relevant.")
@@ -1772,12 +1812,13 @@ def build_word_report(file_name, address, client, date, practice_name, report_id
 def extract_summary_value(sections: Dict[str, str], module_name: str):
     top_summary_rows = {k.upper(): v for k, v in parse_key_value_lines(sections.get("TOP SUMMARY", "")) if k}
     if module_name == "Planning Review":
-        authority_value = "Unknown"
-        for line in sections.get("TOP SUMMARY", "").splitlines():
-            stripped = line.strip()
-            if stripped and ":" not in stripped:
-                authority_value = stripped
-                break
+        authority_value = top_summary_rows.get("LOCAL AUTHORITY", "Unknown")
+        if authority_value == "Unknown":
+            for line in sections.get("TOP SUMMARY", "").splitlines():
+                stripped = line.strip()
+                if stripped and ":" not in stripped:
+                    authority_value = stripped
+                    break
         return (
             "Not shown",
             top_summary_rows.get("APPLICATION TYPE", top_summary_rows.get("LIKELY ROUTE", "Unknown")),
@@ -1805,12 +1846,13 @@ def render_kpi_cards(sections: Dict[str, str], report_id: str, module_name: str)
 def extract_summary_values(sections: Dict[str, str], module_name: str):
     top_summary_rows = {k.upper(): v for k, v in parse_key_value_lines(sections.get("TOP SUMMARY", "")) if k}
     if module_name == "Planning Review":
-        authority_value = "Unknown"
-        for line in sections.get("TOP SUMMARY", "").splitlines():
-            stripped = line.strip()
-            if stripped and ":" not in stripped:
-                authority_value = stripped
-                break
+        authority_value = top_summary_rows.get("LOCAL AUTHORITY", "Unknown")
+        if authority_value == "Unknown":
+            for line in sections.get("TOP SUMMARY", "").splitlines():
+                stripped = line.strip()
+                if stripped and ":" not in stripped:
+                    authority_value = stripped
+                    break
         return {
             "risk": "Not shown",
             "route": top_summary_rows.get("APPLICATION TYPE", top_summary_rows.get("LIKELY ROUTE", "Unknown")),
