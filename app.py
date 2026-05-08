@@ -7,6 +7,7 @@ import time
 import uuid
 import tempfile
 import jwt
+import requests
 from io import BytesIO
 from typing import Dict, List, Tuple
 
@@ -34,6 +35,9 @@ DEFAULT_STATE = {
     "report_library": [],
     "app_theme": "Dark",
     "brand_logo_bytes": None,
+    "credit_balance": 0,
+    "credit_transactions": [],
+    "unlocked_reports": {},
 }
 for key, value in DEFAULT_STATE.items():
     if key not in st.session_state:
@@ -1700,6 +1704,8 @@ if not st.session_state.get("authenticated", False):
 
 current_plan = st.session_state.get("auth_plan", "starter")
 current_user_name = st.session_state.get("auth_user_name", "")
+if current_user_name:
+    sync_credit_balance_from_api(current_user_name)
 allowed_review_modules = get_allowed_review_modules(current_plan)
 
 # -------------------------------
