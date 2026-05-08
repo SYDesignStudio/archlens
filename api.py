@@ -22,6 +22,14 @@ class CreditRequest(BaseModel):
     source: str = "wix_store"
 
 
+class DeductCreditRequest(BaseModel):
+    email: str
+    credits: int
+    reportId: str = ""
+    exportType: str = ""
+    source: str = "archlens_download"
+
+
 @app.get("/")
 def health_check():
     return {"status": "ArchLens API running"}
@@ -79,3 +87,60 @@ def add_credits(
         "order_id": payload.orderId,
         "source": payload.source,
     }
+
+@app.post("/deduct-credits")
+def deduct_credits(
+    payload: DeductCreditRequest,
+    x_archlens_secret: str = Header(default="")
+):
+    if x_archlens_secret != ARCHLENS_WEBHOOK_SECRET:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid webhook secret"
+        )
+
+    clean_email = payload.email.lower().strip()
+    credits_to_deduct = int(payload.credits or 0)
+
+    if not clean_email:
+        raise HTTPException(
+            status_code=400,
+            detail="Email is required"
+        )
+
+    if credits_to_deduct <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Credits must be greater than zero"
+        )
+
+    current_balance = USER_CREDITS.get(clean_email, 0)
+
+    if current_balance < credits_to_deduct:
+        raise HTTPException(
+            status_code=400,
+            detail="Not enough credits"
+        )
+
+    USER_CREDITS[clean_email] = current_balance - credits_to_deduct
+
+    print(
+        f"DEDUCT CREDITS: {clean_email} "
+        f"-{credits_to_deduct} credits | "
+        f"New balance: {USER_CREDITS[clean_email]} | "
+        f"Report: {payload.reportId} | "
+        f"Export: {payload.exportType} | "
+        f"Source: {payload.source}"
+    )
+
+    return {
+        "success": True,
+        "email": clean_email,
+        "credits_deducted": credits_to_deduct,
+        "credits": USER_CREDITS[clean_email],
+        "new_balance": USER_CREDITS[clean_email],
+        "report_id": payload.reportId,
+        "export_type": payload.exportType,
+        "source": payload.source,
+    }
+
