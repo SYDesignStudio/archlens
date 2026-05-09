@@ -2,6 +2,7 @@
 import os
 import base64
 import gc
+import html
 import re
 import time
 import uuid
@@ -38,6 +39,9 @@ DEFAULT_STATE = {
     "credit_balance": None,
     "credit_transactions": [],
     "unlocked_reports": {},
+    "planning_statement_text": None,
+    "planning_statement_pdf_file": None,
+    "planning_statement_word_file": None,
 }
 for key, value in DEFAULT_STATE.items():
     if key not in st.session_state:
@@ -54,6 +58,8 @@ EXPORT_CREDIT_COSTS = {
     "planning_pdf": 3,
     "building_pdf": 5,
     "word": 1,
+    "planning_statement_pdf": 2,
+    "planning_statement_word": 1,
 }
 
 
@@ -61,9 +67,31 @@ def normalise_user_email(email: str) -> str:
     return str(email or "").strip().lower()
 
 
+def is_valid_email(value: str) -> bool:
+    return bool(re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", str(value or "").strip()))
+
+
+def find_email_in_payload(payload) -> str:
+    if isinstance(payload, dict):
+        for key in ("email", "primaryEmail", "primary_email", "loginEmail", "memberEmail", "contactEmail"):
+            value = payload.get(key)
+            if is_valid_email(value):
+                return str(value).strip()
+        for value in payload.values():
+            found = find_email_in_payload(value)
+            if found:
+                return found
+    elif isinstance(payload, list):
+        for value in payload:
+            found = find_email_in_payload(value)
+            if found:
+                return found
+    return ""
+
+
 def api_get_credit_balance(email: str):
     clean_email = normalise_user_email(email)
-    if not clean_email:
+    if not is_valid_email(clean_email):
         return None
     try:
         response = requests.get(
@@ -79,20 +107,26 @@ def api_get_credit_balance(email: str):
 
 
 def sync_credit_balance_from_api(email: str):
+    clean_email = normalise_user_email(email)
+    if not is_valid_email(clean_email):
+        st.session_state["credit_api_error"] = "Credit balance sync skipped until a member email is available."
+        return st.session_state.get("credit_balance")
     api_balance = api_get_credit_balance(email)
     if api_balance is not None:
         st.session_state["credit_balance"] = api_balance
-        st.session_state["credit_balance_email"] = normalise_user_email(email)
+        st.session_state["credit_balance_email"] = clean_email
         st.session_state["credit_api_last_sync"] = time.strftime("%Y-%m-%d %H:%M:%S")
         st.session_state["credit_api_error"] = ""
     else:
+        if st.session_state.get("credit_balance_email") and st.session_state.get("credit_balance_email") != clean_email:
+            st.session_state["credit_balance"] = None
         st.session_state["credit_api_error"] = "Credit API unavailable; keeping previous balance."
     return st.session_state.get("credit_balance")
 
 
 def api_deduct_credits(email: str, credits: int, report_id: str, export_type: str):
     clean_email = normalise_user_email(email)
-    if not clean_email:
+    if not is_valid_email(clean_email):
         return False, "Please log in before unlocking downloads.", st.session_state.get("credit_balance")
     try:
         response = requests.post(
@@ -140,6 +174,8 @@ def get_pdf_export_type(module_name: str) -> str:
 
 
 def get_export_cost(module_name: str, export_type: str) -> int:
+    if export_type in EXPORT_CREDIT_COSTS:
+        return EXPORT_CREDIT_COSTS[export_type]
     return EXPORT_CREDIT_COSTS["word"] if export_type == "word" else EXPORT_CREDIT_COSTS[get_pdf_export_type(module_name)]
 
 
@@ -626,6 +662,7 @@ def build_pd_context(project_types: List[str], property_type: str, rear_extensio
 
 
 PLAN_LABELS = {
+    "free": "Free",
     "starter": "Solo",
     "pro": "Studio",
 }
@@ -654,11 +691,19 @@ def get_verified_plan_and_user() -> Tuple[str, str, bool]:
             ARCHLENS_SHARED_SECRET,
             algorithms=["HS256"],
         )
-        plan = str(payload.get("plan", "starter")).strip().lower()
-        if plan not in {"starter", "pro"}:
-            plan = "starter"
+        plan = str(payload.get("plan", payload.get("membership", "starter"))).strip().lower()
+        plan_aliases = {
+            "free": "free",
+            "basic": "free",
+            "starter": "starter",
+            "solo": "starter",
+            "pro": "pro",
+            "studio": "pro",
+            "paid": "pro",
+        }
+        plan = plan_aliases.get(plan, "starter")
 
-        email = str(payload.get("email", "")).strip()
+        email = find_email_in_payload(payload)
         display_name = email or str(payload.get("sub", "")).strip()
         return plan, display_name, True
     except Exception:
@@ -676,7 +721,14 @@ def add_saved_project(project_record: Dict):
     saved = st.session_state.get("saved_projects", [])
     filtered = [item for item in saved if item.get("report_id") != project_record.get("report_id")]
     filtered.insert(0, project_record)
-    st.session_state["saved_projects"] = filtered[:25]
+    latest = filtered[:5]
+    st.session_state["saved_projects"] = latest
+    active_report_ids = {item.get("report_id") for item in latest}
+    unlocked = st.session_state.get("unlocked_reports", {}) or {}
+    st.session_state["unlocked_reports"] = {
+        key: value for key, value in unlocked.items()
+        if key.split(":", 1)[0] in active_report_ids or key.startswith((st.session_state.get("report_id") or "") + ":")
+    }
 
 
 def inject_custom_css():
@@ -788,6 +840,7 @@ def inject_custom_css():
         .sy-card {{ border-radius:20px; padding:1.05rem; margin-bottom:0.95rem; }}
         .sy-mini-card {{ border-radius:18px; padding:0.9rem; min-height:118px; }}
         .sy-mini-card h1, .sy-mini-card h2, .sy-mini-card h3 {{ font-size:1.18rem !important; line-height:1.18 !important; margin-bottom:0.25rem !important; }}
+        .sy-summary-text {{ font-size:0.84rem; line-height:1.45; color:var(--sy-text); overflow-wrap:anywhere; }}
         .sy-sidepanel {{ border-radius:20px; padding:0.85rem; position:sticky; top:1rem; font-size:0.86rem; }}
         .sy-sidepanel .sy-data-row {{ font-size:0.82rem; padding:0.42rem 0; }}
         .sy-workspace {{ border-radius:22px; padding:1rem; }}
@@ -1788,25 +1841,32 @@ def build_word_report(file_name, address, client, date, practice_name, report_id
     return buffer
 
 
+def clean_summary_fallback(value: str, fallback: str) -> str:
+    cleaned = str(value or "").strip()
+    if not cleaned or cleaned.lower() in {"unknown", "not shown", "not detected", "not provided", "n/a", "none"}:
+        return fallback
+    return cleaned
+
+
+def first_present_row(rows: Dict[str, str], keys: List[str], fallback: str) -> str:
+    for key in keys:
+        value = clean_summary_fallback(rows.get(key.upper(), ""), "")
+        if value:
+            return value
+    return fallback
+
+
+def infer_section_signal(text: str, terms: List[str], fallback: str) -> str:
+    lower = (text or "").lower()
+    for term in terms:
+        if term.lower() in lower:
+            return term
+    return fallback
+
+
 def extract_summary_value(sections: Dict[str, str], module_name: str):
-    top_summary_rows = {k.upper(): v for k, v in parse_key_value_lines(sections.get("TOP SUMMARY", "")) if k}
-    if module_name == "Planning Review":
-        authority_value = "Unknown"
-        for line in sections.get("TOP SUMMARY", "").splitlines():
-            stripped = line.strip()
-            if stripped and ":" not in stripped:
-                authority_value = stripped
-                break
-        return (
-            "Not shown",
-            top_summary_rows.get("APPLICATION TYPE", top_summary_rows.get("LIKELY ROUTE", "Unknown")),
-            authority_value,
-        )
-    return (
-        top_summary_rows.get("OVERALL RISK RATING", "Unknown"),
-        top_summary_rows.get("SUBMISSION STATUS", "Unknown"),
-        top_summary_rows.get("REVIEW CONFIDENCE", "Unknown"),
-    )
+    values = extract_summary_values(sections, module_name)
+    return values["risk"], values["route"], values["authority"]
 
 
 def render_kpi_cards(sections: Dict[str, str], report_id: str, module_name: str):
@@ -1824,23 +1884,27 @@ def render_kpi_cards(sections: Dict[str, str], report_id: str, module_name: str)
 def extract_summary_values(sections: Dict[str, str], module_name: str):
     top_summary_rows = {k.upper(): v for k, v in parse_key_value_lines(sections.get("TOP SUMMARY", "")) if k}
     if module_name == "Planning Review":
-        authority_value = "Unknown"
-        for line in sections.get("TOP SUMMARY", "").splitlines():
-            stripped = line.strip()
-            if stripped and ":" not in stripped:
-                authority_value = stripped
-                break
+        risk_text = sections.get("KEY RISKS", "")
+        route = first_present_row(top_summary_rows, ["LIKELY PLANNING ROUTE", "APPLICATION TYPE", "LIKELY ROUTE"], "Planning route to be confirmed")
+        authority = first_present_row(top_summary_rows, ["LOCAL AUTHORITY", "AUTHORITY"], "")
+        if not authority:
+            authority = clean_summary_fallback(detect_local_authority_for_display(st.session_state.get("wizard_project_address", ""), st.session_state.get("wizard_proposal_summary", "")), "Local authority to be confirmed")
+        readiness_rows = {k.upper(): v for k, v in parse_key_value_lines(sections.get("SUBMISSION READINESS", "")) if k}
+        readiness = first_present_row(readiness_rows, ["STATUS", "SUBMISSION READINESS"], "Further information recommended")
+        risk = infer_section_signal(risk_text, ["HIGH", "MEDIUM", "LOW"], "Risk to be confirmed")
         return {
-            "risk": "Not shown",
-            "route": top_summary_rows.get("APPLICATION TYPE", top_summary_rows.get("LIKELY ROUTE", "Unknown")),
-            "authority": authority_value,
-            "probability": top_summary_rows.get("PLANNING ROUTE CONFIDENCE SCORE", "Not shown"),
+            "risk": risk,
+            "route": clean_summary_fallback(route, "Planning route to be confirmed"),
+            "authority": clean_summary_fallback(authority, "Local authority to be confirmed"),
+            "probability": readiness,
         }
+    readiness_text = sections.get("BUILDING CONTROL SUBMISSION READINESS", "")
+    readiness_rows = {k.upper(): v for k, v in parse_key_value_lines(readiness_text) if k}
     return {
-        "risk": top_summary_rows.get("OVERALL RISK RATING", "Unknown"),
-        "route": top_summary_rows.get("SUBMISSION STATUS", "Unknown"),
-        "authority": top_summary_rows.get("REVIEW CONFIDENCE", "Unknown"),
-        "probability": "N/A",
+        "risk": first_present_row(top_summary_rows, ["OVERALL RISK RATING", "RISK RATING"], infer_section_signal(sections.get("KEY RISKS", ""), ["HIGH", "MEDIUM", "LOW"], "Risk to be confirmed")),
+        "route": first_present_row(top_summary_rows, ["SUBMISSION STATUS"], first_present_row(readiness_rows, ["STATUS"], "Submission readiness to be confirmed")),
+        "authority": first_present_row(top_summary_rows, ["REVIEW CONFIDENCE"], "Review confidence to be confirmed"),
+        "probability": "Professional review required",
     }
 
 
@@ -1850,6 +1914,21 @@ def detect_local_authority_for_display(project_address: str, proposal_summary: s
         names = " ".join(f.name for f in uploaded_files if getattr(f, "name", None))
         combined_text = f"{combined_text}\n{names}"
     return pdf_summary.detect_local_authority(project_address or "", combined_text or "")
+
+
+def render_summary_card(title: str, content: str, fallback: str):
+    clean_content = clean_summary_fallback(content, fallback)
+    safe_content = html.escape(clean_content).replace("\n", "<br>")
+    st.markdown(
+        f"""
+        <div class="sy-mini-card">
+            <div class="sy-kpi">{html.escape(title)}</div>
+            <div class="sy-summary-text">{safe_content}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
 
 def render_at_a_glance(sections: Dict[str, str], report_id: str, module_name: str):
     config = MODULE_CONFIG[module_name]
@@ -1862,14 +1941,11 @@ def render_at_a_glance(sections: Dict[str, str], report_id: str, module_name: st
 
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.markdown('<div class="sy-mini-card"><div class="sy-kpi">Project Classification</div></div>', unsafe_allow_html=True)
-        st.markdown(sections.get("PROJECT CLASSIFICATION", "Not detected"))
+        render_summary_card("Project Classification", sections.get("PROJECT CLASSIFICATION"), "Project classification to be confirmed from the drawing pack.")
     with col2:
-        st.markdown(f'<div class="sy-mini-card"><div class="sy-kpi">{middle_title}</div></div>', unsafe_allow_html=True)
-        st.markdown(sections.get(middle_key, "Not detected"))
+        render_summary_card(middle_title, sections.get(middle_key), "Project details to be confirmed from the submitted information.")
     with col3:
-        st.markdown('<div class="sy-mini-card"><div class="sy-kpi">Submission Readiness</div></div>', unsafe_allow_html=True)
-        st.markdown(sections.get(readiness_key, "Not detected"))
+        render_summary_card("Submission Readiness", sections.get(readiness_key), "Further information recommended before submission.")
 
     st.markdown("")
     if module_name == "Planning Review":
@@ -1932,6 +2008,89 @@ def build_simple_word_doc(title: str, body_text: str) -> BytesIO:
             doc.add_paragraph(stripped)
     buffer = BytesIO()
     doc.save(buffer)
+    buffer.seek(0)
+    return buffer
+
+
+def build_simple_pdf_doc(title: str, body_text: str, report_id: str = "") -> BytesIO:
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfbase.pdfmetrics import stringWidth
+    from reportlab.pdfgen import canvas
+
+    buffer = BytesIO()
+    c = canvas.Canvas(buffer, pagesize=A4)
+    width, height = A4
+    left = 48
+    right = 48
+    y = height - 58
+    usable_width = width - left - right
+    gold = colors.HexColor(SY_BRAND["gold"])
+    charcoal = colors.HexColor(SY_BRAND["charcoal"])
+    mid_grey = colors.HexColor(SY_BRAND["mid_grey"])
+
+    def wrap_line(text: str, font: str, size: float, max_width: float) -> List[str]:
+        words = str(text or "").split()
+        lines = []
+        current = ""
+        for word in words:
+            candidate = f"{current} {word}".strip()
+            if stringWidth(candidate, font, size) <= max_width:
+                current = candidate
+            else:
+                if current:
+                    lines.append(current)
+                current = word
+        if current:
+            lines.append(current)
+        return lines or [""]
+
+    def new_page():
+        nonlocal y
+        c.setFont("Helvetica", 8)
+        c.setFillColor(mid_grey)
+        c.drawCentredString(width / 2, 28, f"Prepared by SY Design Studio | Ref: {report_id or 'Planning Statement'}")
+        c.showPage()
+        y = height - 58
+
+    c.setFillColor(gold)
+    c.setFont("Helvetica-Bold", 16)
+    c.drawString(left, y, title)
+    y -= 18
+    c.setFillColor(mid_grey)
+    c.setFont("Helvetica", 9)
+    c.drawString(left, y, "Prepared by SY Design Studio")
+    y -= 28
+
+    for raw_line in body_text.splitlines():
+        line = raw_line.strip()
+        if y < 70:
+            new_page()
+        if not line:
+            y -= 9
+            continue
+        is_heading = bool(re.match(r"^\d+\.?\s+|^[A-Z][A-Za-z /&-]{4,}$", line)) and len(line) < 90
+        if is_heading:
+            y -= 8
+            c.setFillColor(gold)
+            c.setFont("Helvetica-Bold", 11)
+            for wrapped in wrap_line(line, "Helvetica-Bold", 11, usable_width):
+                c.drawString(left, y, wrapped)
+                y -= 14
+        else:
+            c.setFillColor(charcoal)
+            c.setFont("Helvetica", 9.2)
+            bullet = line.startswith(("- ", "• "))
+            clean = line[2:].strip() if bullet else line
+            x = left + 10 if bullet else left
+            if bullet:
+                c.drawString(left, y, "•")
+            for wrapped in wrap_line(clean, "Helvetica", 9.2, usable_width - (10 if bullet else 0)):
+                c.drawString(x, y, wrapped)
+                y -= 12
+        y -= 2
+
+    c.save()
     buffer.seek(0)
     return buffer
 
@@ -2125,7 +2284,7 @@ def render_left_navigation():
             <div class="sy-sidebar-account">
                 <div class="sy-sidebar-account-row"><span>Plan:</span><strong>{PLAN_LABELS.get(current_plan, 'Solo')}</strong></div>
                 <div class="sy-sidebar-account-row"><span>Credits:</span><strong>{get_credit_balance_label()}</strong></div>
-                <div class="sy-sidebar-account-row"><span>User:</span><strong>{current_user_name or 'Not shown'}</strong></div>
+                <div class="sy-sidebar-account-row"><span>User:</span><strong>{current_user_name or 'Member verified'}</strong></div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -2422,7 +2581,8 @@ def run_archlens_analysis(uploaded_files):
         st.session_state.report_id = report_id
         st.session_state.active_module = review_module
         st.session_state["planning_statement_text"] = None
-        st.session_state["planning_statement_file"] = None
+        st.session_state["planning_statement_pdf_file"] = None
+        st.session_state["planning_statement_word_file"] = None
         if current_plan == "starter":
             st.session_state["starter_review_count"] = st.session_state.get("starter_review_count", 0) + 1
         add_saved_project({
@@ -2452,6 +2612,76 @@ def run_archlens_analysis(uploaded_files):
                 pass
         gc.collect()
 
+
+def update_saved_project(report_id: str, updates: Dict):
+    for item in st.session_state.get("saved_projects", []):
+        if item.get("report_id") == report_id:
+            item.update(updates)
+            break
+
+
+def render_planning_statement_panel(report_id: str):
+    st.markdown(
+        '<div class="sy-subtle-card"><div class="sy-section-label">Planning Statement</div><h3 style="margin:0 0 0.35rem 0;">Consultant-Style Planning Statement</h3><div class="sy-muted">Generate a planning statement from the current report, project inputs and local authority context. Preview is free; downloads unlock with credits.</div></div>',
+        unsafe_allow_html=True,
+    )
+    statement_text = st.session_state.get("planning_statement_text")
+    if st.button("Generate Planning Statement", use_container_width=True, key=f"generate_statement_{report_id}"):
+        with st.spinner("Preparing planning statement..."):
+            authority = extract_summary_values(st.session_state.get("sections") or {}, "Planning Review").get("authority", "")
+            statement_text = pdf_summary.generate_planning_statement(
+                st.session_state.get("report") or "",
+                sections=st.session_state.get("sections") or {},
+                project_address=st.session_state.get("wizard_project_address", ""),
+                client_name=st.session_state.get("wizard_client_name", ""),
+                local_authority=authority,
+                review_mode=st.session_state.get("wizard_review_mode", "Architect / Professional"),
+            )
+            statement_text = pdf_summary.apply_target_report_language(statement_text)
+            st.session_state["planning_statement_text"] = statement_text
+            st.session_state["planning_statement_pdf_file"] = build_simple_pdf_doc("Planning Statement", statement_text, report_id)
+            st.session_state["planning_statement_word_file"] = build_simple_word_doc("Planning Statement", statement_text)
+            update_saved_project(report_id, {
+                "planning_statement_text": statement_text,
+                "planning_statement_pdf_bytes": st.session_state["planning_statement_pdf_file"].getvalue(),
+                "planning_statement_word_bytes": st.session_state["planning_statement_word_file"].getvalue(),
+            })
+            st.success("Planning Statement generated.")
+
+    if not statement_text:
+        st.caption("Generate the Planning Statement after the Planning Review report has been created.")
+        return
+
+    with st.expander("Preview Planning Statement", expanded=True):
+        st.markdown(statement_text)
+
+    c1, c2 = st.columns(2)
+    with c1:
+        if is_export_unlocked(report_id, "planning_statement_pdf"):
+            st.download_button(
+                "Download Planning Statement PDF",
+                st.session_state.get("planning_statement_pdf_file"),
+                file_name=f"{report_id}_Planning_Statement.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+                key=f"download_statement_pdf_{report_id}",
+            )
+        else:
+            render_locked_download_action("Planning Statement PDF", report_id, "Planning Review", "planning_statement_pdf", f"statement_pdf_{report_id}")
+    with c2:
+        if is_export_unlocked(report_id, "planning_statement_word"):
+            st.download_button(
+                "Download Planning Statement Word",
+                st.session_state.get("planning_statement_word_file"),
+                file_name=f"{report_id}_Planning_Statement.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                use_container_width=True,
+                key=f"download_statement_word_{report_id}",
+            )
+        else:
+            render_locked_download_action("Planning Statement Word", report_id, "Planning Review", "planning_statement_word", f"statement_word_{report_id}")
+
+
 def render_report_download_panel(module_name=None, show_sections=True):
     if not st.session_state.get("sections"):
         st.info("No report generated yet.")
@@ -2472,14 +2702,12 @@ def render_report_download_panel(module_name=None, show_sections=True):
         else:
             render_locked_download_action("PDF Report", report_id, module_name, pdf_export_type, f"current_pdf_{report_id}")
     with c2:
-        if current_plan == "pro":
-            if is_export_unlocked(report_id, "word"):
-                st.download_button("Download Word Report", st.session_state.word_file, file_name=f"{base_filename}_{suffix}_AI_Review_Report.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document", use_container_width=True, key=f"download_current_word_{report_id}")
-            else:
-                render_locked_download_action("Word Report", report_id, module_name, "word", f"current_word_{report_id}")
+        if is_export_unlocked(report_id, "word"):
+            st.download_button("Download Word Report", st.session_state.word_file, file_name=f"{base_filename}_{suffix}_AI_Review_Report.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document", use_container_width=True, key=f"download_current_word_{report_id}")
         else:
-            st.button("Word Report locked", disabled=True, use_container_width=True)
-            st.caption("Word export is available on Studio and requires 1 credit.")
+            render_locked_download_action("Word Report", report_id, module_name, "word", f"current_word_{report_id}")
+    if module_name == "Planning Review":
+        render_planning_statement_panel(report_id)
     if show_sections:
         render_sections(sections, report, module_name)
 
@@ -2510,7 +2738,7 @@ if page == "Dashboard":
     st.markdown("### Recent projects")
     saved_projects = st.session_state.get("saved_projects", [])
     if saved_projects:
-        for item in saved_projects[:6]:
+        for item in saved_projects[:5]:
             st.markdown(f"**{item.get('project_address', 'Not provided')}**")
             st.caption(f"{item.get('module', '')} • {item.get('date', '')} • Report ID: {item.get('report_id', '')}")
             st.markdown("---")
@@ -2569,7 +2797,7 @@ elif page == "Projects":
                 st.session_state["wizard_review_mode"] = st.selectbox("Report Mode", ["Architect / Professional", "Homeowner Summary"], index=["Architect / Professional", "Homeowner Summary"].index(st.session_state.get("wizard_review_mode", "Architect / Professional")))
                 st.caption("Tailored output for architects, agents and professionals.")
             st.markdown("<hr style='border-color:var(--sy-border);margin:1.25rem 0;'>", unsafe_allow_html=True)
-            st.caption("Downloads are unlocked using credits. Planning PDF = 3 credits. Building Regs PDF = 5 credits. Word export = 1 credit.")
+            st.caption("Downloads are unlocked using credits. Planning PDF = 3 credits. Building Regs PDF = 5 credits. Word export = 1 credit. Planning Statement PDF = 2 credits.")
             wizard_buttons()
         elif step == 2:
             step_header(2, "Project details", "Add the basic project and site information used in the report cover, council detection and AI context.")
@@ -2661,6 +2889,8 @@ elif page == "Reports":
             d1, d2 = st.columns(2)
             pdf_bytes = item.get("pdf_bytes")
             word_bytes = item.get("word_bytes")
+            statement_pdf_bytes = item.get("planning_statement_pdf_bytes")
+            statement_word_bytes = item.get("planning_statement_word_bytes")
             item_report_id = item.get("report_id", "report")
             item_module = item.get("module", "Planning Review")
             item_pdf_export_type = get_pdf_export_type(item_module)
@@ -2673,16 +2903,27 @@ elif page == "Reports":
                 else:
                     st.caption("PDF download available for reports generated after this update.")
             with d2:
-                if current_plan == "pro" and word_bytes:
+                if word_bytes:
                     if is_export_unlocked(item_report_id, "word", item):
                         st.download_button("Download Word", word_bytes, file_name=f"{item_report_id}_ArchLens_Report.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document", use_container_width=True, key=f"docx_{item_report_id}")
                     else:
                         render_locked_download_action("Word Report", item_report_id, item_module, "word", f"history_word_{item_report_id}")
-                elif current_plan != "pro":
-                    st.button("Word Report locked", disabled=True, use_container_width=True, key=f"docx_locked_{item_report_id}")
-                    st.caption("Word export is available on Studio and requires 1 credit.")
                 else:
                     st.caption("Word download available for reports generated after this update.")
+            if item_module == "Planning Review" and (statement_pdf_bytes or statement_word_bytes):
+                ps1, ps2 = st.columns(2)
+                with ps1:
+                    if statement_pdf_bytes:
+                        if is_export_unlocked(item_report_id, "planning_statement_pdf", item):
+                            st.download_button("Planning Statement PDF", statement_pdf_bytes, file_name=f"{item_report_id}_Planning_Statement.pdf", mime="application/pdf", use_container_width=True, key=f"ps_pdf_{item_report_id}")
+                        else:
+                            render_locked_download_action("Planning Statement PDF", item_report_id, item_module, "planning_statement_pdf", f"history_statement_pdf_{item_report_id}")
+                with ps2:
+                    if statement_word_bytes:
+                        if is_export_unlocked(item_report_id, "planning_statement_word", item):
+                            st.download_button("Planning Statement Word", statement_word_bytes, file_name=f"{item_report_id}_Planning_Statement.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document", use_container_width=True, key=f"ps_docx_{item_report_id}")
+                        else:
+                            render_locked_download_action("Planning Statement Word", item_report_id, item_module, "planning_statement_word", f"history_statement_word_{item_report_id}")
             st.markdown('</div>', unsafe_allow_html=True)
     else:
         st.info("No reports generated yet. Go to Projects and run your first review.")

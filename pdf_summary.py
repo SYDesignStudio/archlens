@@ -108,6 +108,10 @@ def apply_target_report_language(report_text: str) -> str:
     ]
     for pattern, replacement in replacements:
         text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+    text = re.sub(r"(?im)^(\s*[-•]?\s*[^:\n]+:\s*)Unknown\s*$", r"\1To be confirmed", text)
+    text = re.sub(r"(?im)^(\s*[-•]?\s*[^:\n]+:\s*)Not shown\s*$", r"\1Not clearly identified in the submitted information", text)
+    text = re.sub(r"(?im)^Unknown\s*$", "To be confirmed", text)
+    text = re.sub(r"(?im)^Not shown\s*$", "Not clearly identified in the submitted information", text)
     text = re.sub(r",{2,}", ",", text)
     text = re.sub(r"\s+,", ",", text)
     text = re.sub(r",\s*\.", ".", text)
@@ -1643,31 +1647,20 @@ def infer_planning_statement_mode(report_text: str, sections: Optional[Dict[str,
 
 
 def build_planning_statement_structure(statement_mode: str) -> str:
-    if statement_mode == "prior_approval":
-        return """Use this approved-style structure:
-1. Introduction
-2. Site Context and Surroundings
-3. Proposal Details
-4. Compliance with Prior Approval Requirements
-5. Design Considerations
-6. Neighbour Amenity
-7. Conclusion"""
-    if statement_mode == "pd":
-        return """Use this approved-style structure:
-1. Introduction
-2. Site Context and Surroundings
-3. Proposal Details
-4. Permitted Development Assessment
-5. Design Considerations
-6. Conclusion"""
-    return """Use this approved-style structure:
-1. Introduction
-2. Site Context and Surroundings
-3. Proposal Details
-4. Design and Character
-5. Neighbour Amenity
-6. Planning Policy Context
-7. Conclusion"""
+    route_section = {
+        "prior_approval": "Compliance with Prior Approval Requirements",
+        "pd": "Permitted Development / Lawful Development Assessment",
+    }.get(statement_mode, "Planning Assessment")
+    return f"""Use this approved-style structure:
+1. Site and Surroundings
+2. Proposal Description
+3. Planning History
+4. Relevant Planning Policy
+5. {route_section}
+6. Design and Character
+7. Residential Amenity
+8. Highways/Parking
+9. Conclusion"""
 
 
 def generate_planning_statement(
@@ -1697,6 +1690,8 @@ def generate_planning_statement(
 You are drafting a UK planning statement using an ArchLens AI planning review.
 
 {audience_hint}
+
+{TARGET_REPORT_STYLE_RULES}
 
 Project Address: {project_address or 'Not provided'}
 Client: {client_name or 'Not provided'}
@@ -1746,75 +1741,38 @@ Full report text:
 
     try:
         response = _call_responses_api("gpt-5", prompt)
-        return response.output_text
+        return apply_target_report_language(response.output_text)
     except Exception:
-        if statement_mode == "prior_approval":
-            fallback_parts = [
-                "1. Introduction",
-                f"This Statement has been prepared in support of the proposed development at {project_address or 'the subject property'}. It should be read alongside the submitted drawings.",
-                "",
-                "2. Site Context and Surroundings",
-                sections.get("SITE AND PROPOSAL OVERVIEW", "The site forms part of an established residential setting."),
-                "",
-                "3. Proposal Details",
-                sections.get("PROJECT CLASSIFICATION", "The proposal should be read alongside the submitted drawings and supporting information."),
-                "",
-                "4. Compliance with Prior Approval Requirements",
-                sections.get("PD / PRIOR APPROVAL / PLANNING ROUTE", "The likely statutory route should be confirmed before submission."),
-                "",
-                "5. Design Considerations",
-                "The proposal has been assessed in the context of the host dwelling and surrounding built form, with regard to scale, visual impact and relationship to neighbouring properties.",
-                "",
-                "6. Neighbour Amenity",
-                "The proposal should be considered with regard to outlook, enclosure, daylight and relationship to adjoining occupiers.",
-                "",
-                "7. Conclusion",
-                sections.get("SUBMISSION READINESS", "Further confirmation of route and supporting information may be required prior to submission."),
-            ]
-            return "\n".join(fallback_parts)
-
-        if statement_mode == "pd":
-            fallback_parts = [
-                "1. Introduction",
-                f"This Statement has been prepared in support of the proposed development at {project_address or 'the subject property'}. It should be read alongside the submitted drawings.",
-                "",
-                "2. Site Context and Surroundings",
-                sections.get("SITE AND PROPOSAL OVERVIEW", "The site forms part of an established residential setting."),
-                "",
-                "3. Proposal Details",
-                sections.get("PROJECT CLASSIFICATION", "The proposal should be read alongside the submitted drawings and supporting information."),
-                "",
-                "4. Permitted Development Assessment",
-                sections.get("PD / PRIOR APPROVAL / PLANNING ROUTE", "The likely statutory route should be confirmed before submission."),
-                "",
-                "5. Design Considerations",
-                "The proposal should be assessed in the context of the host dwelling and surrounding built form, with regard to scale, materials and visual impact.",
-                "",
-                "6. Conclusion",
-                sections.get("SUBMISSION READINESS", "Further confirmation of route and supporting information may be required prior to submission."),
-            ]
-            return "\n".join(fallback_parts)
-
+        route_heading = {
+            "prior_approval": "5. Compliance with Prior Approval Requirements",
+            "pd": "5. Permitted Development / Lawful Development Assessment",
+        }.get(statement_mode, "5. Planning Assessment")
         fallback_parts = [
-            "1. Introduction",
-            f"This Planning Statement has been prepared in support of the proposed development at {project_address or 'the subject property'}. It should be read alongside the submitted drawings.",
-            "",
-            "2. Site Context and Surroundings",
+            "1. Site and Surroundings",
             sections.get("SITE AND PROPOSAL OVERVIEW", "The application site forms part of an established residential setting and should be assessed in that context."),
             "",
-            "3. Proposal Details",
+            "2. Proposal Description",
             sections.get("PROJECT CLASSIFICATION", "The proposal should be read alongside the submitted drawings and supporting information."),
             "",
-            "4. Design and Character",
-            "The proposal should be assessed in the context of the host dwelling and surrounding built form, with regard to scale, visual impact, roof form and relationship to the established pattern of development.",
+            "3. Planning History",
+            "Planning history, permitted development rights, Article 4 status and any relevant conditions should be confirmed before submission.",
             "",
-            "5. Neighbour Amenity",
-            "The proposal should be considered with regard to outlook, enclosure, daylight, privacy and relationship to adjoining occupiers.",
-            "",
-            "6. Planning Policy Context",
+            "4. Relevant Planning Policy",
             sections.get("LOCAL AUTHORITY CONTEXT", "The proposal should be assessed against the relevant local and strategic planning policy framework."),
             "",
-            "7. Conclusion",
+            route_heading,
+            sections.get("PD / PRIOR APPROVAL / PLANNING ROUTE", "The likely statutory route should be confirmed before submission."),
+            "",
+            "6. Design and Character",
+            "The proposal should be assessed in the context of the host dwelling and surrounding built form, with regard to scale, visual impact, roof form and relationship to the established pattern of development.",
+            "",
+            "7. Residential Amenity",
+            "The proposal should be considered with regard to outlook, enclosure, daylight, privacy and relationship to adjoining occupiers.",
+            "",
+            "8. Highways/Parking",
+            "No highways or parking concerns are identified from the available report information, but any site-specific parking or access changes should be checked before submission.",
+            "",
+            "9. Conclusion",
             sections.get("SUBMISSION READINESS", "Further confirmation of route and supporting information may be required prior to submission."),
         ]
-        return "\n".join(fallback_parts)
+        return apply_target_report_language("\n".join(fallback_parts))
