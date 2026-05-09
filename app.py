@@ -803,15 +803,15 @@ def inject_custom_css():
         sidebar_bg = "#FFFFFF"
         input_bg = "#FFFFFF"
     else:
-        bg = "#0E1117"
-        surface = "#121821"
-        surface_2 = "#172033"
+        bg = "#070B12"
+        surface = "#101722"
+        surface_2 = "#111A26"
         text = "#F5F7FA"
-        muted = "#B8C0CC"
-        border = "#2A3140"
-        shadow = "0 14px 32px rgba(0,0,0,0.24)"
-        sidebar_bg = "#0B0F16"
-        input_bg = "#111827"
+        muted = "#AAB2C0"
+        border = "rgba(255,255,255,0.08)"
+        shadow = "0 18px 44px rgba(0,0,0,0.34)"
+        sidebar_bg = "#050911"
+        input_bg = "#0E1520"
 
     st.markdown(
         f"""
@@ -823,8 +823,10 @@ def inject_custom_css():
             --sy-border: {border};
             --sy-text: {text};
             --sy-muted: {muted};
+            --sy-muted-2: #7C8594;
             --sy-accent: #D4C29A;
-            --sy-accent-hover: #C5B183;
+            --sy-accent-strong: #E5C76B;
+            --sy-accent-hover: #E4CE98;
             --sy-card-shadow: {shadow};
             --sy-input-bg: {input_bg};
             --sy-sidebar-bg: {sidebar_bg};
@@ -833,7 +835,8 @@ def inject_custom_css():
         .stApp {{
             background: var(--sy-bg) !important;
             color: var(--sy-text) !important;
-            font-size: 15px;
+            font-size: 14px;
+            font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
         }}
         header[data-testid="stHeader"] {{
             display:block !important;
@@ -847,9 +850,9 @@ def inject_custom_css():
         footer {{ visibility:hidden !important; }}
 
         .block-container {{
-            padding-top: 1rem !important;
+            padding-top: 1.5rem !important;
             padding-bottom: 2rem !important;
-            max-width: 1420px !important;
+            max-width: 1480px !important;
         }}
 
         [data-testid="stSidebar"] {{
@@ -870,19 +873,20 @@ def inject_custom_css():
             margin-bottom: 0.15rem !important;
         }}
 
-        h1 {{ font-size: 2.35rem !important; letter-spacing: -0.035em !important; line-height: 1.08 !important; }}
-        h2 {{ font-size: 1.45rem !important; letter-spacing: -0.02em !important; }}
-        h3 {{ font-size: 1.12rem !important; }}
+        h1 {{ font-size: 2.05rem !important; letter-spacing: -0.03em !important; line-height: 1.1 !important; }}
+        h2 {{ font-size: 1.35rem !important; letter-spacing: -0.02em !important; }}
+        h3 {{ font-size: 1.05rem !important; }}
         p, li, label, .stMarkdown, .stCaption {{ color: var(--sy-text); }}
         small, .sy-muted {{ color: var(--sy-muted) !important; }}
 
         .sy-topbar {{
             display:flex; justify-content:space-between; align-items:center; gap: 1rem;
-            padding:0.85rem 1rem; border:1px solid var(--sy-border); border-radius:18px;
-            background: var(--sy-surface); margin-bottom:1rem; box-shadow: var(--sy-card-shadow);
+            padding:0.05rem 0 0.75rem 0; border:0; background:transparent; margin-bottom:0; box-shadow:none;
         }}
-        .sy-topbar-title {{ font-size:0.78rem; text-transform:uppercase; letter-spacing:0.14em; color:var(--sy-muted); font-weight:800; }}
-        .sy-topbar-meta {{ font-size:0.86rem; color:var(--sy-text); }}
+        .sy-topbar-title {{ font-size:0.76rem; text-transform:uppercase; letter-spacing:0.32em; color:var(--sy-accent-strong); font-weight:850; }}
+        .sy-topbar-subtitle {{ font-size:0.82rem; color:var(--sy-muted); margin-top:0.24rem; }}
+        .sy-topbar-meta {{ display:flex; align-items:center; justify-content:flex-end; gap:0.65rem; color:var(--sy-muted); font-size:0.82rem; }}
+        .sy-topbar-pill {{ border:1px solid var(--sy-border); border-radius:8px; padding:0.54rem 0.9rem; min-width:104px; text-align:center; background:rgba(16,23,34,0.62); color:var(--sy-text); }}
 
         .sy-hero {{
             padding:1.25rem 1.3rem; border:1px solid var(--sy-border); border-radius:24px;
@@ -892,7 +896,7 @@ def inject_custom_css():
         .sy-hero-copy .sy-muted {{ line-height:1.55; font-size:0.92rem; }}
 
         .sy-card, .sy-mini-card, .sy-upload-item, .sy-sidepanel, .sy-workspace, .sy-subtle-card, .sy-option-card, .sy-report-card {{
-            border:1px solid var(--sy-border); background: var(--sy-surface); box-shadow: var(--sy-card-shadow); color: var(--sy-text);
+            border:1px solid var(--sy-border); background:linear-gradient(180deg, rgba(17,26,38,0.94), rgba(12,18,28,0.94)); box-shadow: var(--sy-card-shadow); color: var(--sy-text);
             overflow-wrap:anywhere;
         }}
         .sy-card {{ border-radius:20px; padding:1.05rem; margin-bottom:0.95rem; }}
@@ -902,11 +906,11 @@ def inject_custom_css():
         .sy-sidepanel {{ border-radius:20px; padding:0.85rem; position:sticky; top:1rem; font-size:0.86rem; }}
         .sy-sidepanel .sy-data-row {{ font-size:0.82rem; padding:0.42rem 0; }}
         .sy-workspace {{ border-radius:22px; padding:1rem; }}
-        .sy-subtle-card {{ border-radius:18px; padding:0.95rem 1rem; margin-bottom:0.85rem; }}
+        .sy-subtle-card {{ border-radius:16px; padding:0.7rem 0.9rem; margin-bottom:0.5rem; }}
         .sy-section-label, .sy-panel-title, .sy-kpi {{
             font-size:0.72rem; text-transform:uppercase; letter-spacing:0.12em; color:var(--sy-muted); margin-bottom:0.35rem; font-weight:800;
         }}
-        .sy-data-row {{ display:flex; justify-content:space-between; align-items:flex-start; gap:0.8rem; padding:0.52rem 0; border-bottom:1px solid var(--sy-border); color:var(--sy-text); }}
+        .sy-data-row {{ display:grid; grid-template-columns:minmax(0,0.85fr) minmax(0,1fr); gap:0.85rem; align-items:start; padding:0.36rem 0; color:var(--sy-text); }}
         .sy-data-row:last-child {{ border-bottom:0; }}
         .sy-data-row span:first-child {{ color:var(--sy-muted); }}
         .sy-data-row strong {{ text-align:right; min-width:0; overflow-wrap:anywhere; }}
@@ -933,8 +937,8 @@ def inject_custom_css():
         .stDownloadButton button, .stButton button, .stLinkButton a {{ border-radius:14px !important; }}
         .stButton button, .stDownloadButton button, .stLinkButton a {{
             background: #D4C29A !important; color: #111111 !important; border: 1px solid var(--sy-accent) !important;
-            box-shadow: 0 12px 26px rgba(212, 194, 154, 0.24) !important; font-weight: 800 !important;
-            min-height:44px !important; padding:0.66rem 1rem !important; font-size:0.86rem !important; line-height:1.15 !important;
+            box-shadow: 0 12px 24px rgba(212, 194, 154, 0.22) !important; font-weight: 750 !important;
+            min-height:42px !important; padding:0.62rem 1rem !important; font-size:0.84rem !important; line-height:1.15 !important;
         }}
         .stButton button:hover, .stDownloadButton button:hover, .stLinkButton a:hover {{ background: var(--sy-accent-hover) !important; border-color: var(--sy-accent-hover) !important; color: #111111 !important; filter:none !important; }}
         .stButton button:disabled, .stDownloadButton button:disabled {{
@@ -944,9 +948,9 @@ def inject_custom_css():
         .stSelectbox label, .stTextInput label, .stTextArea label, .stNumberInput label, .stDateInput label, .stMultiSelect label, .stCheckbox label, .stRadio label {{
             color:var(--sy-text) !important; font-weight:700 !important; margin-bottom:0.3rem !important;
         }}
-        [data-baseweb="select"] > div, [data-baseweb="tag"] {{ background:var(--sy-input-bg) !important; border:1px solid #5D6472 !important; color:var(--sy-text) !important; border-radius:12px !important; min-height:44px !important; }}
+        [data-baseweb="select"] > div, [data-baseweb="tag"] {{ background:var(--sy-input-bg) !important; border:1px solid #2A3444 !important; color:var(--sy-text) !important; border-radius:10px !important; min-height:44px !important; }}
         .stTextInput input, .stTextArea textarea, .stNumberInput input, .stDateInput input, div[data-baseweb="base-input"] > input, div[data-baseweb="base-input"] > textarea {{
-            background:var(--sy-input-bg) !important; border:1px solid #5D6472 !important; color:var(--sy-text) !important; border-radius:12px !important; min-height:44px !important; padding:0.62rem 0.78rem !important;
+            background:var(--sy-input-bg) !important; border:1px solid #2A3444 !important; color:var(--sy-text) !important; border-radius:10px !important; min-height:44px !important; padding:0.62rem 0.78rem !important;
         }}
         .stTextInput input:focus, .stTextArea textarea:focus, .stNumberInput input:focus, .stDateInput input:focus, div[data-baseweb="base-input"] > input:focus, div[data-baseweb="base-input"] > textarea:focus, [data-baseweb="select"] > div:focus-within {{
             border-color:#D4C29A !important; box-shadow:0 0 0 1px #D4C29A, 0 0 0 4px rgba(212,194,154,0.10) !important;
@@ -969,15 +973,15 @@ def inject_custom_css():
 
         /* --- ArchLens Hub target HUD refinements --- */
         .block-container {{
-            max-width: 1380px !important;
-            padding-left: 3.2rem !important;
-            padding-right: 3.2rem !important;
-            padding-top: 1.35rem !important;
+            max-width: 1480px !important;
+            padding-left: 2.4rem !important;
+            padding-right: 2rem !important;
+            padding-top: 1.45rem !important;
         }}
         .stApp {{
             background:
-                radial-gradient(circle at 18% 8%, rgba(212,194,154,0.10), transparent 28%),
-                radial-gradient(circle at 80% 15%, rgba(31,44,64,0.35), transparent 28%),
+                radial-gradient(circle at 26% 0%, rgba(212,194,154,0.06), transparent 28%),
+                radial-gradient(circle at 88% 4%, rgba(31,44,64,0.38), transparent 30%),
                 var(--sy-bg) !important;
         }}
         [data-testid="stSidebar"] {{
@@ -988,7 +992,7 @@ def inject_custom_css():
             width: 268px !important;
             max-width: 268px !important;
             pointer-events: auto !important;
-            background: linear-gradient(180deg, rgba(15,22,32,0.98), rgba(9,13,20,0.98)) !important;
+            background: linear-gradient(180deg, #050911, #0B1018) !important;
         }}
         [data-testid="stSidebar"][aria-expanded="true"],
         [data-testid="stSidebar"]:not([aria-expanded]) {{
@@ -1007,45 +1011,67 @@ def inject_custom_css():
             padding-left: 1.3rem !important;
             padding-right: 1.3rem !important;
         }}
-        .sy-sidebar-brand {{ display:flex; align-items:center; gap:0.82rem; margin:0.05rem 0 1.15rem 0; min-width:0; }}
-        .sy-sidebar-brand img {{ width:70px; height:70px; object-fit:contain; border-radius:14px; flex:0 0 70px; filter:drop-shadow(0 10px 20px rgba(212,194,154,0.12)); }}
-        .sy-sidebar-brand-title {{ font-weight:850; font-size:1.08rem; line-height:1.12; white-space:nowrap; }}
-        .sy-sidebar-brand-subtitle {{ font-size:0.76rem; color:var(--sy-muted); margin-top:0.22rem; white-space:nowrap; }}
-        .sy-sidebar-account {{ border:1px solid rgba(212,194,154,0.16); background:rgba(18,24,33,0.82); border-radius:14px; padding:0.82rem 0.86rem; margin:0 0 1rem 0; }}
-        .sy-sidebar-account-row {{ display:grid; grid-template-columns:46px minmax(0,1fr); align-items:start; gap:0.5rem; font-size:0.76rem; line-height:1.3; padding:0.34rem 0; color:var(--sy-muted); }}
+        .sy-sidebar-brand {{ display:flex; align-items:center; gap:0.82rem; margin:0.55rem 0 1.65rem 0; min-width:0; }}
+        .sy-sidebar-brand img {{ width:66px; height:66px; object-fit:contain; border-radius:14px; flex:0 0 66px; filter:drop-shadow(0 10px 20px rgba(212,194,154,0.12)); }}
+        .sy-sidebar-brand-title {{ font-weight:850; font-size:1.03rem; line-height:1.12; white-space:nowrap; }}
+        .sy-sidebar-brand-subtitle {{ font-size:0.72rem; color:var(--sy-muted); margin-top:0.2rem; white-space:nowrap; }}
+        .sy-sidebar-account {{ border:1px solid rgba(255,255,255,0.10); background:rgba(10,15,23,0.72); border-radius:12px; padding:0.92rem 0.9rem; margin:0 0 2rem 0; }}
+        .sy-sidebar-account::before {{ content:"WORKSPACE"; display:block; color:var(--sy-muted-2); font-size:0.64rem; letter-spacing:0.14em; font-weight:800; margin-bottom:0.7rem; }}
+        .sy-sidebar-account-row {{ display:grid; grid-template-columns:46px minmax(0,1fr); align-items:start; gap:0.5rem; font-size:0.73rem; line-height:1.35; padding:0.34rem 0; color:var(--sy-muted); }}
         .sy-sidebar-account-row strong {{ color:var(--sy-text); text-align:right; overflow-wrap:break-word; word-break:normal; min-width:0; font-size:0.74rem; }}
-        [data-testid="stSidebar"] [role="radiogroup"] {{ gap:0.28rem !important; padding:0.34rem !important; margin:0.2rem 0 0.9rem 0 !important; }}
-        [data-testid="stSidebar"] [role="radiogroup"] label {{ display:flex !important; align-items:center !important; min-height:40px !important; padding:0.54rem 0.68rem !important; border-radius:10px !important; margin-bottom:0.22rem !important; font-weight:650 !important; }}
+        [data-testid="stSidebar"] [role="radiogroup"] {{ gap:0.32rem !important; padding:0 !important; margin:0.2rem 0 2.1rem 0 !important; border:0 !important; background:transparent !important; }}
+        [data-testid="stSidebar"] [role="radiogroup"] label {{ display:flex !important; align-items:center !important; min-height:42px !important; padding:0.58rem 0.74rem !important; border-radius:9px !important; margin-bottom:0.32rem !important; font-weight:720 !important; border:1px solid transparent !important; }}
         [data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) {{
-            background:linear-gradient(90deg, rgba(212,194,154,0.30), rgba(212,194,154,0.12)) !important;
-            border:1px solid rgba(212,194,154,0.24) !important;
-            box-shadow:0 8px 18px rgba(212,194,154,0.10);
+            background:linear-gradient(90deg, rgba(212,194,154,0.18), rgba(212,194,154,0.07)) !important;
+            border:1px solid rgba(212,194,154,0.30) !important;
+            border-left:2px solid var(--sy-accent) !important;
+            box-shadow:0 10px 22px rgba(212,194,154,0.08);
         }}
         [data-testid="stSidebar"] [data-testid="stLinkButton"] {{ margin-top:0.42rem !important; }}
-        .sy-sidebar-help {{ border:1px solid rgba(212,194,154,0.13); border-radius:14px; padding:0.72rem 0.78rem; margin-top:3.4rem; background:rgba(18,24,33,0.66); font-size:0.75rem; }}
-        .sy-topbar {{ background:transparent !important; border:0 !important; box-shadow:none !important; padding:0 0 1rem 0 !important; margin-bottom:0.1rem !important; }}
-        .sy-topbar-title {{ color:var(--sy-accent) !important; letter-spacing:0.28em !important; font-size:0.82rem !important; }}
+        .sy-sidebar-help {{ border:1px solid rgba(255,255,255,0.10); border-radius:12px; padding:0.8rem 0.85rem; margin-top:3rem; background:rgba(10,15,23,0.70); font-size:0.75rem; }}
+        .sy-topbar {{ background:transparent !important; border:0 !important; box-shadow:none !important; padding:0.05rem 0 0.75rem 0 !important; margin-bottom:0 !important; }}
+        .sy-topbar-title {{ color:var(--sy-accent-strong) !important; letter-spacing:0.32em !important; font-size:0.76rem !important; }}
         .sy-topbar-meta {{ color:var(--sy-muted) !important; font-size:0.82rem !important; }}
-        .sy-user-badge {{ display:inline-flex; align-items:center; justify-content:center; width:32px; height:32px; border-radius:999px; background:rgba(212,194,154,0.18); color:var(--sy-accent); font-weight:800; margin-left:0.65rem; }}
-        .sy-project-hero {{ border:1px solid var(--sy-border); background:rgba(18,24,33,0.92); border-radius:18px; padding:1.45rem 1.55rem; margin-bottom:1rem; box-shadow: var(--sy-card-shadow); }}
-        .sy-project-hero-row {{ display:flex; align-items:flex-start; justify-content:space-between; gap:1rem; }}
-        .sy-project-hero h1 {{ font-size:1.75rem !important; margin:0 0 0.55rem 0 !important; }}
-        .sy-new-project-btn {{ display:inline-flex; align-items:center; gap:0.45rem; justify-content:center; min-width:132px; padding:0.66rem 1rem; border-radius:10px; background:#D4C29A; color:#111 !important; font-weight:800; font-size:0.86rem; box-shadow:0 12px 26px rgba(212,194,154,0.26); }}
-        .sy-step-row {{ display:grid; grid-template-columns:repeat(5, 1fr); gap:1rem; padding:0.95rem 0 1.05rem 0; border-top:1px solid var(--sy-border); border-bottom:1px solid var(--sy-border); margin-bottom:1.05rem; }}
-        .sy-step-item {{ display:flex; align-items:center; gap:0.68rem; opacity:0.62; }}
+        .sy-user-badge {{ display:inline-flex; align-items:center; justify-content:center; width:38px; height:38px; border-radius:999px; background:rgba(212,194,154,0.08); color:var(--sy-accent-strong); border:1px solid rgba(212,194,154,0.52); font-weight:800; margin-left:0.6rem; }}
+        .sy-project-hero {{ border:1px solid var(--sy-border); background:linear-gradient(180deg, rgba(17,26,38,0.90), rgba(12,18,28,0.92)); border-radius:14px; padding:0.95rem 1.35rem 0.7rem 1.35rem; margin-bottom:0.65rem; box-shadow: var(--sy-card-shadow); }}
+        .sy-project-hero-row {{ display:flex; align-items:flex-start; justify-content:space-between; gap:1rem; margin-bottom:0.82rem; }}
+        .sy-project-hero h1 {{ font-size:1.45rem !important; margin:0 0 0.35rem 0 !important; }}
+        .sy-new-project-btn {{ display:inline-flex; align-items:center; gap:0.45rem; justify-content:center; min-width:124px; min-height:40px; padding:0.58rem 0.95rem; border-radius:9px; background:linear-gradient(180deg,#F0D989,#D4C29A); color:#111 !important; font-weight:800; font-size:0.82rem; box-shadow:0 13px 26px rgba(212,194,154,0.24); }}
+        .sy-step-row {{ position:relative; display:grid; grid-template-columns:repeat(5, 1fr); gap:0.85rem; padding:0.58rem 0.9rem 0.86rem 0.9rem; border:1px solid rgba(255,255,255,0.04); border-radius:12px; background:rgba(255,255,255,0.025); margin:0; overflow:hidden; }}
+        .sy-step-progress {{ position:absolute; left:1.1rem; right:1.1rem; bottom:0.12rem; height:4px; border-radius:999px; background:rgba(255,255,255,0.12); overflow:hidden; }}
+        .sy-step-progress span {{ display:block; height:100%; border-radius:999px; background:linear-gradient(90deg, var(--sy-accent), var(--sy-accent-strong)); }}
+        .sy-step-item {{ display:flex; align-items:center; gap:0.65rem; opacity:0.72; min-width:0; }}
         .sy-step-item.active {{ opacity:1; }}
-        .sy-step-icon {{ width:32px; height:32px; border-radius:999px; display:flex; align-items:center; justify-content:center; background:rgba(255,255,255,0.04); border:1px solid var(--sy-border); color:var(--sy-muted); font-size:0.95rem; }}
-        .sy-step-item.active .sy-step-icon {{ background:rgba(212,194,154,0.14); border-color:rgba(212,194,154,0.42); color:var(--sy-accent); }}
-        .sy-step-title {{ font-size:0.80rem; font-weight:800; color:var(--sy-text); }}
-        .sy-step-sub {{ font-size:0.70rem; color:var(--sy-muted); margin-top:0.12rem; }}
-        .sy-form-card {{ border:1px solid var(--sy-border); border-radius:18px; background:rgba(18,24,33,0.72); padding:1.25rem; min-height:330px; box-shadow: var(--sy-card-shadow); }}
-        .sy-form-card .sy-subtle-card {{ background:transparent !important; border:0 !important; box-shadow:none !important; padding:0 0 1rem 0 !important; }}
+        .sy-step-icon {{ width:30px; height:30px; flex:0 0 30px; border-radius:999px; display:flex; align-items:center; justify-content:center; background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.17); color:var(--sy-muted); font-size:0.8rem; }}
+        .sy-step-item.active .sy-step-icon {{ background:rgba(212,194,154,0.18); border-color:var(--sy-accent); color:var(--sy-accent-strong); box-shadow:0 0 0 4px rgba(212,194,154,0.06); }}
+        .sy-step-title {{ font-size:0.78rem; font-weight:820; color:var(--sy-text); }}
+        .sy-step-sub {{ font-size:0.66rem; color:var(--sy-muted); margin-top:0.12rem; }}
+        .sy-form-card {{ border:1px solid var(--sy-border); border-radius:14px; background:linear-gradient(180deg, rgba(17,26,38,0.88), rgba(11,17,27,0.92)); padding:1.9rem 2rem; min-height:520px; box-shadow: var(--sy-card-shadow); }}
+        .sy-form-card .sy-subtle-card {{ background:transparent !important; border:0 !important; box-shadow:none !important; padding:0 0 1.2rem 0 !important; }}
+        div[data-testid="column"]:has(.sy-subtle-card) {{
+            border:1px solid var(--sy-border);
+            border-radius:14px;
+            background:linear-gradient(180deg, rgba(17,26,38,0.88), rgba(11,17,27,0.92));
+            box-shadow:var(--sy-card-shadow);
+            padding:0.82rem 1.12rem 1.1rem 1.12rem;
+        }}
+        div[data-testid="column"]:has(.sy-subtle-card) .sy-subtle-card {{
+            background:transparent !important;
+            border:0 !important;
+            box-shadow:none !important;
+            padding:0 0 1.1rem 0 !important;
+        }}
         .sy-section-divider {{ height:1px; background:linear-gradient(90deg, transparent, rgba(212,194,154,0.28), transparent); margin:0.9rem 0 1rem 0; }}
-        .sy-sidepanel {{ border-radius:16px !important; background:rgba(18,24,33,0.84) !important; padding:1rem !important; margin-bottom:0.9rem !important; position:relative !important; top:0 !important; }}
-        .sy-sidepanel .sy-data-row strong {{ max-width:150px; overflow-wrap:anywhere; }}
-        .sy-panel-title {{ color:var(--sy-text) !important; letter-spacing:0 !important; text-transform:none !important; font-size:0.94rem !important; margin-bottom:0.4rem !important; }}
-        .sy-recent-download {{ display:flex; gap:0.55rem; align-items:flex-start; padding:0.42rem 0; border-bottom:1px solid rgba(255,255,255,0.06); font-size:0.75rem; }}
-        .sy-file-icon {{ color:#F0B5FF; font-size:1rem; line-height:1; }}
+        .sy-credit-info {{ display:flex; gap:0.85rem; align-items:flex-start; border:1px solid var(--sy-border); border-radius:10px; padding:0.8rem 1rem; background:rgba(255,255,255,0.025); margin-top:1rem; }}
+        .sy-info-icon {{ display:flex; align-items:center; justify-content:center; width:26px; height:26px; border-radius:999px; border:1px solid var(--sy-accent); color:var(--sy-accent); flex:0 0 26px; font-weight:800; }}
+        .sy-sidepanel {{ border-radius:14px !important; background:linear-gradient(180deg, rgba(17,26,38,0.92), rgba(11,17,27,0.94)) !important; padding:1.25rem !important; margin-bottom:1rem !important; position:relative !important; top:0 !important; border:1px solid var(--sy-border) !important; box-shadow: var(--sy-card-shadow) !important; }}
+        .sy-sidepanel .sy-data-row strong {{ max-width:170px; overflow-wrap:anywhere; }}
+        .sy-panel-title {{ color:var(--sy-text) !important; letter-spacing:0 !important; text-transform:none !important; font-size:0.92rem !important; margin-bottom:0.75rem !important; font-weight:850 !important; }}
+        .sy-check-row {{ display:flex; align-items:center; gap:0.62rem; margin:0.52rem 0; color:var(--sy-text); font-size:0.82rem; }}
+        .sy-check-dot {{ width:13px; height:13px; border-radius:999px; border:1px solid #AAB2C0; display:inline-flex; align-items:center; justify-content:center; color:#fff; font-size:0.58rem; flex:0 0 13px; }}
+        .sy-check-dot.done {{ background:#43D17A; border-color:#43D17A; }}
+        .sy-recent-download {{ display:flex; gap:0.68rem; align-items:flex-start; padding:0.55rem 0; border-bottom:1px solid rgba(255,255,255,0.06); font-size:0.75rem; }}
+        .sy-file-icon {{ display:flex; align-items:center; justify-content:center; width:28px; height:32px; border-radius:6px; background:#F5F7FA; color:#D64045; font-size:0.86rem; line-height:1; flex:0 0 28px; }}
         .sy-footer {{ text-align:center; color:var(--sy-muted); font-size:0.72rem; margin-top:1.2rem; }}
         .stButton button, .stDownloadButton button, .stLinkButton a {{ border-radius:10px !important; color:#111111 !important; }}
         .stLinkButton a[href*="category"], .stLinkButton a[href*="pricing"] {{ background:#D4C29A !important; color:#111111 !important; border:1px solid #D4C29A !important; box-shadow:0 12px 26px rgba(212,194,154,0.22) !important; }}
@@ -1060,7 +1086,7 @@ def inject_custom_css():
             height:42px !important;
             padding:0.56rem 0.88rem !important;
             border-radius:10px !important;
-            background:#D4C29A !important;
+            background:linear-gradient(180deg,#F0D989,#D4C29A) !important;
             border:1px solid #D4C29A !important;
             color:#111111 !important;
             font-weight:800 !important;
@@ -1079,14 +1105,23 @@ def inject_custom_css():
         [data-testid="stSidebar"] [data-testid="stLinkButton"] a:hover,
         [data-testid="stSidebar"] [data-testid="stLinkButton"] a[href*="category"]:hover,
         [data-testid="stSidebar"] [data-testid="stLinkButton"] a[href*="pricing"]:hover {{
-            background:#C5B183 !important;
-            border-color:#C5B183 !important;
+            background:#E4CE98 !important;
+            border-color:#E4CE98 !important;
             color:#111111 !important;
             filter:none !important;
         }}
         @media (max-width: 1100px) {{
             .block-container {{ padding-left:1rem !important; padding-right:1rem !important; }}
             .sy-step-row {{ grid-template-columns:1fr 1fr; }}
+        }}
+        @media (max-width: 760px) {{
+            [data-testid="stSidebar"], [data-testid="stSidebar"][aria-expanded="true"], [data-testid="stSidebar"]:not([aria-expanded]) {{
+                min-width:250px !important; width:250px !important; max-width:250px !important;
+            }}
+            .sy-topbar {{ flex-direction:column; align-items:flex-start; }}
+            .sy-topbar-meta {{ justify-content:flex-start; flex-wrap:wrap; }}
+            .sy-project-hero-row {{ flex-direction:column; }}
+            .sy-step-row {{ grid-template-columns:1fr; }}
         }}
 
         
@@ -2501,11 +2536,97 @@ def render_intake_panel():
         st.markdown('<div class="sy-muted" style="font-size:0.78rem;">No downloads yet.</div>', unsafe_allow_html=True)
     st.markdown('<div style="margin-top:0.7rem;"><div class="sy-new-project-btn" style="width:100%;box-sizing:border-box;font-size:0.78rem;">Open full download history ↗</div></div>', unsafe_allow_html=True)
 
+def render_intake_panel_v2():
+    items = intake_items()
+    complete = sum(1 for _, done in items if done)
+    total = len(items)
+    project_types = st.session_state.get("wizard_project_types", [])
+    project_address = st.session_state.get("wizard_project_address", "")
+    proposal_summary = st.session_state.get("wizard_proposal_summary", "")
+    local_authority = detect_local_authority_for_display(project_address, proposal_summary)
+    progress_pct = int((complete / max(total, 1)) * 100)
+
+    readiness_rows = []
+    for label, done in items:
+        dot_class = "done" if done else ""
+        dot_text = "✓" if done else ""
+        readiness_rows.append(
+            f'<div class="sy-check-row"><span class="sy-check-dot {dot_class}">{dot_text}</span><span>{html.escape(label)}</span></div>'
+        )
+    st.markdown(
+        f"""
+        <div class="sy-sidepanel">
+            <div class="sy-panel-title">Project Intake Readiness</div>
+            <div style="font-weight:760;margin-bottom:0.85rem;">{complete} of {total} key items completed</div>
+            <div style="height:5px;border-radius:999px;background:rgba(255,255,255,0.12);overflow:hidden;margin-bottom:1.25rem;">
+                <div style="height:100%;width:{progress_pct}%;background:linear-gradient(90deg,#D4C29A,#E5C76B);border-radius:999px;"></div>
+            </div>
+            {''.join(readiness_rows)}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    rows = [
+        ("Project", st.session_state.get("wizard_project_name") or "Not named"),
+        ("Module", st.session_state.get("wizard_review_module", "Not selected")),
+        ("Project type", ", ".join(project_types) if project_types else "Not selected"),
+        ("Property", st.session_state.get("wizard_property_type", "Not stated")),
+        ("Site", project_address or "Not added"),
+        ("Council", local_authority or "Not detected"),
+    ]
+    summary_rows = [
+        f'<div class="sy-data-row"><span>{html.escape(label)}</span><strong>{html.escape(str(value))}</strong></div>'
+        for label, value in rows
+    ]
+    st.markdown(
+        f"""
+        <div class="sy-sidepanel">
+            <div class="sy-panel-title">Live Summary</div>
+            {''.join(summary_rows)}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    library = st.session_state.get("report_library", []) or []
+    saved = st.session_state.get("saved_projects", []) or []
+    recent_items = library[:4] if library else saved[:4]
+    download_rows = []
+    if recent_items:
+        for item in recent_items:
+            filename = item.get("file_name") or item.get("project_address") or "ArchLens_Report.pdf"
+            date = item.get("date", "") or "Recent"
+            download_rows.append(
+                f'<div class="sy-recent-download"><div class="sy-file-icon">PDF</div><div><strong>{html.escape(str(filename))}</strong><br><span class="sy-muted">{html.escape(str(date))}</span></div></div>'
+            )
+    else:
+        download_rows.append('<div class="sy-muted" style="font-size:0.78rem;">No downloads yet.</div>')
+    st.markdown(
+        f"""
+        <div class="sy-sidepanel">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem;">
+                <div class="sy-panel-title" style="margin-bottom:0;">Recent Downloads</div>
+                <div style="color:var(--sy-accent);font-size:0.78rem;">View all</div>
+            </div>
+            {''.join(download_rows)}
+            <div style="margin-top:0.8rem;"><div class="sy-new-project-btn" style="width:100%;box-sizing:border-box;font-size:0.76rem;background:transparent;color:var(--sy-accent)!important;border:1px solid rgba(212,194,154,0.35);box-shadow:none;">Open full download history ↗</div></div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def visible_step_number(step_no: int) -> int:
+    return {1: 1, 2: 1, 3: 2, 4: 3, 5: 3, 6: 4, 7: 5}.get(int(step_no), 1)
+
+
 def step_header(step_no, title, subtitle):
+    visible_step = visible_step_number(step_no)
     st.markdown(
         f'''
         <div class="sy-subtle-card">
-            <div class="sy-section-label">Step {step_no}</div>
+            <div class="sy-section-label">Step {visible_step} of 5</div>
             <h2 style="margin:0 0 0.35rem 0;">{title}</h2>
             <div class="sy-muted">{subtitle}</div>
         </div>
@@ -2922,9 +3043,14 @@ st.markdown(
     <div class="sy-topbar">
         <div>
             <div class="sy-topbar-title">ARCHLENS HUB</div>
-            <div class="sy-topbar-meta">AI-powered planning and building regulations intelligence for UK projects</div>
+            <div class="sy-topbar-subtitle">AI-powered planning and building regulations intelligence for UK projects</div>
         </div>
-        <div class="sy-topbar-meta">Credits: {get_credit_balance_label()} &nbsp; | &nbsp; Plan: {PLAN_LABELS.get(current_plan, "Solo")}{(" &nbsp; | &nbsp; User: " + current_user_name) if current_user_name else ""}<span class="sy-user-badge">{user_initials}</span></div>
+        <div class="sy-topbar-meta">
+            <div class="sy-topbar-pill">Credits: {get_credit_balance_label()}</div>
+            <div class="sy-topbar-pill">Plan: {PLAN_LABELS.get(current_plan, "Solo")}</div>
+            <span class="sy-user-badge">{user_initials}</span>
+            {("<span style='color:var(--sy-text);font-weight:700;'>" + html.escape(current_user_name) + "</span>") if current_user_name else ""}
+        </div>
     </div>
     """,
     unsafe_allow_html=True,
@@ -2981,12 +3107,12 @@ elif page == "Projects":
         unsafe_allow_html=True,
     )
     step_html = '<div class="sy-step-row">'
+    progress_width = min(100, max(10, int((visible_step_number(step) / 5) * 100)))
     for step_no, icon, title, subtitle in step_items:
         active = "active" if step == step_no or (step == 2 and step_no == 1) else ""
-        step_html += f'<div class="sy-step-item {active}"><div class="sy-step-icon">{icon}</div><div><div class="sy-step-title">{title}</div><div class="sy-step-sub">{subtitle}</div></div></div>'
-    step_html += '</div>'
+        step_html += f'<div class="sy-step-item {active}"><div class="sy-step-icon">{visible_step_number(step_no)}</div><div><div class="sy-step-title">{title}</div><div class="sy-step-sub">{subtitle}</div></div></div>'
+    step_html += f'<div class="sy-step-progress"><span style="width:{progress_width}%;"></span></div></div>'
     st.markdown(step_html, unsafe_allow_html=True)
-    st.progress(step / 7)
     main_col, side_col = st.columns([2.15, 1.0], gap="large")
     with main_col:
         if step == 1:
@@ -2998,8 +3124,19 @@ elif page == "Projects":
             with f2:
                 st.session_state["wizard_review_mode"] = st.selectbox("Report Mode", ["Architect / Professional", "Homeowner Summary"], index=["Architect / Professional", "Homeowner Summary"].index(st.session_state.get("wizard_review_mode", "Architect / Professional")))
                 st.caption("Tailored output for architects, agents and professionals.")
-            st.markdown("<hr style='border-color:var(--sy-border);margin:1.25rem 0;'>", unsafe_allow_html=True)
-            st.caption("Downloads are unlocked using credits. Planning PDF = 3 credits. Building Regs PDF = 5 credits. Word export = 1 credit. Full Planning Statement with PDF = 3 credits. Planning Statement Word = 1 credit.")
+            st.markdown("<hr style='border-color:var(--sy-border);margin:1.7rem 0 1.25rem 0;'>", unsafe_allow_html=True)
+            st.markdown(
+                """
+                <div class="sy-credit-info">
+                    <div class="sy-info-icon">i</div>
+                    <div>
+                        <div style="font-weight:750;margin-bottom:0.25rem;">Downloads are unlocked using credits.</div>
+                        <div class="sy-muted">Planning PDF = 3 credits • Building Regs PDF = 5 credits • Word export = 1 credit.</div>
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
             wizard_buttons()
         elif step == 2:
             step_header(2, "Project details", "Add the basic project and site information used in the report cover, council detection and AI context.")
@@ -3070,7 +3207,7 @@ elif page == "Projects":
             render_report_download_panel(st.session_state.get("active_module", st.session_state.get("wizard_review_module")))
             wizard_buttons()
     with side_col:
-        render_intake_panel()
+        render_intake_panel_v2()
 
 elif page == "Reports":
     st.markdown('<div class="sy-hero"><div class="sy-hero-copy"><h1>Reports</h1><div class="sy-muted">Your generated report library. Download previous Planning and Building Regulations reports again without showing the full report output.</div></div></div>', unsafe_allow_html=True)
