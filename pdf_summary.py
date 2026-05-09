@@ -95,6 +95,8 @@ def apply_target_report_language(report_text: str) -> str:
     if not report_text:
         return report_text
     text = report_text
+    text = text.replace("\u25a0", "-").replace("\uf0b7", "-").replace("\u00a0", " ")
+    text = re.sub(r"\ben\s*[-\u25a0]\s*suite\b", "en-suite", text, flags=re.IGNORECASE)
     replacements = [
         (r"\bappears broadly capable of complying with\b", "appears likely to comply with"),
         (r"\bappears broadly capable of being carried out\b", "appears likely to be carried out"),
@@ -112,6 +114,8 @@ def apply_target_report_language(report_text: str) -> str:
     text = re.sub(r"(?im)^(\s*[-•]?\s*[^:\n]+:\s*)Not shown\s*$", r"\1Not clearly identified in the submitted information", text)
     text = re.sub(r"(?im)^Unknown\s*$", "To be confirmed", text)
     text = re.sub(r"(?im)^Not shown\s*$", "Not clearly identified in the submitted information", text)
+    text = re.sub(r"(?im)^(ROUTE POSITION\s*:?)\s*\n\s*\1\s*$", r"\1", text)
+    text = re.sub(r"(?im)^(ROUTE POSITION\s*:?)\s*\n\s*(ROUTE POSITION\s*:?)\s*\n", r"\1\n", text)
     text = re.sub(r",{2,}", ",", text)
     text = re.sub(r"\s+,", ",", text)
     text = re.sub(r",\s*\.", ".", text)
@@ -1673,20 +1677,39 @@ def infer_planning_statement_mode(report_text: str, sections: Optional[Dict[str,
 
 
 def build_planning_statement_structure(statement_mode: str) -> str:
-    route_section = {
-        "prior_approval": "Compliance with Prior Approval Requirements",
-        "pd": "Permitted Development / Lawful Development Assessment",
-    }.get(statement_mode, "Planning Assessment")
-    return f"""Use this approved-style structure:
-1. Site and Surroundings
-2. Proposal Description
-3. Planning History
-4. Relevant Planning Policy
-5. {route_section}
-6. Design and Character
-7. Residential Amenity
-8. Highways/Parking
-9. Conclusion"""
+    return """Use these exact planning statement sections in this order:
+Site and Surroundings
+Proposal Description
+Planning History
+Relevant Planning Policy
+Design and Character
+Residential Amenity
+Highways and Parking
+Conclusion"""
+
+
+PLANNING_STATEMENT_HEADINGS = [
+    "Site and Surroundings",
+    "Proposal Description",
+    "Planning History",
+    "Relevant Planning Policy",
+    "Design and Character",
+    "Residential Amenity",
+    "Highways and Parking",
+    "Conclusion",
+]
+
+
+def normalise_planning_statement_text(statement_text: str) -> str:
+    text = apply_target_report_language(statement_text or "")
+    text = re.sub(r"(?im)^\s*\d+[\.)]\s*", "", text)
+    text = re.sub(r"(?im)^Highways\s*/\s*Parking\s*$", "Highways and Parking", text)
+    text = re.sub(r"(?im)^Highways\s+and\s+Parking\s*$", "Highways and Parking", text)
+    text = re.sub(r"(?im)^Planning Assessment\s*$", "", text)
+    text = re.sub(r"(?im)^Permitted Development / Lawful Development Assessment\s*$", "", text)
+    text = re.sub(r"(?im)^Compliance with Prior Approval Requirements\s*$", "", text)
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+    return text
 
 
 def generate_planning_statement(
@@ -1736,6 +1759,8 @@ Critical route rules:
 - If statement mode is "pd", write this as a Permitted Development / Lawful Development style statement only where the report clearly indicates that route.
 - If the report refers to side gable, rear dormer and front rooflights, describe that exact combination.
 - Always align the proposal description with the detected report content rather than generic wording.
+- Do not add extra section headings outside the required Planning Statement structure.
+- Where route-specific reasoning is needed, include it naturally under Relevant Planning Policy, Design and Character, Residential Amenity or Conclusion.
 
 Design reasoning rules:
 - If a rear extension is located to the rear of the property and is not visible from the public highway, explain clearly that it would not be visible from the public highway and would therefore not impact the character or appearance of the street scene.
@@ -1767,38 +1792,34 @@ Full report text:
 
     try:
         response = _call_responses_api("gpt-5", prompt)
-        return apply_target_report_language(response.output_text)
+        return normalise_planning_statement_text(response.output_text)
     except Exception:
-        route_heading = {
-            "prior_approval": "5. Compliance with Prior Approval Requirements",
-            "pd": "5. Permitted Development / Lawful Development Assessment",
-        }.get(statement_mode, "5. Planning Assessment")
         fallback_parts = [
-            "1. Site and Surroundings",
+            "Site and Surroundings",
             sections.get("SITE AND PROPOSAL OVERVIEW", "The application site forms part of an established residential setting and should be assessed in that context."),
             "",
-            "2. Proposal Description",
+            "Proposal Description",
             sections.get("PROJECT CLASSIFICATION", "The proposal should be read alongside the submitted drawings and supporting information."),
             "",
-            "3. Planning History",
+            "Planning History",
             "Planning history, permitted development rights, Article 4 status and any relevant conditions should be confirmed before submission.",
             "",
-            "4. Relevant Planning Policy",
-            sections.get("LOCAL AUTHORITY CONTEXT", "The proposal should be assessed against the relevant local and strategic planning policy framework."),
+            "Relevant Planning Policy",
+            "\n\n".join([
+                sections.get("LOCAL AUTHORITY CONTEXT", "The proposal should be assessed against the relevant local and strategic planning policy framework."),
+                sections.get("PD / PRIOR APPROVAL / PLANNING ROUTE", "The likely statutory route should be confirmed before submission."),
+            ]).strip(),
             "",
-            route_heading,
-            sections.get("PD / PRIOR APPROVAL / PLANNING ROUTE", "The likely statutory route should be confirmed before submission."),
-            "",
-            "6. Design and Character",
+            "Design and Character",
             "The proposal should be assessed in the context of the host dwelling and surrounding built form, with regard to scale, visual impact, roof form and relationship to the established pattern of development.",
             "",
-            "7. Residential Amenity",
+            "Residential Amenity",
             "The proposal should be considered with regard to outlook, enclosure, daylight, privacy and relationship to adjoining occupiers.",
             "",
-            "8. Highways/Parking",
+            "Highways and Parking",
             "No highways or parking concerns are identified from the available report information, but any site-specific parking or access changes should be checked before submission.",
             "",
-            "9. Conclusion",
+            "Conclusion",
             sections.get("SUBMISSION READINESS", "Further confirmation of route and supporting information may be required prior to submission."),
         ]
-        return apply_target_report_language("\n".join(fallback_parts))
+        return normalise_planning_statement_text("\n".join(fallback_parts))

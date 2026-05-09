@@ -50,6 +50,7 @@ for key, value in DEFAULT_STATE.items():
 MAX_FILE_SIZE_MB = 20
 MAX_PAGE_COUNT = 30
 STARTER_MONTHLY_REVIEW_LIMIT = 10
+MAX_SAVED_REPORTS = 5
 
 ARCHLENS_API_URL = os.getenv("ARCHLENS_API_URL", "https://archlens-api.onrender.com").rstrip("/")
 ARCHLENS_WEBHOOK_SECRET = os.getenv("ARCHLENS_WEBHOOK_SECRET", "archlens_secure_2026_SYDS_92838")
@@ -58,7 +59,7 @@ EXPORT_CREDIT_COSTS = {
     "planning_pdf": 3,
     "building_pdf": 5,
     "word": 1,
-    "planning_statement_pdf": 2,
+    "planning_statement_pdf": 3,
     "planning_statement_word": 1,
 }
 
@@ -281,15 +282,15 @@ BUILDING_SECTION_ORDER = [
 PLANNING_SECTION_ORDER = [
     ("PROJECT CLASSIFICATION", "Project Classification"),
     ("SITE AND PROPOSAL OVERVIEW", "Site and Proposal Overview"),
-    ("TOP SUMMARY", "Top Summary"),
+    ("TOP SUMMARY", "Executive Summary"),
     ("LOCAL AUTHORITY CONTEXT", "Local Authority Context"),
-    ("PD / PRIOR APPROVAL / PLANNING ROUTE", "PD / Prior Approval / Planning Route"),
-    ("PLANNING ASSESSMENT", "Planning Assessment"),
+    ("PD / PRIOR APPROVAL / PLANNING ROUTE", "Planning Position"),
+    ("PLANNING ASSESSMENT", "Design and Neighbouring Impact"),
     ("DRAWING-PACK INCONSISTENCIES", "Drawing-Pack Inconsistencies"),
-    ("KEY RISKS", "Key Risks"),
+    ("KEY RISKS", "Key Planning Risks"),
     ("MISSING INFORMATION", "Missing Information"),
     ("RECOMMENDED ACTIONS", "Recommended Actions"),
-    ("SUBMISSION READINESS", "Submission Readiness"),
+    ("SUBMISSION READINESS", "Conclusion"),
 ]
 
 BUILDING_SPECIAL_KEY_VALUE_SECTIONS = {
@@ -718,26 +719,46 @@ def get_verified_plan_and_user() -> Tuple[str, str, bool]:
 
 
 def get_allowed_review_modules(plan: str) -> List[str]:
-    return ["Planning Review", "Building Regulations Review"] if plan == "pro" else ["Planning Review"]
+    return ["Planning Review", "Building Regulations Review"]
 
 
 def get_plan_upgrade_message(feature_name: str) -> str:
     return f"{feature_name} is available on Studio. Upgrade to unlock this feature."
 
+def prune_saved_report_state():
+    saved = st.session_state.get("saved_projects", []) or []
+    latest = saved[:MAX_SAVED_REPORTS]
+    st.session_state["saved_projects"] = latest
+
+    active_report_ids = {item.get("report_id") for item in latest if item.get("report_id")}
+    current_report_id = st.session_state.get("report_id")
+    if current_report_id:
+        active_report_ids.add(current_report_id)
+
+    report_library = st.session_state.get("report_library", []) or []
+    if report_library:
+        kept_library = []
+        for item in report_library:
+            report_id = item.get("report_id")
+            if report_id in active_report_ids or len(kept_library) < MAX_SAVED_REPORTS:
+                kept_library.append(item)
+            if len(kept_library) >= MAX_SAVED_REPORTS:
+                break
+        st.session_state["report_library"] = kept_library
+
+    unlocked = st.session_state.get("unlocked_reports", {}) or {}
+    st.session_state["unlocked_reports"] = {
+        key: value for key, value in unlocked.items()
+        if key.split(":", 1)[0] in active_report_ids
+    }
+
+
 def add_saved_project(project_record: Dict):
     saved = st.session_state.get("saved_projects", [])
     filtered = [item for item in saved if item.get("report_id") != project_record.get("report_id")]
     filtered.insert(0, project_record)
-    latest = filtered[:5]
-    st.session_state["saved_projects"] = latest
-    if st.session_state.get("report_library"):
-        st.session_state["report_library"] = (st.session_state.get("report_library") or [])[:5]
-    active_report_ids = {item.get("report_id") for item in latest}
-    unlocked = st.session_state.get("unlocked_reports", {}) or {}
-    st.session_state["unlocked_reports"] = {
-        key: value for key, value in unlocked.items()
-        if key.split(":", 1)[0] in active_report_ids or key.startswith((st.session_state.get("report_id") or "") + ":")
-    }
+    st.session_state["saved_projects"] = filtered
+    prune_saved_report_state()
 
 
 def inject_custom_css():
@@ -883,7 +904,7 @@ def inject_custom_css():
 
         .stDownloadButton button, .stButton button, .stLinkButton a {{ border-radius:14px !important; }}
         .stButton button, .stDownloadButton button, .stLinkButton a {{
-            background: linear-gradient(180deg,#DEC991,#CBB176) !important; color: #111111 !important; border: 1px solid var(--sy-accent) !important;
+            background: #D4C29A !important; color: #111111 !important; border: 1px solid var(--sy-accent) !important;
             box-shadow: 0 12px 26px rgba(212, 194, 154, 0.24) !important; font-weight: 800 !important;
             min-height:44px !important; padding:0.66rem 1rem !important; font-size:0.86rem !important; line-height:1.15 !important;
         }}
@@ -959,7 +980,7 @@ def inject_custom_css():
             padding-right: 1.15rem !important;
         }}
         .sy-sidebar-brand {{ display:flex; align-items:center; gap:0.95rem; margin:0.1rem 0 1.35rem 0; }}
-        .sy-sidebar-brand img {{ width:72px; height:72px; object-fit:contain; border-radius:16px; filter:drop-shadow(0 10px 20px rgba(212,194,154,0.12)); }}
+        .sy-sidebar-brand img {{ width:84px; height:84px; object-fit:contain; border-radius:16px; filter:drop-shadow(0 10px 20px rgba(212,194,154,0.12)); }}
         .sy-sidebar-brand-title {{ font-weight:850; font-size:1.16rem; line-height:1.12; }}
         .sy-sidebar-brand-subtitle {{ font-size:0.80rem; color:var(--sy-muted); margin-top:0.24rem; }}
         .sy-sidebar-account {{ border:1px solid rgba(212,194,154,0.16); background:rgba(18,24,33,0.82); border-radius:14px; padding:0.85rem; margin:0 0 1.35rem 0; }}
@@ -980,7 +1001,7 @@ def inject_custom_css():
         .sy-project-hero {{ border:1px solid var(--sy-border); background:rgba(18,24,33,0.92); border-radius:18px; padding:1.45rem 1.55rem; margin-bottom:1rem; box-shadow: var(--sy-card-shadow); }}
         .sy-project-hero-row {{ display:flex; align-items:flex-start; justify-content:space-between; gap:1rem; }}
         .sy-project-hero h1 {{ font-size:1.75rem !important; margin:0 0 0.55rem 0 !important; }}
-        .sy-new-project-btn {{ display:inline-flex; align-items:center; gap:0.45rem; justify-content:center; min-width:132px; padding:0.66rem 1rem; border-radius:10px; background:linear-gradient(180deg,#DEC991,#CBB176); color:#111 !important; font-weight:800; font-size:0.86rem; box-shadow:0 12px 26px rgba(212,194,154,0.26); }}
+        .sy-new-project-btn {{ display:inline-flex; align-items:center; gap:0.45rem; justify-content:center; min-width:132px; padding:0.66rem 1rem; border-radius:10px; background:#D4C29A; color:#111 !important; font-weight:800; font-size:0.86rem; box-shadow:0 12px 26px rgba(212,194,154,0.26); }}
         .sy-step-row {{ display:grid; grid-template-columns:repeat(5, 1fr); gap:1rem; padding:0.95rem 0 1.05rem 0; border-top:1px solid var(--sy-border); border-bottom:1px solid var(--sy-border); margin-bottom:1.05rem; }}
         .sy-step-item {{ display:flex; align-items:center; gap:0.68rem; opacity:0.62; }}
         .sy-step-item.active {{ opacity:1; }}
@@ -998,7 +1019,7 @@ def inject_custom_css():
         .sy-file-icon {{ color:#F0B5FF; font-size:1rem; line-height:1; }}
         .sy-footer {{ text-align:center; color:var(--sy-muted); font-size:0.72rem; margin-top:1.2rem; }}
         .stButton button, .stDownloadButton button, .stLinkButton a {{ border-radius:10px !important; color:#111111 !important; }}
-        .stLinkButton a[href*="category"], .stLinkButton a[href*="pricing"] {{ background:rgba(255,255,255,0.04) !important; color:var(--sy-accent) !important; border:1px solid var(--sy-border) !important; box-shadow:none !important; }}
+        .stLinkButton a[href*="category"], .stLinkButton a[href*="pricing"] {{ background:#D4C29A !important; color:#111111 !important; border:1px solid #D4C29A !important; box-shadow:0 12px 26px rgba(212,194,154,0.22) !important; }}
         [data-testid="stSidebar"] [data-testid="stLinkButton"] a,
         [data-testid="stSidebar"] [data-testid="stLinkButton"] a[href*="category"],
         [data-testid="stSidebar"] [data-testid="stLinkButton"] a[href*="pricing"] {{
@@ -1101,6 +1122,27 @@ def clean_input_value(value, fallback):
         return fallback
     return cleaned
 
+
+def clean_client_report_text(text: str) -> str:
+    """Remove common extraction artefacts without changing report substance."""
+    if not text:
+        return text
+    cleaned = str(text)
+    replacements = {
+        "\u25a0": "-",
+        "\uf0b7": "-",
+        "\u2022": "-",
+        "\u2013": "-",
+        "\u2014": "-",
+        "\u00a0": " ",
+    }
+    for old, new in replacements.items():
+        cleaned = cleaned.replace(old, new)
+    cleaned = re.sub(r"\ben\s*[-\u25a0]\s*suite\b", "en-suite", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"(?im)^(ROUTE POSITION\s*:?)\s*\n\s*\1\s*$", r"\1", cleaned)
+    cleaned = re.sub(r"(?im)^(ROUTE POSITION\s*:?)\s*\n\s*(ROUTE POSITION\s*:?)\s*\n", r"\1\n", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
 
 
 
@@ -1362,10 +1404,10 @@ def build_pdf_report(file_name, address, client, date, practice_name, report_id,
     buffer = BytesIO()
     c = canvas.Canvas(buffer, pagesize=A4)
     width, height = A4
-    left_margin = 48
-    right_margin = 48
-    top_margin = 58
-    bottom_margin = 48
+    left_margin = 54
+    right_margin = 54
+    top_margin = 62
+    bottom_margin = 54
     usable_width = width - left_margin - right_margin
     y = height - top_margin
     page_no = 0
@@ -1551,9 +1593,11 @@ def build_pdf_report(file_name, address, client, date, practice_name, report_id,
 
     def draw_paragraph(text, indent=0, bullet=False, font_size=10.2):
         nonlocal y
+        text = clean_client_report_text(text)
         max_w = usable_width - indent - (16 if bullet else 0)
         lines = wrap_text(text, "Helvetica", font_size, max_w)
-        ensure_space(len(lines) * 14 + 12)
+        line_height = font_size + 4.8
+        ensure_space(len(lines) * line_height + 12)
         c.setFont("Helvetica", font_size)
         c.setFillColor(colors.HexColor("#3F3F3F"))
         if bullet:
@@ -1565,8 +1609,8 @@ def build_pdf_report(file_name, address, client, date, practice_name, report_id,
             x = left_margin + indent
         for line in lines:
             c.drawString(x, y, line)
-            y -= 14
-        y -= 5
+            y -= line_height
+        y -= 6
 
     def draw_key_value_section(content):
         nonlocal y
@@ -1592,6 +1636,7 @@ def build_pdf_report(file_name, address, client, date, practice_name, report_id,
                 draw_paragraph(value)
 
     def draw_text_section(content):
+        content = clean_client_report_text(content)
         if not content or not content.strip():
             draw_paragraph("Not detected")
             return
@@ -1678,7 +1723,7 @@ def build_pdf_report(file_name, address, client, date, practice_name, report_id,
     draw_footer()
 
     for idx, (key, title) in enumerate(section_order, start=1):
-        content = sections.get(key, "Not detected")
+        content = clean_client_report_text(sections.get(key, "Not detected"))
         draw_section_heading(idx, title)
         if module_name == "Building Regulations Review" and key == "COMPLIANCE STATUS BY APPROVED DOCUMENT":
             draw_compliance_table(content)
@@ -1857,6 +1902,16 @@ def clean_summary_fallback(value: str, fallback: str) -> str:
     return cleaned
 
 
+def clean_summary_card_text(value: str, fallback: str) -> str:
+    cleaned = clean_summary_fallback(value, fallback)
+    cleaned = re.sub(r"(?im)(:\s*)Unknown\b", r"\1To be confirmed", cleaned)
+    cleaned = re.sub(r"(?im)(:\s*)Not shown\b", r"\1Not clearly identified in the submitted information", cleaned)
+    cleaned = re.sub(r"(?im)(:\s*)Not detected\b", r"\1To be confirmed from the drawing pack", cleaned)
+    cleaned = re.sub(r"(?im)^Unknown$", fallback, cleaned)
+    cleaned = re.sub(r"(?im)^Not shown$", fallback, cleaned)
+    return cleaned
+
+
 def first_present_row(rows: Dict[str, str], keys: List[str], fallback: str) -> str:
     for key in keys:
         value = clean_summary_fallback(rows.get(key.upper(), ""), "")
@@ -1900,7 +1955,11 @@ def extract_summary_values(sections: Dict[str, str], module_name: str):
             authority = clean_summary_fallback(detect_local_authority_for_display(st.session_state.get("wizard_project_address", ""), st.session_state.get("wizard_proposal_summary", "")), "Local authority to be confirmed")
         readiness_rows = {k.upper(): v for k, v in parse_key_value_lines(sections.get("SUBMISSION READINESS", "")) if k}
         readiness = first_present_row(readiness_rows, ["STATUS", "SUBMISSION READINESS"], "Further information recommended")
-        risk = infer_section_signal(risk_text, ["HIGH", "MEDIUM", "LOW"], "Risk to be confirmed")
+        risk = infer_section_signal(
+            f"{risk_text}\n{sections.get('TOP SUMMARY', '')}",
+            ["HIGH", "MEDIUM", "LOW"],
+            "Risk to be confirmed",
+        )
         return {
             "risk": risk,
             "route": clean_summary_fallback(route, "Planning route to be confirmed"),
@@ -1926,7 +1985,7 @@ def detect_local_authority_for_display(project_address: str, proposal_summary: s
 
 
 def render_summary_card(title: str, content: str, fallback: str):
-    clean_content = clean_summary_fallback(content, fallback)
+    clean_content = clean_summary_card_text(content, fallback)
     safe_content = html.escape(clean_content).replace("\n", "<br>")
     st.markdown(
         f"""
@@ -2298,7 +2357,7 @@ def render_left_navigation():
             st.markdown(
                 """
                 <div class="sy-sidebar-brand">
-                    <div style="width:68px;height:68px;border-radius:16px;border:1px solid rgba(212,194,154,0.25);display:flex;align-items:center;justify-content:center;color:#D4C29A;font-weight:900;box-shadow:0 10px 20px rgba(212,194,154,0.10);">AL</div>
+                <div style="width:84px;height:84px;border-radius:16px;border:1px solid rgba(212,194,154,0.25);display:flex;align-items:center;justify-content:center;color:#D4C29A;font-weight:900;box-shadow:0 10px 20px rgba(212,194,154,0.10);">AL</div>
                     <div>
                         <div class="sy-sidebar-brand-title">ArchLens AI</div>
                         <div class="sy-sidebar-brand-subtitle">by SY Design Studio</div>
@@ -2468,9 +2527,6 @@ def run_archlens_analysis(uploaded_files):
     )
     config = MODULE_CONFIG[review_module]
 
-    if current_plan == "starter" and review_module == "Building Regulations Review":
-        st.warning(get_plan_upgrade_message("Building Regulations Review"))
-        st.stop()
     if current_plan == "starter" and st.session_state.get("starter_review_count", 0) >= STARTER_MONTHLY_REVIEW_LIMIT:
         st.error("You have reached your 10 monthly reviews on Solo. Upgrade to Studio for unlimited project reviews.")
         st.stop()
@@ -2591,6 +2647,7 @@ def run_archlens_analysis(uploaded_files):
             st.error(f"AI report validation failed. Missing headings: {', '.join(missing)}")
             st.stop()
 
+        report = clean_client_report_text(report)
         sections = parse_report_sections(report, config["required_headings"])
         extracted_report_address = extract_address_from_report(report, "Not provided")
         clean_project_address = clean_input_value(project_address, extracted_report_address)
@@ -2647,6 +2704,7 @@ def update_saved_project(report_id: str, updates: Dict):
         if item.get("report_id") == report_id:
             item.update(updates)
             break
+    prune_saved_report_state()
 
 
 def render_planning_statement_panel(report_id: str):
@@ -2666,7 +2724,7 @@ def render_planning_statement_panel(report_id: str):
                 local_authority=authority,
                 review_mode=st.session_state.get("wizard_review_mode", "Architect / Professional"),
             )
-            statement_text = pdf_summary.apply_target_report_language(statement_text)
+            statement_text = pdf_summary.normalise_planning_statement_text(statement_text)
             st.session_state["planning_statement_text"] = statement_text
             st.session_state["planning_statement_pdf_file"] = build_simple_pdf_doc("Planning Statement", statement_text, report_id)
             st.session_state["planning_statement_word_file"] = build_simple_word_doc("Planning Statement", statement_text)
@@ -2826,7 +2884,7 @@ elif page == "Projects":
                 st.session_state["wizard_review_mode"] = st.selectbox("Report Mode", ["Architect / Professional", "Homeowner Summary"], index=["Architect / Professional", "Homeowner Summary"].index(st.session_state.get("wizard_review_mode", "Architect / Professional")))
                 st.caption("Tailored output for architects, agents and professionals.")
             st.markdown("<hr style='border-color:var(--sy-border);margin:1.25rem 0;'>", unsafe_allow_html=True)
-            st.caption("Downloads are unlocked using credits. Planning PDF = 3 credits. Building Regs PDF = 5 credits. Word export = 1 credit. Planning Statement PDF = 2 credits.")
+            st.caption("Downloads are unlocked using credits. Planning PDF = 3 credits. Building Regs PDF = 5 credits. Word export = 1 credit. Planning Statement PDF = 3 credits. Planning Statement Word = 1 credit.")
             wizard_buttons()
         elif step == 2:
             step_header(2, "Project details", "Add the basic project and site information used in the report cover, council detection and AI context.")
