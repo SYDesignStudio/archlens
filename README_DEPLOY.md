@@ -13,6 +13,12 @@ Build command:
 Start command:
 `streamlit run app.py --server.port $PORT --server.address 0.0.0.0`
 
+Required environment variables:
+- `OPENAI_API_KEY`
+- `ARCHLENS_API_URL`
+- `ARCHLENS_WEBHOOK_SECRET`
+- `ADMIN_EMAILS=salman@sydesignstudio.co.uk,info@sydesignstudio.co.uk`
+
 ## Website deployment
 Host ArchLens AI on a subdomain such as:
 `archlens.sydesignstudio.co.uk`

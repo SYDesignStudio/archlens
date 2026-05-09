@@ -1,8 +1,9 @@
 import json
 import os
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
@@ -46,8 +47,54 @@ class AdminCreditRequest(BaseModel):
     reason: str = "manual_adjustment"
 
 
+class AdminAdjustCreditRequest(BaseModel):
+    email: str
+    action: str
+    credits: int
+    reason: str
+    admin_email: Optional[str] = ""
+
+
+class ReportRecordRequest(BaseModel):
+    email: str
+    plan: str = ""
+    report_id: str = ""
+    project_name: str = ""
+    project_address: str = ""
+    report_type: str = ""
+    credits_used: int = 0
+    download_path: str = ""
+    status: str = "generated"
+
+
+class UserActivityRequest(BaseModel):
+    email: str
+    plan: str = ""
+    status: str = "active"
+
+
+class AdminUserStatusRequest(BaseModel):
+    email: str
+    status: str
+    reason: str
+
+
 def normalise_email(email: str) -> str:
     return str(email or "").strip().lower()
+
+
+def is_valid_email(email: str) -> bool:
+    clean = normalise_email(email)
+    return "@" in clean and "." in clean.split("@")[-1]
+
+
+def utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def configured_admin_emails() -> set:
+    raw = os.getenv("ADMIN_EMAILS", "")
+    return {normalise_email(item) for item in raw.split(",") if normalise_email(item)}
 
 
 def default_store() -> Dict:
@@ -56,6 +103,10 @@ def default_store() -> Dict:
         "processed_orders": [],
         "processed_unlocks": [],
         "transactions": [],
+        "reports": [],
+        "user_meta": {},
+        "audit_log": [],
+        "errors": [],
     }
 
 
@@ -76,6 +127,10 @@ def load_store() -> Dict:
     data.setdefault("processed_orders", [])
     data.setdefault("processed_unlocks", [])
     data.setdefault("transactions", [])
+    data.setdefault("reports", [])
+    data.setdefault("user_meta", {})
+    data.setdefault("audit_log", [])
+    data.setdefault("errors", [])
     return data
 
 
@@ -105,9 +160,34 @@ def add_transaction(store: Dict, email: str, amount: int, balance_after: int, re
             "reason": reason,
             "source": source,
             "reference": reference,
+            "timestamp": utc_now(),
         },
     )
     store["transactions"] = transactions[:500]
+
+
+def update_user_meta(store: Dict, email: str, plan: str = "", status: str = "") -> None:
+    clean_email = normalise_email(email)
+    if not clean_email:
+        return
+    meta = store.setdefault("user_meta", {}).get(clean_email, {})
+    if plan:
+        meta["plan"] = plan
+    if status:
+        meta["status"] = status
+    else:
+        meta.setdefault("status", "active")
+    meta["last_activity"] = utc_now()
+    store.setdefault("user_meta", {})[clean_email] = meta
+
+
+def verify_admin_access(x_archlens_secret: str, x_archlens_admin_email: str) -> str:
+    verify_secret(x_archlens_secret)
+    clean_admin = normalise_email(x_archlens_admin_email)
+    admins = configured_admin_emails()
+    if not admins or clean_admin not in admins:
+        raise HTTPException(status_code=403, detail="Admin access denied")
+    return clean_admin
 
 
 def verify_secret(x_archlens_secret: str) -> None:
@@ -127,9 +207,13 @@ def health_check():
 @app.get("/user/{email}")
 def get_user_credits(email: str):
     clean_email = normalise_email(email)
+    with STORE_LOCK:
+        store = load_store()
+        status = store.get("user_meta", {}).get(clean_email, {}).get("status", "active")
     return {
         "email": clean_email,
         "credits": get_balance_from_store(clean_email),
+        "status": status,
     }
 
 
@@ -149,6 +233,51 @@ def get_user_transactions(email: str, x_archlens_secret: str = Header(default=""
         "email": clean_email,
         "transactions": txs,
     }
+
+
+@app.post("/internal/user-activity")
+def record_user_activity(payload: UserActivityRequest, x_archlens_secret: str = Header(default="")):
+    verify_secret(x_archlens_secret)
+    clean_email = normalise_email(payload.email)
+    if not is_valid_email(clean_email):
+        raise HTTPException(status_code=400, detail="Valid email is required")
+    with STORE_LOCK:
+        store = load_store()
+        store.setdefault("users", {}).setdefault(clean_email, 0)
+        existing_status = store.get("user_meta", {}).get(clean_email, {}).get("status", "")
+        activity_status = payload.status if existing_status not in {"suspended"} else existing_status
+        update_user_meta(store, clean_email, payload.plan, activity_status)
+        save_store(store)
+    return {"success": True, "email": clean_email}
+
+
+@app.post("/internal/report-generation")
+def record_report_generation(payload: ReportRecordRequest, x_archlens_secret: str = Header(default="")):
+    verify_secret(x_archlens_secret)
+    clean_email = normalise_email(payload.email)
+    if not is_valid_email(clean_email):
+        raise HTTPException(status_code=400, detail="Valid email is required")
+    with STORE_LOCK:
+        store = load_store()
+        store.setdefault("users", {}).setdefault(clean_email, 0)
+        update_user_meta(store, clean_email, payload.plan)
+        reports = store.setdefault("reports", [])
+        record = {
+            "email": clean_email,
+            "plan": payload.plan,
+            "report_id": str(payload.report_id or ""),
+            "project_name": str(payload.project_name or payload.project_address or "Untitled project"),
+            "project_address": str(payload.project_address or ""),
+            "report_type": str(payload.report_type or "Report"),
+            "credits_used": int(payload.credits_used or 0),
+            "download_path": str(payload.download_path or ""),
+            "status": str(payload.status or "generated"),
+            "timestamp": utc_now(),
+        }
+        reports.insert(0, record)
+        store["reports"] = reports[:1000]
+        save_store(store)
+    return {"success": True, "report": record}
 
 
 @app.post("/api/wix/add-credits")
@@ -190,6 +319,7 @@ def add_credits(payload: CreditRequest, x_archlens_secret: str = Header(default=
         new_balance = current_balance + credits_to_add
 
         store["users"][clean_email] = new_balance
+        update_user_meta(store, clean_email)
         store.setdefault("processed_orders", []).append(order_id)
         add_transaction(
             store,
@@ -260,6 +390,7 @@ def deduct_credits(payload: DeductCreditRequest, x_archlens_secret: str = Header
 
         new_balance = current_balance - credits_to_deduct
         store["users"][clean_email] = new_balance
+        update_user_meta(store, clean_email)
         add_transaction(
             store,
             clean_email,
@@ -292,29 +423,241 @@ def deduct_credits(payload: DeductCreditRequest, x_archlens_secret: str = Header
     }
 
 
+@app.get("/admin/summary")
+def admin_summary(
+    x_archlens_secret: str = Header(default=""),
+    x_archlens_admin_email: str = Header(default=""),
+):
+    verify_admin_access(x_archlens_secret, x_archlens_admin_email)
+    with STORE_LOCK:
+        store = load_store()
+        users = store.get("users", {})
+        user_meta = store.get("user_meta", {})
+        transactions = store.get("transactions", [])
+        reports = store.get("reports", [])
+        errors = store.get("errors", [])
+        active_plans: Dict[str, int] = {}
+        for email in users:
+            plan = str(user_meta.get(email, {}).get("plan") or "Unknown")
+            active_plans[plan] = active_plans.get(plan, 0) + 1
+        credits_used = sum(abs(int(tx.get("amount", 0) or 0)) for tx in transactions if int(tx.get("amount", 0) or 0) < 0)
+    return {
+        "total_users": len(users),
+        "total_reports_generated": len(reports),
+        "credits_used": credits_used,
+        "active_plans": active_plans,
+        "recent_report_generations": reports[:10],
+        "recent_credit_changes": transactions[:20],
+        "recent_errors": errors[:10],
+    }
+
+
+@app.get("/admin/users")
+def admin_users(
+    x_archlens_secret: str = Header(default=""),
+    x_archlens_admin_email: str = Header(default=""),
+):
+    verify_admin_access(x_archlens_secret, x_archlens_admin_email)
+    with STORE_LOCK:
+        store = load_store()
+        users = store.get("users", {})
+        user_meta = store.get("user_meta", {})
+        reports = store.get("reports", [])
+        report_counts: Dict[str, int] = {}
+        for report in reports:
+            email = normalise_email(report.get("email", ""))
+            report_counts[email] = report_counts.get(email, 0) + 1
+        rows = []
+        for email, credits in sorted(users.items()):
+            meta = user_meta.get(email, {})
+            rows.append(
+                {
+                    "email": email,
+                    "plan": meta.get("plan", "Unknown"),
+                    "credits": int(credits or 0),
+                    "last_activity": meta.get("last_activity", ""),
+                    "status": meta.get("status", "active"),
+                    "reports_generated": report_counts.get(email, 0),
+                }
+            )
+    return {"users": rows}
+
+
+@app.get("/admin/reports")
+def admin_reports(
+    x_archlens_secret: str = Header(default=""),
+    x_archlens_admin_email: str = Header(default=""),
+):
+    verify_admin_access(x_archlens_secret, x_archlens_admin_email)
+    with STORE_LOCK:
+        store = load_store()
+        reports = store.get("reports", [])[:500]
+    return {"reports": reports}
+
+
+@app.get("/admin/audit-log")
+def admin_audit_log(
+    x_archlens_secret: str = Header(default=""),
+    x_archlens_admin_email: str = Header(default=""),
+):
+    verify_admin_access(x_archlens_secret, x_archlens_admin_email)
+    with STORE_LOCK:
+        store = load_store()
+        audit_log = store.get("audit_log", [])[:500]
+    return {"audit_log": audit_log}
+
+
+@app.post("/admin/credits/adjust")
+def admin_adjust_credits(
+    payload: AdminAdjustCreditRequest,
+    x_archlens_secret: str = Header(default=""),
+    x_archlens_admin_email: str = Header(default=""),
+):
+    admin_email = verify_admin_access(x_archlens_secret, x_archlens_admin_email or payload.admin_email or "")
+    clean_email = normalise_email(payload.email)
+    action = str(payload.action or "").strip().lower()
+    credits_value = int(payload.credits or 0)
+    reason = str(payload.reason or "").strip()
+
+    if not is_valid_email(clean_email):
+        raise HTTPException(status_code=400, detail="Valid target email is required")
+    if action not in {"add", "remove", "set"}:
+        raise HTTPException(status_code=400, detail="Action must be add, remove, or set")
+    if credits_value < 0:
+        raise HTTPException(status_code=400, detail="Credits must be zero or greater")
+    if action in {"add", "remove"} and credits_value == 0:
+        raise HTTPException(status_code=400, detail="Credit change cannot be zero")
+    if not reason:
+        raise HTTPException(status_code=400, detail="Reason is required")
+
+    with STORE_LOCK:
+        store = load_store()
+        current_balance = int(store.setdefault("users", {}).get(clean_email, 0) or 0)
+        if action == "add":
+            new_balance = current_balance + credits_value
+            change_amount = credits_value
+        elif action == "remove":
+            new_balance = current_balance - credits_value
+            if new_balance < 0:
+                raise HTTPException(status_code=400, detail="Credit adjustment would create a negative balance")
+            change_amount = -credits_value
+        else:
+            new_balance = credits_value
+            change_amount = new_balance - current_balance
+
+        store["users"][clean_email] = new_balance
+        update_user_meta(store, clean_email)
+        add_transaction(
+            store,
+            clean_email,
+            change_amount,
+            new_balance,
+            reason=f"admin_{action}: {reason}",
+            source="admin",
+            reference=admin_email,
+        )
+        audit_entry = {
+            "admin_email": admin_email,
+            "target_user_email": clean_email,
+            "previous_credits": current_balance,
+            "new_credits": new_balance,
+            "change_amount": change_amount,
+            "reason": reason,
+            "action": action,
+            "timestamp": utc_now(),
+        }
+        audit_log = store.setdefault("audit_log", [])
+        audit_log.insert(0, audit_entry)
+        store["audit_log"] = audit_log[:1000]
+        save_store(store)
+
+    return {
+        "success": True,
+        "email": clean_email,
+        "previous_credits": current_balance,
+        "new_credits": new_balance,
+        "change_amount": change_amount,
+        "reason": reason,
+    }
+
+
+@app.post("/admin/users/status")
+def admin_set_user_status(
+    payload: AdminUserStatusRequest,
+    x_archlens_secret: str = Header(default=""),
+    x_archlens_admin_email: str = Header(default=""),
+):
+    admin_email = verify_admin_access(x_archlens_secret, x_archlens_admin_email)
+    clean_email = normalise_email(payload.email)
+    status = str(payload.status or "").strip().lower()
+    reason = str(payload.reason or "").strip()
+
+    if not is_valid_email(clean_email):
+        raise HTTPException(status_code=400, detail="Valid target email is required")
+    if status not in {"active", "suspended"}:
+        raise HTTPException(status_code=400, detail="Status must be active or suspended")
+    if not reason:
+        raise HTTPException(status_code=400, detail="Reason is required")
+
+    with STORE_LOCK:
+        store = load_store()
+        store.setdefault("users", {}).setdefault(clean_email, 0)
+        meta = store.setdefault("user_meta", {}).get(clean_email, {})
+        previous_status = meta.get("status", "active")
+        meta["status"] = status
+        meta["last_activity"] = utc_now()
+        store.setdefault("user_meta", {})[clean_email] = meta
+        audit_entry = {
+            "admin_email": admin_email,
+            "target_user_email": clean_email,
+            "previous_status": previous_status,
+            "new_status": status,
+            "reason": reason,
+            "action": "status_update",
+            "timestamp": utc_now(),
+        }
+        audit_log = store.setdefault("audit_log", [])
+        audit_log.insert(0, audit_entry)
+        store["audit_log"] = audit_log[:1000]
+        save_store(store)
+
+    return {
+        "success": True,
+        "email": clean_email,
+        "previous_status": previous_status,
+        "status": status,
+        "reason": reason,
+    }
+
+
 @app.post("/admin/add-credits")
-def admin_add_credits(payload: AdminCreditRequest, x_archlens_secret: str = Header(default="")):
+def admin_add_credits(
+    payload: AdminCreditRequest,
+    x_archlens_secret: str = Header(default=""),
+    x_archlens_admin_email: str = Header(default=""),
+):
     """
     Protected manual restore/top-up endpoint.
     Use this to restore credits already purchased if a Wix event failed before automation was fixed.
     """
-    verify_secret(x_archlens_secret)
+    admin_email = verify_admin_access(x_archlens_secret, x_archlens_admin_email)
 
     clean_email = normalise_email(payload.email)
     credits_to_add = int(payload.credits or 0)
 
-    if not clean_email:
-        raise HTTPException(status_code=400, detail="Email is required")
+    if not is_valid_email(clean_email):
+        raise HTTPException(status_code=400, detail="Valid email is required")
 
-    if credits_to_add == 0:
-        raise HTTPException(status_code=400, detail="Credits cannot be zero")
+    if credits_to_add <= 0:
+        raise HTTPException(status_code=400, detail="Credits must be greater than zero")
 
     with STORE_LOCK:
         store = load_store()
         current_balance = int(store["users"].get(clean_email, 0) or 0)
-        new_balance = max(0, current_balance + credits_to_add)
+        new_balance = current_balance + credits_to_add
 
         store["users"][clean_email] = new_balance
+        update_user_meta(store, clean_email)
         add_transaction(
             store,
             clean_email,
@@ -322,8 +665,23 @@ def admin_add_credits(payload: AdminCreditRequest, x_archlens_secret: str = Head
             new_balance,
             reason=payload.reason,
             source="admin",
-            reference="manual",
+            reference=admin_email,
         )
+        audit_log = store.setdefault("audit_log", [])
+        audit_log.insert(
+            0,
+            {
+                "admin_email": admin_email,
+                "target_user_email": clean_email,
+                "previous_credits": current_balance,
+                "new_credits": new_balance,
+                "change_amount": new_balance - current_balance,
+                "reason": payload.reason,
+                "action": "add",
+                "timestamp": utc_now(),
+            },
+        )
+        store["audit_log"] = audit_log[:1000]
         save_store(store)
 
     return {
@@ -337,10 +695,19 @@ def admin_add_credits(payload: AdminCreditRequest, x_archlens_secret: str = Head
 
 
 @app.get("/admin/restore/{email}/{credits}")
-def admin_restore_credits(email: str, credits: int, x_archlens_secret: str = Header(default="")):
+def admin_restore_credits(
+    email: str,
+    credits: int,
+    x_archlens_secret: str = Header(default=""),
+    x_archlens_admin_email: str = Header(default=""),
+):
     """
     Protected browser-friendly restore endpoint.
     This requires the x-archlens-secret header, so use Postman/curl for security.
     """
     payload = AdminCreditRequest(email=email, credits=credits, reason="manual_restore")
-    return admin_add_credits(payload, x_archlens_secret=x_archlens_secret)
+    return admin_add_credits(
+        payload,
+        x_archlens_secret=x_archlens_secret,
+        x_archlens_admin_email=x_archlens_admin_email,
+    )

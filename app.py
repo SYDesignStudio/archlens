@@ -55,6 +55,11 @@ MAX_SAVED_REPORTS = 5
 ARCHLENS_API_URL = os.getenv("ARCHLENS_API_URL", "https://archlens-api.onrender.com").rstrip("/")
 ARCHLENS_WEBHOOK_SECRET = os.getenv("ARCHLENS_WEBHOOK_SECRET", "archlens_secure_2026_SYDS_92838")
 ARCHLENS_BUY_CREDITS_URL = os.getenv("ARCHLENS_BUY_CREDITS_URL", "https://www.sydesignstudio.co.uk/category/archlens-ai-credits")
+ADMIN_EMAILS = {
+    str(item or "").strip().lower()
+    for item in os.getenv("ADMIN_EMAILS", "").split(",")
+    if str(item or "").strip().lower()
+}
 EXPORT_CREDIT_COSTS = {
     "planning_pdf": 3,
     "building_pdf": 5,
@@ -109,6 +114,7 @@ def api_get_credit_balance(email: str):
         )
         if response.status_code == 200:
             data = response.json()
+            st.session_state["account_status"] = str(data.get("status", "active") or "active").lower()
             return int(data.get("credits", 0) or 0)
     except Exception as exc:
         print("Credit balance API error:", exc)
@@ -166,6 +172,97 @@ def api_deduct_credits(email: str, credits: int, report_id: str, export_type: st
     except Exception as exc:
         st.session_state["credit_api_error"] = "Credit API unavailable; keeping previous balance."
         return False, f"Credit API unavailable. Your previous balance is still shown. ({exc})", st.session_state.get("credit_balance")
+
+
+def is_admin_user(email: str) -> bool:
+    clean_email = normalise_user_email(email)
+    return bool(clean_email and clean_email in ADMIN_EMAILS)
+
+
+def admin_api_headers(admin_email: str) -> Dict[str, str]:
+    return {
+        "x-archlens-secret": ARCHLENS_WEBHOOK_SECRET,
+        "x-archlens-admin-email": normalise_user_email(admin_email),
+    }
+
+
+def admin_api_get(path: str):
+    try:
+        response = requests.get(
+            f"{ARCHLENS_API_URL}{path}",
+            headers=admin_api_headers(current_user_name),
+            timeout=12,
+        )
+        if response.status_code == 200:
+            return response.json(), ""
+        try:
+            detail = response.json().get("detail", "")
+        except Exception:
+            detail = response.text
+        return None, detail or f"Admin API returned {response.status_code}"
+    except Exception as exc:
+        return None, f"Admin API unavailable: {exc}"
+
+
+def admin_api_post(path: str, payload: Dict):
+    try:
+        response = requests.post(
+            f"{ARCHLENS_API_URL}{path}",
+            json=payload,
+            headers=admin_api_headers(current_user_name),
+            timeout=12,
+        )
+        if response.status_code == 200:
+            return response.json(), ""
+        try:
+            detail = response.json().get("detail", "")
+        except Exception:
+            detail = response.text
+        return None, detail or f"Admin API returned {response.status_code}"
+    except Exception as exc:
+        return None, f"Admin API unavailable: {exc}"
+
+
+def api_record_user_activity(email: str, plan: str):
+    clean_email = normalise_user_email(email)
+    if not is_valid_email(clean_email) or st.session_state.get("activity_recorded_for") == clean_email:
+        return
+    try:
+        response = requests.post(
+            f"{ARCHLENS_API_URL}/internal/user-activity",
+            json={"email": clean_email, "plan": plan, "status": "active"},
+            headers={"x-archlens-secret": ARCHLENS_WEBHOOK_SECRET},
+            timeout=8,
+        )
+        if response.status_code == 200:
+            st.session_state["activity_recorded_for"] = clean_email
+    except Exception as exc:
+        print("User activity API error:", exc)
+
+
+def api_record_report_generation(record: Dict):
+    clean_email = normalise_user_email(current_user_name)
+    if not is_valid_email(clean_email):
+        return
+    try:
+        requests.post(
+            f"{ARCHLENS_API_URL}/internal/report-generation",
+            json={
+                "email": clean_email,
+                "plan": current_plan,
+                "report_id": record.get("report_id", ""),
+                "project_name": record.get("project_address", "") or record.get("filename", ""),
+                "project_address": record.get("project_address", ""),
+                "report_type": record.get("module", ""),
+                "credits_used": 0,
+                "download_path": record.get("filename", ""),
+                "status": "generated",
+            },
+            headers={"x-archlens-secret": ARCHLENS_WEBHOOK_SECRET},
+            timeout=8,
+        )
+    except Exception as exc:
+        print("Report generation API error:", exc)
 
 
 def get_credit_balance() -> int:
@@ -2306,6 +2403,10 @@ current_plan = st.session_state.get("auth_plan", "starter")
 current_user_name = st.session_state.get("auth_user_name", "")
 if current_user_name:
     sync_credit_balance_from_api(current_user_name)
+    if st.session_state.get("account_status") == "suspended":
+        st.error("Your ArchLens account is currently suspended. Please contact SY Design Studio support.")
+        st.stop()
+    api_record_user_activity(current_user_name, current_plan)
 allowed_review_modules = get_allowed_review_modules(current_plan)
 
 # -------------------------------
@@ -2464,7 +2565,19 @@ def render_left_navigation():
             "▤  Reports": "Reports",
             "⚙  Settings": "Settings",
         }
+        if is_admin_user(current_user_name):
+            nav_options["✦  Admin"] = "Admin"
         current_page = st.session_state.get("app_page", "Projects")
+        try:
+            requested_page = str(st.query_params.get("page", "")).strip().lower()
+        except Exception:
+            requested_page = ""
+        if requested_page == "admin" and is_admin_user(current_user_name):
+            current_page = "Admin"
+            st.session_state["app_page"] = "Admin"
+        if current_page == "Admin" and not is_admin_user(current_user_name):
+            current_page = "Projects"
+            st.session_state["app_page"] = "Projects"
         current_label = next((label for label, value in nav_options.items() if value == current_page), "▣  Projects")
         selected_label = st.radio(
             "Navigation",
@@ -2627,6 +2740,219 @@ def render_intake_panel_v2():
         """,
         unsafe_allow_html=True,
     )
+
+
+def render_admin_metric_card(label: str, value, detail: str = ""):
+    st.markdown(
+        f"""
+        <div class="sy-card">
+            <div class="sy-section-label">{html.escape(str(label))}</div>
+            <h2 style="margin:0.15rem 0 0.2rem 0;">{html.escape(str(value))}</h2>
+            <div class="sy-muted">{html.escape(str(detail or ""))}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def filter_rows(rows: List[Dict], search: str) -> List[Dict]:
+    query = str(search or "").strip().lower()
+    if not query:
+        return rows
+    return [
+        row for row in rows
+        if query in " ".join(str(value).lower() for value in row.values())
+    ]
+
+
+def render_admin_area():
+    if not is_admin_user(current_user_name):
+        st.error("Admin access denied.")
+        st.caption("This area is restricted to approved ArchLens administrators.")
+        return
+
+    st.markdown(
+        """
+        <div class="sy-hero">
+            <div class="sy-hero-copy">
+                <div class="sy-section-label">Admin Area</div>
+                <h1>ArchLens Operations</h1>
+                <div class="sy-muted">Manage users, credits, report activity and operational audit history.</div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    summary, summary_error = admin_api_get("/admin/summary")
+    users_payload, users_error = admin_api_get("/admin/users")
+    reports_payload, reports_error = admin_api_get("/admin/reports")
+    audit_payload, audit_error = admin_api_get("/admin/audit-log")
+    api_errors = [msg for msg in [summary_error, users_error, reports_error, audit_error] if msg]
+    if api_errors:
+        st.warning("Admin API data is partially unavailable. " + " ".join(api_errors[:2]))
+
+    summary = summary or {}
+    users = (users_payload or {}).get("users", [])
+    reports = (reports_payload or {}).get("reports", [])
+    audit_log = (audit_payload or {}).get("audit_log", [])
+    active_plans = summary.get("active_plans", {}) or {}
+
+    m1, m2, m3, m4 = st.columns(4)
+    with m1:
+        render_admin_metric_card("Total users", summary.get("total_users", len(users)), "Known credit accounts")
+    with m2:
+        render_admin_metric_card("Reports generated", summary.get("total_reports_generated", len(reports)), "Tracked report runs")
+    with m3:
+        render_admin_metric_card("Credits used", summary.get("credits_used", 0), "Download unlock deductions")
+    with m4:
+        plan_text = ", ".join(f"{plan}: {count}" for plan, count in active_plans.items()) or "No plan data yet"
+        render_admin_metric_card("Active plans", len(active_plans), plan_text)
+
+    st.markdown("### User management")
+    user_search = st.text_input("Search users", placeholder="Search by email, plan, status or activity", key="admin_user_search")
+    filtered_users = filter_rows(users, user_search)
+    display_users = [
+        {
+            "Email": row.get("email", ""),
+            "Plan": row.get("plan", "Unknown"),
+            "Current credits": row.get("credits", 0),
+            "Last activity": row.get("last_activity", ""),
+            "Reports generated": row.get("reports_generated", 0),
+            "Status": row.get("status", "active"),
+            "Actions": "Credit tools / View reports",
+        }
+        for row in filtered_users
+    ]
+    st.dataframe(display_users, use_container_width=True, hide_index=True)
+
+    user_options = [row.get("email", "") for row in users if row.get("email")]
+    selected_user = st.selectbox("View user projects / reports", [""] + user_options, format_func=lambda x: x or "Select a user", key="admin_selected_user")
+    if selected_user:
+        user_reports = [row for row in reports if normalise_user_email(row.get("email", "")) == normalise_user_email(selected_user)]
+        st.dataframe(
+            [
+                {
+                    "Project name": row.get("project_name", ""),
+                    "Report type": row.get("report_type", ""),
+                    "Date generated": row.get("timestamp", ""),
+                    "Credits used": row.get("credits_used", 0),
+                    "Status": row.get("status", ""),
+                    "Download link/path": row.get("download_path", ""),
+                }
+                for row in user_reports
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    with st.form("admin_credit_adjustment_form"):
+        st.markdown("### Manual credit adjustment")
+        c1, c2, c3 = st.columns([1.4, 0.8, 0.8])
+        with c1:
+            target_email = st.text_input("Target user email", value=selected_user or "", placeholder="user@example.com")
+        with c2:
+            action = st.selectbox("Action", ["add", "remove", "set"], format_func=lambda x: {"add": "Add credits", "remove": "Remove credits", "set": "Set credits manually"}[x])
+        with c3:
+            credit_amount = st.number_input("Credits", min_value=0, max_value=100000, step=1, value=0)
+        reason = st.text_area("Reason", placeholder="Required for the audit log", height=80)
+        current_target = next((row for row in users if normalise_user_email(row.get("email", "")) == normalise_user_email(target_email)), {})
+        current_credits = int(current_target.get("credits", 0) or 0)
+        reducing = action == "remove" or (action == "set" and int(credit_amount or 0) < current_credits)
+        confirm_reduction = st.checkbox("I confirm this reduction/reset is intentional", value=False, disabled=not reducing)
+        submitted = st.form_submit_button("Apply Credit Change", use_container_width=True)
+        if submitted:
+            if not is_valid_email(target_email):
+                st.error("Enter a valid target user email.")
+            elif not str(reason or "").strip():
+                st.error("A reason is required for manual credit changes.")
+            elif reducing and not confirm_reduction:
+                st.error("Confirm the reduction/reset before applying this change.")
+            else:
+                result, error = admin_api_post(
+                    "/admin/credits/adjust",
+                    {
+                        "email": target_email,
+                        "action": action,
+                        "credits": int(credit_amount or 0),
+                        "reason": reason.strip(),
+                        "admin_email": current_user_name,
+                    },
+                )
+                if result:
+                    st.success(f"Credits updated for {normalise_user_email(target_email)}. New balance: {result.get('new_credits')}.")
+                    if normalise_user_email(target_email) == normalise_user_email(current_user_name):
+                        sync_credit_balance_from_api(current_user_name)
+                    st.rerun()
+                else:
+                    st.error(error or "Credit adjustment failed.")
+
+    with st.form("admin_user_status_form"):
+        st.markdown("### Suspend / enable access")
+        s1, s2 = st.columns([1.4, 0.8])
+        with s1:
+            status_email = st.text_input("User email", value=selected_user or "", placeholder="user@example.com", key="admin_status_email")
+        with s2:
+            new_status = st.selectbox("Access status", ["active", "suspended"], format_func=lambda x: "Enabled" if x == "active" else "Suspended")
+        status_reason = st.text_area("Status change reason", placeholder="Required for audit history", height=80)
+        confirm_suspend = st.checkbox("I confirm this access change is intentional")
+        status_submitted = st.form_submit_button("Update User Access", use_container_width=True)
+        if status_submitted:
+            if not is_valid_email(status_email):
+                st.error("Enter a valid user email.")
+            elif not str(status_reason or "").strip():
+                st.error("A reason is required for access changes.")
+            elif not confirm_suspend:
+                st.error("Confirm the access change before applying it.")
+            else:
+                result, error = admin_api_post(
+                    "/admin/users/status",
+                    {
+                        "email": status_email,
+                        "status": new_status,
+                        "reason": status_reason.strip(),
+                    },
+                )
+                if result:
+                    st.success(f"{normalise_user_email(status_email)} is now {result.get('status')}.")
+                    st.rerun()
+                else:
+                    st.error(error or "Could not update user access.")
+
+    st.markdown("### Reports management")
+    report_search = st.text_input("Search reports", placeholder="Search by project, user, report type or status", key="admin_report_search")
+    filtered_reports = filter_rows(reports, report_search)
+    st.dataframe(
+        [
+            {
+                "Project name": row.get("project_name", ""),
+                "User email": row.get("email", ""),
+                "Report type": row.get("report_type", ""),
+                "Date generated": row.get("timestamp", ""),
+                "Credits used": row.get("credits_used", 0),
+                "Download link/path": row.get("download_path", ""),
+                "Status": row.get("status", ""),
+            }
+            for row in filtered_reports
+        ],
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    a1, a2, a3 = st.columns(3)
+    with a1:
+        st.markdown("### Recent report generations")
+        st.dataframe(summary.get("recent_report_generations", reports[:10]), use_container_width=True, hide_index=True)
+    with a2:
+        st.markdown("### Recent credit changes")
+        st.dataframe(summary.get("recent_credit_changes", [])[:10], use_container_width=True, hide_index=True)
+    with a3:
+        st.markdown("### Recent errors")
+        recent_errors = summary.get("recent_errors", []) or [{"status": "No recent errors logged"}]
+        st.dataframe(recent_errors, use_container_width=True, hide_index=True)
+
+    st.markdown("### Credit adjustment audit log")
+    st.dataframe(audit_log[:50], use_container_width=True, hide_index=True)
 
 
 def visible_step_number(step_no: int) -> int:
@@ -2866,7 +3192,7 @@ def run_archlens_analysis(uploaded_files):
         st.session_state["planning_statement_word_file"] = None
         if current_plan == "starter":
             st.session_state["starter_review_count"] = st.session_state.get("starter_review_count", 0) + 1
-        add_saved_project({
+        project_record = {
             "report_id": report_id,
             "project_address": clean_project_address,
             "client_name": clean_client_name,
@@ -2880,7 +3206,9 @@ def run_archlens_analysis(uploaded_files):
             "pdf_bytes": pdf_file.getvalue(),
             "word_bytes": word_file.getvalue(),
             "unlocked_exports": {},
-        })
+        }
+        add_saved_project(project_record)
+        api_record_report_generation(project_record)
         smooth_progress(progress_bar, status_text, 95, 100, "Finalising report...", 0.4)
         status_text.text("Analysis complete. 100%")
         progress_bar.progress(100)
@@ -3289,6 +3617,9 @@ elif page == "Reports":
             st.markdown('</div>', unsafe_allow_html=True)
     else:
         st.info("No reports generated yet. Go to Projects and run your first review.")
+
+elif page == "Admin":
+    render_admin_area()
 
 elif page == "Settings":
     st.markdown('<div class="sy-hero"><div class="sy-hero-copy"><h1>Settings</h1><div class="sy-muted">Control your account, branding and app appearance.</div></div></div>', unsafe_allow_html=True)
