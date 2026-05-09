@@ -856,9 +856,9 @@ def inject_custom_css():
             display: block !important;
             visibility: visible !important;
             opacity: 1 !important;
-            min-width: 252px !important;
-            width: 252px !important;
-            max-width: 252px !important;
+            min-width: 268px !important;
+            width: 268px !important;
+            max-width: 268px !important;
             pointer-events: auto !important;
             background: var(--sy-sidebar-bg) !important;
             border-right: 1px solid var(--sy-border);
@@ -984,9 +984,9 @@ def inject_custom_css():
             display: block !important;
             visibility: visible !important;
             opacity: 1 !important;
-            min-width: 252px !important;
-            width: 252px !important;
-            max-width: 252px !important;
+            min-width: 268px !important;
+            width: 268px !important;
+            max-width: 268px !important;
             pointer-events: auto !important;
             background: linear-gradient(180deg, rgba(15,22,32,0.98), rgba(9,13,20,0.98)) !important;
         }}
@@ -995,33 +995,34 @@ def inject_custom_css():
             display:block !important;
             visibility:visible !important;
             opacity:1 !important;
-            min-width:252px !important;
-            width:252px !important;
-            max-width:252px !important;
+            min-width:268px !important;
+            width:268px !important;
+            max-width:268px !important;
             transform: none !important;
             margin-left: 0 !important;
             left: 0 !important;
         }}
         [data-testid="stSidebar"] > div:first-child {{
-            padding-top: 1.65rem !important;
-            padding-left: 1.15rem !important;
-            padding-right: 1.15rem !important;
+            padding-top: 1.45rem !important;
+            padding-left: 1.3rem !important;
+            padding-right: 1.3rem !important;
         }}
-        .sy-sidebar-brand {{ display:flex; align-items:center; gap:0.95rem; margin:0.1rem 0 1.35rem 0; }}
-        .sy-sidebar-brand img {{ width:84px; height:84px; object-fit:contain; border-radius:16px; filter:drop-shadow(0 10px 20px rgba(212,194,154,0.12)); }}
-        .sy-sidebar-brand-title {{ font-weight:850; font-size:1.16rem; line-height:1.12; }}
-        .sy-sidebar-brand-subtitle {{ font-size:0.80rem; color:var(--sy-muted); margin-top:0.24rem; }}
-        .sy-sidebar-account {{ border:1px solid rgba(212,194,154,0.16); background:rgba(18,24,33,0.82); border-radius:14px; padding:0.85rem; margin:0 0 1.35rem 0; }}
-        .sy-sidebar-account-row {{ display:flex; justify-content:space-between; gap:0.55rem; font-size:0.78rem; padding:0.28rem 0; color:var(--sy-muted); }}
-        .sy-sidebar-account-row strong {{ color:var(--sy-text); text-align:right; overflow-wrap:anywhere; }}
-        [data-testid="stSidebar"] [role="radiogroup"] label {{ padding:0.72rem 0.8rem !important; border-radius:12px !important; margin-bottom:0.35rem !important; font-weight:650 !important; }}
+        .sy-sidebar-brand {{ display:flex; align-items:center; gap:0.82rem; margin:0.05rem 0 1.15rem 0; min-width:0; }}
+        .sy-sidebar-brand img {{ width:70px; height:70px; object-fit:contain; border-radius:14px; flex:0 0 70px; filter:drop-shadow(0 10px 20px rgba(212,194,154,0.12)); }}
+        .sy-sidebar-brand-title {{ font-weight:850; font-size:1.08rem; line-height:1.12; white-space:nowrap; }}
+        .sy-sidebar-brand-subtitle {{ font-size:0.76rem; color:var(--sy-muted); margin-top:0.22rem; white-space:nowrap; }}
+        .sy-sidebar-account {{ border:1px solid rgba(212,194,154,0.16); background:rgba(18,24,33,0.82); border-radius:14px; padding:0.82rem 0.86rem; margin:0 0 1rem 0; }}
+        .sy-sidebar-account-row {{ display:grid; grid-template-columns:46px minmax(0,1fr); align-items:start; gap:0.5rem; font-size:0.76rem; line-height:1.3; padding:0.34rem 0; color:var(--sy-muted); }}
+        .sy-sidebar-account-row strong {{ color:var(--sy-text); text-align:right; overflow-wrap:break-word; word-break:normal; min-width:0; font-size:0.74rem; }}
+        [data-testid="stSidebar"] [role="radiogroup"] {{ gap:0.28rem !important; padding:0.34rem !important; margin:0.2rem 0 0.9rem 0 !important; }}
+        [data-testid="stSidebar"] [role="radiogroup"] label {{ display:flex !important; align-items:center !important; min-height:40px !important; padding:0.54rem 0.68rem !important; border-radius:10px !important; margin-bottom:0.22rem !important; font-weight:650 !important; }}
         [data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) {{
-            background:linear-gradient(90deg, rgba(212,194,154,0.38), rgba(212,194,154,0.14)) !important;
+            background:linear-gradient(90deg, rgba(212,194,154,0.30), rgba(212,194,154,0.12)) !important;
             border:1px solid rgba(212,194,154,0.24) !important;
-            box-shadow:0 10px 22px rgba(212,194,154,0.10);
+            box-shadow:0 8px 18px rgba(212,194,154,0.10);
         }}
-        [data-testid="stSidebar"] [data-testid="stLinkButton"] {{ margin-top:0.55rem !important; }}
-        .sy-sidebar-help {{ border:1px solid rgba(212,194,154,0.13); border-radius:14px; padding:0.75rem; margin-top:5.6rem; background:rgba(18,24,33,0.66); font-size:0.75rem; }}
+        [data-testid="stSidebar"] [data-testid="stLinkButton"] {{ margin-top:0.42rem !important; }}
+        .sy-sidebar-help {{ border:1px solid rgba(212,194,154,0.13); border-radius:14px; padding:0.72rem 0.78rem; margin-top:3.4rem; background:rgba(18,24,33,0.66); font-size:0.75rem; }}
         .sy-topbar {{ background:transparent !important; border:0 !important; box-shadow:none !important; padding:0 0 1rem 0 !important; margin-bottom:0.1rem !important; }}
         .sy-topbar-title {{ color:var(--sy-accent) !important; letter-spacing:0.28em !important; font-size:0.82rem !important; }}
         .sy-topbar-meta {{ color:var(--sy-muted) !important; font-size:0.82rem !important; }}
@@ -1055,14 +1056,18 @@ def inject_custom_css():
             align-items:center !important;
             justify-content:center !important;
             width:100% !important;
-            height:60px !important;
-            padding:0.66rem 1rem !important;
+            min-height:42px !important;
+            height:42px !important;
+            padding:0.56rem 0.88rem !important;
             border-radius:10px !important;
             background:#D4C29A !important;
             border:1px solid #D4C29A !important;
             color:#111111 !important;
             font-weight:800 !important;
-            box-shadow:0 12px 26px rgba(212,194,154,0.22) !important;
+            font-size:0.74rem !important;
+            line-height:1.12 !important;
+            white-space:nowrap !important;
+            box-shadow:0 10px 22px rgba(212,194,154,0.22) !important;
         }}
         [data-testid="stSidebar"] [data-testid="stLinkButton"] a *,
         [data-testid="stSidebar"] [data-testid="stLinkButton"] a[href*="category"] *,
@@ -2385,7 +2390,7 @@ def render_left_navigation():
             st.markdown(
                 """
                 <div class="sy-sidebar-brand">
-                <div style="width:84px;height:84px;border-radius:16px;border:1px solid rgba(212,194,154,0.25);display:flex;align-items:center;justify-content:center;color:#D4C29A;font-weight:900;box-shadow:0 10px 20px rgba(212,194,154,0.10);">AL</div>
+                <div style="width:70px;height:70px;flex:0 0 70px;border-radius:14px;border:1px solid rgba(212,194,154,0.25);display:flex;align-items:center;justify-content:center;color:#D4C29A;font-weight:900;box-shadow:0 10px 20px rgba(212,194,154,0.10);">AL</div>
                     <div>
                         <div class="sy-sidebar-brand-title">ArchLens AI</div>
                         <div class="sy-sidebar-brand-subtitle">by SY Design Studio</div>
