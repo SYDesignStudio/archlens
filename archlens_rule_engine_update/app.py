@@ -7,7 +7,6 @@ import time
 import uuid
 import tempfile
 import jwt
-import requests
 from io import BytesIO
 from typing import Dict, List, Tuple
 
@@ -35,9 +34,6 @@ DEFAULT_STATE = {
     "report_library": [],
     "app_theme": "Dark",
     "brand_logo_bytes": None,
-    "credit_balance": 0,
-    "credit_transactions": [],
-    "unlocked_reports": {},
 }
 for key, value in DEFAULT_STATE.items():
     if key not in st.session_state:
@@ -579,13 +575,7 @@ def inject_custom_css():
             color: var(--sy-text) !important;
             font-size: 15px;
         }}
-        header[data-testid="stHeader"] {{
-            display:block !important;
-            height:0 !important;
-            min-height:0 !important;
-            background:transparent !important;
-        }}
-        [data-testid="stToolbar"], .stAppDeployButton {{ display:none !important; }}
+        header[data-testid="stHeader"], [data-testid="stToolbar"], .stAppDeployButton {{ display:none !important; }}
         #MainMenu {{ visibility:hidden !important; }}
         footer {{ visibility:hidden !important; }}
 
@@ -681,111 +671,6 @@ def inject_custom_css():
         .stTextArea textarea {{ min-height: 90px; }}
         .streamlit-expanderHeader {{ border:1px solid #5D6472 !important; border-radius:12px !important; }}
         .stProgress > div > div > div > div {{ background: linear-gradient(90deg, #D4C29A, #c5b183); }}
-
-        /* --- ArchLens Hub target HUD refinements --- */
-        .block-container {{
-            max-width: 1380px !important;
-            padding-left: 3.2rem !important;
-            padding-right: 3.2rem !important;
-            padding-top: 1.35rem !important;
-        }}
-        .stApp {{
-            background:
-                radial-gradient(circle at 18% 8%, rgba(212,194,154,0.10), transparent 28%),
-                radial-gradient(circle at 80% 15%, rgba(31,44,64,0.35), transparent 28%),
-                var(--sy-bg) !important;
-        }}
-        [data-testid="stSidebar"] {{
-            min-width: 252px !important;
-            width: 252px !important;
-            background: linear-gradient(180deg, rgba(15,22,32,0.98), rgba(9,13,20,0.98)) !important;
-        }}
-        [data-testid="stSidebar"] > div:first-child {{
-            padding-top: 1.9rem !important;
-            padding-left: 1.15rem !important;
-            padding-right: 1.15rem !important;
-        }}
-        .sy-sidebar-brand {{ display:flex; align-items:center; gap:0.9rem; margin:0.25rem 0 1.55rem 0; }}
-        .sy-sidebar-brand img {{ width:56px; height:56px; object-fit:contain; border-radius:14px; }}
-        .sy-sidebar-brand-title {{ font-weight:850; font-size:1.08rem; line-height:1.15; }}
-        .sy-sidebar-brand-subtitle {{ font-size:0.78rem; color:var(--sy-muted); margin-top:0.2rem; }}
-        .sy-sidebar-account {{ border:1px solid rgba(212,194,154,0.16); background:rgba(18,24,33,0.82); border-radius:14px; padding:0.85rem; margin:0 0 1.2rem 0; }}
-        .sy-sidebar-account-row {{ display:flex; justify-content:space-between; gap:0.55rem; font-size:0.78rem; padding:0.28rem 0; color:var(--sy-muted); }}
-        .sy-sidebar-account-row strong {{ color:var(--sy-text); text-align:right; overflow-wrap:anywhere; }}
-        [data-testid="stSidebar"] [role="radiogroup"] label {{ padding:0.72rem 0.8rem !important; border-radius:12px !important; margin-bottom:0.35rem !important; font-weight:650 !important; }}
-        [data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) {{
-            background:linear-gradient(90deg, rgba(212,194,154,0.38), rgba(212,194,154,0.14)) !important;
-            border:1px solid rgba(212,194,154,0.24) !important;
-            box-shadow:0 10px 22px rgba(212,194,154,0.10);
-        }}
-        .sy-sidebar-help {{ border:1px solid rgba(212,194,154,0.13); border-radius:14px; padding:0.75rem; margin-top:7rem; background:rgba(18,24,33,0.66); font-size:0.75rem; }}
-        .sy-topbar {{ background:transparent !important; border:0 !important; box-shadow:none !important; padding:0 0 1rem 0 !important; margin-bottom:0.1rem !important; }}
-        .sy-topbar-title {{ color:var(--sy-accent) !important; letter-spacing:0.28em !important; font-size:0.82rem !important; }}
-        .sy-topbar-meta {{ color:var(--sy-muted) !important; font-size:0.82rem !important; }}
-        .sy-user-badge {{ display:inline-flex; align-items:center; justify-content:center; width:32px; height:32px; border-radius:999px; background:rgba(212,194,154,0.18); color:var(--sy-accent); font-weight:800; margin-left:0.65rem; }}
-        .sy-project-hero {{ border:1px solid var(--sy-border); background:rgba(18,24,33,0.92); border-radius:18px; padding:1.45rem 1.55rem; margin-bottom:1rem; box-shadow: var(--sy-card-shadow); }}
-        .sy-project-hero-row {{ display:flex; align-items:flex-start; justify-content:space-between; gap:1rem; }}
-        .sy-project-hero h1 {{ font-size:1.75rem !important; margin:0 0 0.55rem 0 !important; }}
-        .sy-new-project-btn {{ display:inline-flex; align-items:center; gap:0.45rem; justify-content:center; min-width:132px; padding:0.66rem 1rem; border-radius:10px; background:linear-gradient(180deg,#DEC991,#CBB176); color:#111 !important; font-weight:800; font-size:0.86rem; box-shadow:0 12px 26px rgba(212,194,154,0.26); }}
-        .sy-step-row {{ display:grid; grid-template-columns:repeat(5, 1fr); gap:1rem; padding:0.95rem 0 1.05rem 0; border-top:1px solid var(--sy-border); border-bottom:1px solid var(--sy-border); margin-bottom:1.05rem; }}
-        .sy-step-item {{ display:flex; align-items:center; gap:0.68rem; opacity:0.62; }}
-        .sy-step-item.active {{ opacity:1; }}
-        .sy-step-icon {{ width:32px; height:32px; border-radius:999px; display:flex; align-items:center; justify-content:center; background:rgba(255,255,255,0.04); border:1px solid var(--sy-border); color:var(--sy-muted); font-size:0.95rem; }}
-        .sy-step-item.active .sy-step-icon {{ background:rgba(212,194,154,0.14); border-color:rgba(212,194,154,0.42); color:var(--sy-accent); }}
-        .sy-step-title {{ font-size:0.80rem; font-weight:800; color:var(--sy-text); }}
-        .sy-step-sub {{ font-size:0.70rem; color:var(--sy-muted); margin-top:0.12rem; }}
-        .sy-form-card {{ border:1px solid var(--sy-border); border-radius:18px; background:rgba(18,24,33,0.72); padding:1.25rem; min-height:330px; box-shadow: var(--sy-card-shadow); }}
-        .sy-form-card .sy-subtle-card {{ background:transparent !important; border:0 !important; box-shadow:none !important; padding:0 0 1rem 0 !important; }}
-        .sy-sidepanel {{ border-radius:16px !important; background:rgba(18,24,33,0.84) !important; padding:1rem !important; margin-bottom:0.9rem !important; position:relative !important; top:0 !important; }}
-        .sy-sidepanel .sy-data-row strong {{ max-width:150px; overflow-wrap:anywhere; }}
-        .sy-panel-title {{ color:var(--sy-text) !important; letter-spacing:0 !important; text-transform:none !important; font-size:0.94rem !important; margin-bottom:0.4rem !important; }}
-        .sy-recent-download {{ display:flex; gap:0.55rem; align-items:flex-start; padding:0.42rem 0; border-bottom:1px solid rgba(255,255,255,0.06); font-size:0.75rem; }}
-        .sy-file-icon {{ color:#F0B5FF; font-size:1rem; line-height:1; }}
-        .sy-footer {{ text-align:center; color:var(--sy-muted); font-size:0.72rem; margin-top:1.2rem; }}
-        .stButton button, .stDownloadButton button, .stLinkButton a {{ border-radius:10px !important; color:#111111 !important; }}
-        .stLinkButton a[href*="category"], .stLinkButton a[href*="pricing"] {{ background:rgba(255,255,255,0.04) !important; color:var(--sy-accent) !important; border:1px solid var(--sy-border) !important; box-shadow:none !important; }}
-        @media (max-width: 1100px) {{
-            .block-container {{ padding-left:1rem !important; padding-right:1rem !important; }}
-            .sy-step-row {{ grid-template-columns:1fr 1fr; }}
-        }}
-
-        
-        /* Always show a clear sidebar restore button when the left panel is collapsed */
-        [data-testid="collapsedControl"] {{
-            display: flex !important;
-            visibility: visible !important;
-            opacity: 1 !important;
-            position: fixed !important;
-            top: 0.85rem !important;
-            left: 0.85rem !important;
-            z-index: 999999 !important;
-            width: auto !important;
-            min-width: 132px !important;
-            height: 42px !important;
-            align-items: center !important;
-            justify-content: center !important;
-            gap: 0.45rem !important;
-            padding: 0 0.9rem !important;
-            border-radius: 10px !important;
-            background: #D4C29A !important;
-            border: 1px solid #C5B183 !important;
-            box-shadow: 0 12px 28px rgba(0,0,0,0.35) !important;
-            pointer-events: auto !important;
-        }}
-        [data-testid="collapsedControl"]::after {{
-            content: "Show Sidebar";
-            color: #111111;
-            font-size: 0.78rem;
-            font-weight: 800;
-            line-height: 1;
-            white-space: nowrap;
-        }}
-        [data-testid="collapsedControl"] * {{
-            color: #111111 !important;
-            fill: #111111 !important;
-            stroke: #111111 !important;
-        }}
-
         </style>
         """,
         unsafe_allow_html=True,
@@ -1747,8 +1632,6 @@ if not st.session_state.get("authenticated", False):
 
 current_plan = st.session_state.get("auth_plan", "starter")
 current_user_name = st.session_state.get("auth_user_name", "")
-if current_user_name:
-    sync_credit_balance_from_api(current_user_name)
 allowed_review_modules = get_allowed_review_modules(current_plan)
 
 # -------------------------------
@@ -1865,72 +1748,33 @@ def render_left_navigation():
     with st.sidebar:
         if logo_uri:
             st.markdown(
-                f"""
-                <div class="sy-sidebar-brand">
-                    <img src="{logo_uri}" />
+                f'''
+                <div style="display:flex;align-items:center;gap:0.7rem;margin:0.6rem 0 1.1rem 0;">
+                    <img src="{logo_uri}" style="width:72px;height:72px;object-fit:contain;border-radius:16px;background:#061225;padding:6px;" />
                     <div>
-                        <div class="sy-sidebar-brand-title">ArchLens AI</div>
-                        <div class="sy-sidebar-brand-subtitle">by SY Design Studio</div>
+                        <div style="font-weight:800;font-size:1.1rem;">ArchLens AI</div>
+                        <div style="font-size:0.75rem;color:#9FB2D8;">SY Design Studio</div>
                     </div>
                 </div>
-                """,
+                ''',
                 unsafe_allow_html=True,
             )
         else:
-            st.markdown(
-                """
-                <div class="sy-sidebar-brand">
-                    <div style="width:52px;height:52px;border-radius:14px;border:1px solid rgba(212,194,154,0.25);display:flex;align-items:center;justify-content:center;color:#D4C29A;font-weight:900;">AL</div>
-                    <div>
-                        <div class="sy-sidebar-brand-title">ArchLens AI</div>
-                        <div class="sy-sidebar-brand-subtitle">by SY Design Studio</div>
-                    </div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-
-        st.markdown(
-            f"""
-            <div class="sy-sidebar-account">
-                <div class="sy-sidebar-account-row"><span>Plan:</span><strong>{PLAN_LABELS.get(current_plan, 'Solo')}</strong></div>
-                <div class="sy-sidebar-account-row"><span>Credits:</span><strong>{get_credit_balance()}</strong></div>
-                <div class="sy-sidebar-account-row"><span>User:</span><strong>{current_user_name or 'Not shown'}</strong></div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-        nav_options = {
-            "⌂  Dashboard": "Dashboard",
-            "▣  Projects": "Projects",
-            "▤  Reports": "Reports",
-            "⚙  Settings": "Settings",
-        }
-        current_page = st.session_state.get("app_page", "Projects")
-        current_label = next((label for label, value in nav_options.items() if value == current_page), "▣  Projects")
-        selected_label = st.radio(
+            st.markdown("### ArchLens AI")
+        st.caption(f"Plan: {PLAN_LABELS.get(current_plan, 'Solo')}")
+        if current_user_name:
+            st.caption(f"User: {current_user_name}")
+        page = st.radio(
             "Navigation",
-            list(nav_options.keys()),
-            index=list(nav_options.keys()).index(current_label),
+            ["Dashboard", "Projects", "Reports", "Settings"],
+            index=["Dashboard", "Projects", "Reports", "Settings"].index(st.session_state.get("app_page", "Projects")),
             label_visibility="collapsed",
         )
-        page = nav_options[selected_label]
         st.session_state["app_page"] = page
-
-        st.markdown("<div style='height:1.35rem'></div>", unsafe_allow_html=True)
-        st.link_button("Return to SY Design Studio →", WEBSITE_HOME_URL, use_container_width=True)
-        st.link_button("◎  Buy Credits ↗", ARCHLENS_BUY_CREDITS_URL, use_container_width=True)
-
-        st.markdown(
-            """
-            <div class="sy-sidebar-help">
-                <div style="color:var(--sy-muted);">Need help?</div>
-                <strong style="color:var(--sy-text);">Contact support</strong>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+        st.markdown("---")
+        st.link_button("Return to SY Design Studio", WEBSITE_HOME_URL, use_container_width=True)
+        if current_plan == "starter":
+            st.link_button("Upgrade to Studio", WEBSITE_PRICING_URL, use_container_width=True)
     return page
 
 def intake_items():
@@ -1953,17 +1797,14 @@ def render_intake_panel():
     project_address = st.session_state.get("wizard_project_address", "")
     proposal_summary = st.session_state.get("wizard_proposal_summary", "")
     local_authority = detect_local_authority_for_display(project_address, proposal_summary)
-
     st.markdown('<div class="sy-sidepanel">', unsafe_allow_html=True)
-    st.markdown('<div class="sy-panel-title">Project Intake Readiness</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sy-panel-title">Intake Readiness</div>', unsafe_allow_html=True)
     st.markdown(f"**{complete} of {total} key items completed**")
-    st.progress(complete / max(total, 1))
     for label, done in items:
-        icon = "✅" if done else "○"
+        icon = "✅" if done else "•"
         st.markdown(f"{icon} {label}")
-    st.markdown('</div>', unsafe_allow_html=True)
-
-    st.markdown('<div class="sy-sidepanel">', unsafe_allow_html=True)
+    st.progress(complete / max(total, 1))
+    st.markdown("---")
     st.markdown('<div class="sy-panel-title">Live Summary</div>', unsafe_allow_html=True)
     rows = [
         ("Project", st.session_state.get("wizard_project_name") or "Not named"),
@@ -1975,24 +1816,6 @@ def render_intake_panel():
     ]
     for label, value in rows:
         st.markdown(f'<div class="sy-data-row"><span>{label}</span><strong>{value}</strong></div>', unsafe_allow_html=True)
-    st.markdown('</div>', unsafe_allow_html=True)
-
-    st.markdown('<div class="sy-sidepanel">', unsafe_allow_html=True)
-    st.markdown('<div style="display:flex;justify-content:space-between;align-items:center;"><div class="sy-panel-title">Recent Downloads</div><div style="color:var(--sy-accent);font-size:0.78rem;">View all</div></div>', unsafe_allow_html=True)
-    library = st.session_state.get("report_library", []) or []
-    saved = st.session_state.get("saved_projects", []) or []
-    recent_items = library[:4] if library else saved[:4]
-    if recent_items:
-        for item in recent_items:
-            filename = item.get("file_name") or item.get("project_address") or "ArchLens_Report.pdf"
-            date = item.get("date", "")
-            st.markdown(
-                f'<div class="sy-recent-download"><div class="sy-file-icon">▣</div><div><strong>{filename}</strong><br><span class="sy-muted">{date}</span></div></div>',
-                unsafe_allow_html=True,
-            )
-    else:
-        st.markdown('<div class="sy-muted" style="font-size:0.78rem;">No downloads yet.</div>', unsafe_allow_html=True)
-    st.markdown('<div style="margin-top:0.7rem;"><div class="sy-new-project-btn" style="width:100%;box-sizing:border-box;font-size:0.78rem;">Open full download history ↗</div></div>', unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
 def step_header(step_no, title, subtitle):
@@ -2008,28 +1831,16 @@ def step_header(step_no, title, subtitle):
     )
 
 def wizard_buttons(max_step=7):
-    def _next_step(current_step: int) -> int:
-        next_step = min(max_step, current_step + 1)
-        if st.session_state.get("wizard_review_module") == "Planning Review" and next_step == 4:
-            return min(max_step, 5)
-        return next_step
-
-    def _previous_step(current_step: int) -> int:
-        previous_step = max(1, current_step - 1)
-        if st.session_state.get("wizard_review_module") == "Planning Review" and previous_step == 4:
-            return max(1, 3)
-        return previous_step
-
     c1, c2, c3 = st.columns([0.35, 1, 0.35])
     with c1:
         if st.session_state.project_step > 1:
             if st.button("Back", use_container_width=True):
-                st.session_state.project_step = _previous_step(int(st.session_state.project_step))
+                st.session_state.project_step -= 1
                 st.rerun()
     with c3:
         if st.session_state.project_step < max_step:
-            if st.button("Continue  →", use_container_width=True):
-                st.session_state.project_step = _next_step(int(st.session_state.project_step))
+            if st.button("Continue", use_container_width=True):
+                st.session_state.project_step += 1
                 st.rerun()
 
 def run_archlens_analysis(uploaded_files):
@@ -2251,17 +2062,16 @@ def render_report_download_panel(module_name=None, show_sections=True):
 page = render_left_navigation()
 
 # Main shell header
-user_initials = "".join([part[:1] for part in (current_user_name or "SY").replace("@", " ").replace(".", " ").split()[:2]]).upper() or "SY"
 st.markdown(
-    f"""
+    f'''
     <div class="sy-topbar">
         <div>
-            <div class="sy-topbar-title">ARCHLENS HUB</div>
+            <div class="sy-topbar-title">Architect AI Workspace</div>
             <div class="sy-topbar-meta">AI-powered planning and building regulations intelligence for UK projects</div>
         </div>
-        <div class="sy-topbar-meta">Credits: {get_credit_balance()} &nbsp; | &nbsp; Plan: {PLAN_LABELS.get(current_plan, "Solo")}{(" &nbsp; | &nbsp; User: " + current_user_name) if current_user_name else ""}<span class="sy-user-badge">{user_initials}</span></div>
+        <div class="sy-topbar-meta">Plan: {PLAN_LABELS.get(current_plan, "Solo")}{(" | User: " + current_user_name) if current_user_name else ""}</div>
     </div>
-    """,
+    ''',
     unsafe_allow_html=True,
 )
 
@@ -2283,59 +2093,19 @@ if page == "Dashboard":
         st.info("No projects yet. Go to Projects to start a new intake.")
 
 elif page == "Projects":
+    st.markdown('<div class="sy-hero"><div class="sy-hero-copy"><h1>Projects</h1><div class="sy-muted">Create a structured project intake, upload drawings, and generate a professional AI review report.</div></div></div>', unsafe_allow_html=True)
     step = int(st.session_state.get("project_step", 1))
-    review_module_for_steps = st.session_state.get("wizard_review_module", "Planning Review")
-    if review_module_for_steps == "Building Regulations Review":
-        step_items = [
-            (1, "▣", "Details", "Project information"),
-            (3, "➜", "Type", "Select project type"),
-            (4, "◇", "Scope", "Define review scope"),
-            (6, "⇧", "Upload", "Upload documents"),
-            (7, "▤", "Report", "AI review report"),
-        ]
-    else:
-        step_items = [
-            (1, "▣", "Details", "Project information"),
-            (3, "➜", "Type", "Select project type"),
-            (5, "◇", "Specifics", "Planning checks"),
-            (6, "⇧", "Upload", "Upload documents"),
-            (7, "▤", "Report", "AI review report"),
-        ]
-    st.markdown(
-        """
-        <div class="sy-project-hero">
-            <div class="sy-project-hero-row">
-                <div>
-                    <h1>Projects</h1>
-                    <div class="sy-muted">Create a structured project intake, upload drawings, and generate a professional AI review report.</div>
-                </div>
-                <div class="sy-new-project-btn">＋ New Project</div>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-    step_html = '<div class="sy-step-row">'
-    for step_no, icon, title, subtitle in step_items:
-        active = "active" if step == step_no or (step == 2 and step_no == 1) else ""
-        step_html += f'<div class="sy-step-item {active}"><div class="sy-step-icon">{icon}</div><div><div class="sy-step-title">{title}</div><div class="sy-step-sub">{subtitle}</div></div></div>'
-    step_html += '</div>'
-    st.markdown(step_html, unsafe_allow_html=True)
-    st.progress(step / 7)
-    main_col, side_col = st.columns([2.15, 1.0], gap="large")
+    steps = ["Module", "Details", "Type", "Scope", "Specifics", "Upload", "Report"]
+    st.progress(step / len(steps))
+    st.caption(" → ".join([f"**{name}**" if i + 1 == step else name for i, name in enumerate(steps)]))
+    main_col, side_col = st.columns([1.65, 0.82], gap="large")
     with main_col:
-        st.markdown('<div class="sy-form-card">', unsafe_allow_html=True)
         if step == 1:
-            step_header(1, "Project Details", "Select whether this project needs a planning review or a building regulations review.")
-            f1, f2 = st.columns(2)
-            with f1:
-                st.session_state["wizard_review_module"] = st.selectbox("Review Module", allowed_review_modules, index=allowed_review_modules.index(st.session_state.get("wizard_review_module", allowed_review_modules[0])))
-                st.caption("Assess planning policies, site context, constraints and design.")
-            with f2:
-                st.session_state["wizard_review_mode"] = st.selectbox("Report Mode", ["Architect / Professional", "Homeowner Summary"], index=["Architect / Professional", "Homeowner Summary"].index(st.session_state.get("wizard_review_mode", "Architect / Professional")))
-                st.caption("Tailored output for architects, agents and professionals.")
-            st.markdown("<hr style='border-color:var(--sy-border);margin:1.25rem 0;'>", unsafe_allow_html=True)
-            st.caption("Downloads are unlocked using credits. Planning PDF = 3 credits. Building Regs PDF = 5 credits. Word export = 1 credit.")
+            step_header(1, "Choose module", "Select whether this project needs a planning review or a building regulations review.")
+            st.session_state["wizard_review_module"] = st.selectbox("Review Module", allowed_review_modules, index=allowed_review_modules.index(st.session_state.get("wizard_review_module", allowed_review_modules[0])))
+            if current_plan == "starter":
+                st.caption("Building Regulations Review is available on Studio.")
+            st.session_state["wizard_review_mode"] = st.selectbox("Report Mode", ["Architect / Professional", "Homeowner Summary"], index=["Architect / Professional", "Homeowner Summary"].index(st.session_state.get("wizard_review_mode", "Architect / Professional")))
             wizard_buttons()
         elif step == 2:
             step_header(2, "Project details", "Add the basic project and site information used in the report cover, council detection and AI context.")
@@ -2404,7 +2174,6 @@ elif page == "Projects":
             st.markdown("")
             render_report_download_panel(st.session_state.get("active_module", st.session_state.get("wizard_review_module")))
             wizard_buttons()
-        st.markdown("</div>", unsafe_allow_html=True)
     with side_col:
         render_intake_panel()
 
