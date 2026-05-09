@@ -50,6 +50,11 @@ STARTER_MONTHLY_REVIEW_LIMIT = 10
 ARCHLENS_API_URL = os.getenv("ARCHLENS_API_URL", "https://archlens-api.onrender.com").rstrip("/")
 ARCHLENS_WEBHOOK_SECRET = os.getenv("ARCHLENS_WEBHOOK_SECRET", "archlens_secure_2026_SYDS_92838")
 ARCHLENS_BUY_CREDITS_URL = os.getenv("ARCHLENS_BUY_CREDITS_URL", "https://www.sydesignstudio.co.uk/category/archlens-ai-credits")
+EXPORT_CREDIT_COSTS = {
+    "planning_pdf": 3,
+    "building_pdf": 5,
+    "word": 1,
+}
 
 
 def normalise_user_email(email: str) -> str:
@@ -85,6 +90,41 @@ def sync_credit_balance_from_api(email: str):
     return st.session_state.get("credit_balance")
 
 
+def api_deduct_credits(email: str, credits: int, report_id: str, export_type: str):
+    clean_email = normalise_user_email(email)
+    if not clean_email:
+        return False, "Please log in before unlocking downloads.", st.session_state.get("credit_balance")
+    try:
+        response = requests.post(
+            f"{ARCHLENS_API_URL}/deduct-credits",
+            json={
+                "email": clean_email,
+                "credits": int(credits),
+                "reportId": report_id or "current_report",
+                "exportType": export_type,
+                "source": "streamlit_app",
+            },
+            headers={"x-archlens-secret": ARCHLENS_WEBHOOK_SECRET},
+            timeout=12,
+        )
+        if response.status_code == 200:
+            data = response.json()
+            new_balance = int(data.get("credits", data.get("new_balance", 0)) or 0)
+            st.session_state["credit_balance"] = new_balance
+            st.session_state["credit_balance_email"] = clean_email
+            st.session_state["credit_api_last_sync"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            st.session_state["credit_api_error"] = ""
+            return True, "", new_balance
+        try:
+            detail = response.json().get("detail", "")
+        except Exception:
+            detail = response.text
+        return False, detail or "Credit deduction failed. Please try again.", st.session_state.get("credit_balance")
+    except Exception as exc:
+        st.session_state["credit_api_error"] = "Credit API unavailable; keeping previous balance."
+        return False, f"Credit API unavailable. Your previous balance is still shown. ({exc})", st.session_state.get("credit_balance")
+
+
 def get_credit_balance() -> int:
     balance = st.session_state.get("credit_balance")
     return int(balance) if balance is not None else 0
@@ -93,6 +133,65 @@ def get_credit_balance() -> int:
 def get_credit_balance_label() -> str:
     balance = st.session_state.get("credit_balance")
     return str(int(balance)) if balance is not None else "Syncing"
+
+
+def get_pdf_export_type(module_name: str) -> str:
+    return "planning_pdf" if module_name == "Planning Review" else "building_pdf"
+
+
+def get_export_cost(module_name: str, export_type: str) -> int:
+    return EXPORT_CREDIT_COSTS["word"] if export_type == "word" else EXPORT_CREDIT_COSTS[get_pdf_export_type(module_name)]
+
+
+def export_unlock_key(report_id: str, export_type: str) -> str:
+    return f"{report_id or 'current_report'}:{export_type}"
+
+
+def is_export_unlocked(report_id: str, export_type: str, record: Dict | None = None) -> bool:
+    key = export_unlock_key(report_id, export_type)
+    if st.session_state.get("unlocked_reports", {}).get(key):
+        return True
+    if record:
+        unlocked = record.get("unlocked_exports") or {}
+        return bool(unlocked.get(export_type))
+    return False
+
+
+def mark_export_unlocked(report_id: str, export_type: str):
+    key = export_unlock_key(report_id, export_type)
+    unlocked = dict(st.session_state.get("unlocked_reports", {}) or {})
+    unlocked[key] = True
+    st.session_state["unlocked_reports"] = unlocked
+    for item in st.session_state.get("saved_projects", []):
+        if item.get("report_id") == report_id:
+            exports = dict(item.get("unlocked_exports") or {})
+            exports[export_type] = True
+            item["unlocked_exports"] = exports
+
+
+def render_locked_download_action(label: str, report_id: str, module_name: str, export_type: str, key_suffix: str):
+    cost = get_export_cost(module_name, export_type)
+    balance = st.session_state.get("credit_balance")
+    balance_label = get_credit_balance_label()
+    if balance is None:
+        st.button(f"{label} locked", disabled=True, use_container_width=True, key=f"locked_sync_{key_suffix}")
+        st.caption("Checking credit balance before downloads can be unlocked.")
+        return False
+    has_enough = int(balance) >= cost
+    st.caption(f"Locked. Requires {cost} credit{'s' if cost != 1 else ''}. Current balance: {balance_label}.")
+    if not has_enough:
+        st.button(f"{label} locked", disabled=True, use_container_width=True, key=f"locked_{key_suffix}")
+        st.caption("Add credits to unlock this download.")
+        return False
+    if st.button(f"Unlock {label} ({cost} credit{'s' if cost != 1 else ''})", use_container_width=True, key=f"unlock_{key_suffix}"):
+        ok, message, _ = api_deduct_credits(current_user_name, cost, report_id, export_type)
+        if ok:
+            mark_export_unlocked(report_id, export_type)
+            st.success(f"{label} unlocked.")
+            st.rerun()
+        else:
+            st.error(message or "Could not unlock this download.")
+    return False
 
 BUILDING_REQUIRED_HEADINGS = [
     "PROJECT CLASSIFICATION",
@@ -684,9 +783,11 @@ def inject_custom_css():
 
         .sy-card, .sy-mini-card, .sy-upload-item, .sy-sidepanel, .sy-workspace, .sy-subtle-card, .sy-option-card, .sy-report-card {{
             border:1px solid var(--sy-border); background: var(--sy-surface); box-shadow: var(--sy-card-shadow); color: var(--sy-text);
+            overflow-wrap:anywhere;
         }}
         .sy-card {{ border-radius:20px; padding:1.05rem; margin-bottom:0.95rem; }}
         .sy-mini-card {{ border-radius:18px; padding:0.9rem; min-height:118px; }}
+        .sy-mini-card h1, .sy-mini-card h2, .sy-mini-card h3 {{ font-size:1.18rem !important; line-height:1.18 !important; margin-bottom:0.25rem !important; }}
         .sy-sidepanel {{ border-radius:20px; padding:0.85rem; position:sticky; top:1rem; font-size:0.86rem; }}
         .sy-sidepanel .sy-data-row {{ font-size:0.82rem; padding:0.42rem 0; }}
         .sy-workspace {{ border-radius:22px; padding:1rem; }}
@@ -694,46 +795,64 @@ def inject_custom_css():
         .sy-section-label, .sy-panel-title, .sy-kpi {{
             font-size:0.72rem; text-transform:uppercase; letter-spacing:0.12em; color:var(--sy-muted); margin-bottom:0.35rem; font-weight:800;
         }}
-        .sy-data-row {{ display:flex; justify-content:space-between; gap:0.8rem; padding:0.52rem 0; border-bottom:1px solid var(--sy-border); color:var(--sy-text); }}
+        .sy-data-row {{ display:flex; justify-content:space-between; align-items:flex-start; gap:0.8rem; padding:0.52rem 0; border-bottom:1px solid var(--sy-border); color:var(--sy-text); }}
         .sy-data-row:last-child {{ border-bottom:0; }}
         .sy-data-row span:first-child {{ color:var(--sy-muted); }}
-        .sy-data-row strong {{ text-align:right; }}
+        .sy-data-row strong {{ text-align:right; min-width:0; overflow-wrap:anywhere; }}
 
         .sy-option-grid {{ display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:0.7rem; margin:0.75rem 0 1rem 0; }}
         .sy-option-card {{ border-radius:16px; padding:0.65rem 0.8rem; min-height:48px; }}
         .sy-option-card label {{ font-weight:650 !important; }}
         .sy-report-card {{ border-radius:18px; padding:1rem; margin-bottom:0.8rem; }}
 
-        .sy-preview-shell {{ border:1px solid var(--sy-border); border-radius:18px; overflow:hidden; background: var(--sy-surface); }}
+        .sy-preview-shell {{ border:1px solid rgba(212,194,154,0.18); border-radius:18px; overflow:hidden; background: var(--sy-surface); box-shadow:0 14px 30px rgba(0,0,0,0.20); }}
         .sy-preview-topbar {{ display:flex; justify-content:space-between; align-items:center; padding:0.75rem 0.9rem; border-bottom:1px solid var(--sy-border); background: var(--sy-surface-2); }}
         .sy-preview-title {{ font-weight:700; font-size:0.94rem; color:var(--sy-text); }}
         .sy-preview-meta {{ font-size:0.8rem; color:var(--sy-muted); }}
         .sy-preview-badge {{ padding:0.25rem 0.5rem; border-radius:999px; font-size:0.72rem; font-weight:700; background:rgba(212,194,154,0.18); color:var(--sy-text); border:1px solid var(--sy-border); }}
         .sy-preview-frame {{ border:0; background:white; }}
         .sy-empty-preview {{ min-height:240px; display:flex; align-items:center; justify-content:center; text-align:center; border:1px dashed var(--sy-border); border-radius:18px; background:var(--sy-surface-2); padding:1rem; color:var(--sy-muted); }}
-        .sy-upload-item {{ border-radius:14px; padding:0.72rem 0.85rem; margin-bottom:0.5rem; }}
+        .sy-upload-item {{ border-radius:14px; padding:0.72rem 0.85rem; margin-bottom:0.5rem; background:rgba(255,255,255,0.035); border-color:rgba(212,194,154,0.16); }}
 
         div[data-testid="stMetric"] {{ background: var(--sy-surface); border:1px solid var(--sy-border); padding:0.72rem 0.85rem; border-radius:16px; }}
         div[data-testid="stMetric"] * {{ color: var(--sy-text) !important; }}
+        div[data-testid="stMetricValue"] {{ font-size:1.22rem !important; line-height:1.18 !important; overflow-wrap:anywhere !important; }}
+        div[data-testid="stMetricLabel"] {{ color:var(--sy-muted) !important; font-size:0.78rem !important; line-height:1.25 !important; }}
 
         .stDownloadButton button, .stButton button, .stLinkButton a {{ border-radius:14px !important; }}
         .stButton button, .stDownloadButton button, .stLinkButton a {{
-            background: var(--sy-accent) !important; color: #111111 !important; border: 1px solid var(--sy-accent) !important;
-            box-shadow: 0 10px 24px rgba(212, 194, 154, 0.18) !important; font-weight: 650 !important;
+            background: linear-gradient(180deg,#DEC991,#CBB176) !important; color: #111111 !important; border: 1px solid var(--sy-accent) !important;
+            box-shadow: 0 12px 26px rgba(212, 194, 154, 0.24) !important; font-weight: 800 !important;
+            min-height:44px !important; padding:0.66rem 1rem !important; font-size:0.86rem !important; line-height:1.15 !important;
         }}
         .stButton button:hover, .stDownloadButton button:hover, .stLinkButton a:hover {{ background: var(--sy-accent-hover) !important; border-color: var(--sy-accent-hover) !important; color: #111111 !important; filter:none !important; }}
+        .stButton button:disabled, .stDownloadButton button:disabled {{
+            background:rgba(255,255,255,0.06) !important; color:var(--sy-muted) !important; border-color:var(--sy-border) !important; box-shadow:none !important;
+        }}
 
         .stSelectbox label, .stTextInput label, .stTextArea label, .stNumberInput label, .stDateInput label, .stMultiSelect label, .stCheckbox label, .stRadio label {{
-            color:var(--sy-text) !important; font-weight:650 !important;
+            color:var(--sy-text) !important; font-weight:700 !important; margin-bottom:0.3rem !important;
         }}
-        [data-baseweb="select"] > div, [data-baseweb="tag"] {{ background:var(--sy-input-bg) !important; border:1px solid #5D6472 !important; color:var(--sy-text) !important; }}
+        [data-baseweb="select"] > div, [data-baseweb="tag"] {{ background:var(--sy-input-bg) !important; border:1px solid #5D6472 !important; color:var(--sy-text) !important; border-radius:12px !important; min-height:44px !important; }}
         .stTextInput input, .stTextArea textarea, .stNumberInput input, .stDateInput input, div[data-baseweb="base-input"] > input, div[data-baseweb="base-input"] > textarea {{
-            background:var(--sy-input-bg) !important; border:1px solid #5D6472 !important; color:var(--sy-text) !important; border-radius:12px !important;
+            background:var(--sy-input-bg) !important; border:1px solid #5D6472 !important; color:var(--sy-text) !important; border-radius:12px !important; min-height:44px !important; padding:0.62rem 0.78rem !important;
         }}
         .stTextInput input:focus, .stTextArea textarea:focus, .stNumberInput input:focus, .stDateInput input:focus, div[data-baseweb="base-input"] > input:focus, div[data-baseweb="base-input"] > textarea:focus, [data-baseweb="select"] > div:focus-within {{
-            border-color:#D4C29A !important; box-shadow:0 0 0 1px #D4C29A !important;
+            border-color:#D4C29A !important; box-shadow:0 0 0 1px #D4C29A, 0 0 0 4px rgba(212,194,154,0.10) !important;
         }}
-        .stTextArea textarea {{ min-height: 90px; }}
+        .stTextArea textarea {{ min-height: 112px; line-height:1.45 !important; }}
+        [data-testid="stFileUploader"] section {{
+            border:1px dashed rgba(212,194,154,0.34) !important; border-radius:16px !important; background:rgba(18,24,33,0.72) !important; padding:1rem !important;
+        }}
+        [data-testid="stFileUploader"] small, [data-testid="stFileUploader"] span {{ color:var(--sy-muted) !important; }}
+        .stCheckbox {{
+            border:1px solid rgba(212,194,154,0.12); border-radius:14px; padding:0.52rem 0.62rem; background:rgba(255,255,255,0.025); margin-bottom:0.48rem;
+        }}
+        .stCheckbox:hover {{ border-color:rgba(212,194,154,0.30); background:rgba(212,194,154,0.045); }}
+        .block-container [role="radiogroup"] {{
+            gap:0.42rem !important; padding:0.5rem 0.58rem !important; border:1px solid rgba(212,194,154,0.13); border-radius:14px; background:rgba(255,255,255,0.025); margin:0.25rem 0 0.75rem 0;
+        }}
+        .block-container [role="radiogroup"] label {{ padding:0.32rem 0.45rem !important; border-radius:10px !important; }}
         .streamlit-expanderHeader {{ border:1px solid #5D6472 !important; border-radius:12px !important; }}
         .stProgress > div > div > div > div {{ background: linear-gradient(90deg, #D4C29A, #c5b183); }}
 
@@ -809,6 +928,7 @@ def inject_custom_css():
         .sy-step-sub {{ font-size:0.70rem; color:var(--sy-muted); margin-top:0.12rem; }}
         .sy-form-card {{ border:1px solid var(--sy-border); border-radius:18px; background:rgba(18,24,33,0.72); padding:1.25rem; min-height:330px; box-shadow: var(--sy-card-shadow); }}
         .sy-form-card .sy-subtle-card {{ background:transparent !important; border:0 !important; box-shadow:none !important; padding:0 0 1rem 0 !important; }}
+        .sy-section-divider {{ height:1px; background:linear-gradient(90deg, transparent, rgba(212,194,154,0.28), transparent); margin:0.9rem 0 1rem 0; }}
         .sy-sidepanel {{ border-radius:16px !important; background:rgba(18,24,33,0.84) !important; padding:1rem !important; margin-bottom:0.9rem !important; position:relative !important; top:0 !important; }}
         .sy-sidepanel .sy-data-row strong {{ max-width:150px; overflow-wrap:anywhere; }}
         .sy-panel-title {{ color:var(--sy-text) !important; letter-spacing:0 !important; text-transform:none !important; font-size:0.94rem !important; margin-bottom:0.4rem !important; }}
@@ -2318,6 +2438,7 @@ def run_archlens_analysis(uploaded_files):
             "local_authority": local_authority,
             "pdf_bytes": pdf_file.getvalue(),
             "word_bytes": word_file.getvalue(),
+            "unlocked_exports": {},
         })
         smooth_progress(progress_bar, status_text, 95, 100, "Finalising report...", 0.4)
         status_text.text("Analysis complete. 100%")
@@ -2343,14 +2464,22 @@ def render_report_download_panel(module_name=None, show_sections=True):
     render_at_a_glance(sections, report_id, module_name)
     base_filename = (st.session_state.last_filename or "drawing_pack").rsplit(".", 1)[0]
     suffix = "Planning" if module_name == "Planning Review" else "BuildingRegs"
+    pdf_export_type = get_pdf_export_type(module_name)
     c1, c2 = st.columns(2)
     with c1:
-        st.download_button("Download Branded PDF Report", st.session_state.pdf_file, file_name=f"{base_filename}_{suffix}_AI_Review_Report.pdf", mime="application/pdf", use_container_width=True)
+        if is_export_unlocked(report_id, pdf_export_type):
+            st.download_button("Download Branded PDF Report", st.session_state.pdf_file, file_name=f"{base_filename}_{suffix}_AI_Review_Report.pdf", mime="application/pdf", use_container_width=True, key=f"download_current_pdf_{report_id}")
+        else:
+            render_locked_download_action("PDF Report", report_id, module_name, pdf_export_type, f"current_pdf_{report_id}")
     with c2:
         if current_plan == "pro":
-            st.download_button("Download Word Report", st.session_state.word_file, file_name=f"{base_filename}_{suffix}_AI_Review_Report.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document", use_container_width=True)
+            if is_export_unlocked(report_id, "word"):
+                st.download_button("Download Word Report", st.session_state.word_file, file_name=f"{base_filename}_{suffix}_AI_Review_Report.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document", use_container_width=True, key=f"download_current_word_{report_id}")
+            else:
+                render_locked_download_action("Word Report", report_id, module_name, "word", f"current_word_{report_id}")
         else:
-            st.button("Download Word Report 🔒 Studio", disabled=True, use_container_width=True)
+            st.button("Word Report locked", disabled=True, use_container_width=True)
+            st.caption("Word export is available on Studio and requires 1 credit.")
     if show_sections:
         render_sections(sections, report, module_name)
 
@@ -2453,6 +2582,7 @@ elif page == "Projects":
             step_header(3, "Project type", "Select the relevant project and property type using clear check boxes.")
             checkbox_grid("Project Type", PROJECT_TYPE_OPTIONS, "wizard_project_types", columns=2)
             if st.session_state.get("wizard_review_module") == "Planning Review":
+                st.markdown('<div class="sy-section-divider"></div>', unsafe_allow_html=True)
                 single_choice_cards("Property Type", PROPERTY_TYPE_OPTIONS, "wizard_property_type", columns=2)
             else:
                 st.session_state["wizard_property_type"] = "Not stated"
@@ -2531,16 +2661,26 @@ elif page == "Reports":
             d1, d2 = st.columns(2)
             pdf_bytes = item.get("pdf_bytes")
             word_bytes = item.get("word_bytes")
+            item_report_id = item.get("report_id", "report")
+            item_module = item.get("module", "Planning Review")
+            item_pdf_export_type = get_pdf_export_type(item_module)
             with d1:
                 if pdf_bytes:
-                    st.download_button("Download PDF", pdf_bytes, file_name=f"{item.get('report_id', 'report')}_ArchLens_Report.pdf", mime="application/pdf", use_container_width=True, key=f"pdf_{item.get('report_id','')}")
+                    if is_export_unlocked(item_report_id, item_pdf_export_type, item):
+                        st.download_button("Download PDF", pdf_bytes, file_name=f"{item_report_id}_ArchLens_Report.pdf", mime="application/pdf", use_container_width=True, key=f"pdf_{item_report_id}")
+                    else:
+                        render_locked_download_action("PDF Report", item_report_id, item_module, item_pdf_export_type, f"history_pdf_{item_report_id}")
                 else:
                     st.caption("PDF download available for reports generated after this update.")
             with d2:
                 if current_plan == "pro" and word_bytes:
-                    st.download_button("Download Word", word_bytes, file_name=f"{item.get('report_id', 'report')}_ArchLens_Report.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document", use_container_width=True, key=f"docx_{item.get('report_id','')}")
+                    if is_export_unlocked(item_report_id, "word", item):
+                        st.download_button("Download Word", word_bytes, file_name=f"{item_report_id}_ArchLens_Report.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document", use_container_width=True, key=f"docx_{item_report_id}")
+                    else:
+                        render_locked_download_action("Word Report", item_report_id, item_module, "word", f"history_word_{item_report_id}")
                 elif current_plan != "pro":
-                    st.button("Word Report 🔒 Studio", disabled=True, use_container_width=True, key=f"docx_locked_{item.get('report_id','')}")
+                    st.button("Word Report locked", disabled=True, use_container_width=True, key=f"docx_locked_{item_report_id}")
+                    st.caption("Word export is available on Studio and requires 1 credit.")
                 else:
                     st.caption("Word download available for reports generated after this update.")
             st.markdown('</div>', unsafe_allow_html=True)

@@ -46,6 +46,19 @@ PLANNING_REQUIRED_HEADINGS = [
     "SUBMISSION READINESS",
 ]
 
+TARGET_REPORT_STYLE_RULES = """
+Target writing style:
+- Use the rewritten example report as the reference tone: concise, natural, client-friendly and professional.
+- Write like a UK architect or planning consultant preparing a clear appraisal for a homeowner.
+- Prefer short paragraphs and focused bullets over dense legal wording.
+- Keep officer-style reasoning, but avoid robotic, repetitive or backend-sounding phrases.
+- Avoid phrases such as "appears broadly capable", "subject to final dimensional confirmation",
+  "planning / permitted development requirements", "rear extension dormer", and repeated "likely compliant" wording.
+- Use direct wording such as "appears likely to comply", "suitable for an LDC application",
+  "the drawings indicate", "should be confirmed", and "before submission".
+- Do not include filler, confidence scores, AI/system language, or raw questionnaire labels.
+"""
+
 _client: Optional[OpenAI] = None
 
 
@@ -75,6 +88,30 @@ def _call_responses_api(model: str, input_payload, retries: int = 3):
                 continue
             raise
     raise last_error
+
+
+def apply_target_report_language(report_text: str) -> str:
+    """Remove recurring stiff phrases while preserving report headings and substance."""
+    if not report_text:
+        return report_text
+    text = report_text
+    replacements = [
+        (r"\bappears broadly capable of complying with\b", "appears likely to comply with"),
+        (r"\bappears broadly capable of being carried out\b", "appears likely to be carried out"),
+        (r"\bsubject to final dimensional confirmation\b", "once the key dimensions are confirmed"),
+        (r"\bsubject to final confirmation of dimensions\b", "once the key dimensions are confirmed"),
+        (r"\bplanning\s*/\s*permitted development requirements\b", "planning or permitted development requirements"),
+        (r"\brear extension dormer\b", "rear dormer loft conversion"),
+        (r"\bextension dormer\b", "dormer extension"),
+        (r"\blikely compliant subject to minor checks\b", "likely suitable for an LDC application with minor checks outstanding"),
+        (r"\bInitial AI assessment based on drawing pack completeness and clarity\.\b", "The drawing pack is generally clear, with a small number of items to confirm before submission."),
+    ]
+    for pattern, replacement in replacements:
+        text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+    text = re.sub(r",{2,}", ",", text)
+    text = re.sub(r"\s+,", ",", text)
+    text = re.sub(r",\s*\.", ".", text)
+    return text
 
 
 def clean_extracted_text(text: str) -> str:
@@ -461,7 +498,7 @@ def infer_submission_readiness_from_context(
         if ("6m" in combined or "6000" in combined) and ("3m" in combined or "3000" in combined or "4m" in combined or "4000" in combined):
             return (
                 "READY TO SUBMIT",
-                "The pack appears to provide the key prior approval information typically required for a larger home extension submission, subject to final dimensional confirmation on the submitted drawings.",
+                "The pack appears to provide the key prior approval information typically required for a larger home extension submission, with dimensions to be checked on the final drawings.",
             )
         return (
             "LIKELY READY WITH MINOR AMENDMENTS",
@@ -660,14 +697,14 @@ def infer_route_from_pd_context(
         if _ctx_value(pd_context, "materials_similar").lower() == "no":
             return (
                 "PD / LDC",
-                "The proposal appears broadly capable of Class B permitted development; external materials should match the existing dwelling.",
+                "The proposal appears likely to meet the main Class B tests, but external materials should match the existing dwelling.",
                 "MEDIUM",
             )
 
         if _ctx_value(pd_context, "eaves_setback_0_2m").lower() == "no":
             return (
                 "PD / LDC",
-                "The proposal appears broadly capable of Class B permitted development; the typical 200mm eaves setback should be confirmed.",
+                "The proposal appears likely to meet the main Class B tests, but the 200mm eaves setback should be confirmed.",
                 "MEDIUM",
             )
 
@@ -684,7 +721,7 @@ def infer_route_from_pd_context(
             return "FULL PLANNING", "The questionnaire indicates the porch exceeds the usual 3m Class D height limit.", "HIGH"
         if _ctx_yes(pd_context, "porch_within_2m_highway"):
             return "FULL PLANNING", "The questionnaire indicates part of the porch would be within 2m of a boundary with a highway, which would fall outside Class D.", "HIGH"
-        return "PD / LDC", "The porch appears broadly capable of Class D permitted development, subject to final dimensional confirmation.", "LOW"
+        return "PD / LDC", "The porch appears likely to fall within Class D permitted development once the key dimensions are confirmed.", "LOW"
 
     return None, "", "MEDIUM"
 
@@ -976,6 +1013,8 @@ Report mode:
 Audience rule:
 {audience_rules}
 
+{TARGET_REPORT_STYLE_RULES}
+
 You have reviewed all pages of the drawing pack using:
 1. Full extracted text from the PDF
 2. Image-based page batch summaries
@@ -1077,6 +1116,7 @@ Report to repair:
         repaired = _call_responses_api("gpt-5", repair_prompt)
         output_text = repaired.output_text
 
+    output_text = apply_target_report_language(output_text)
     output_text = simplify_report_text(output_text, max_bullets_per_section=6)
     gc.collect()
     return output_text
@@ -1260,6 +1300,8 @@ You are reviewing a UK residential planning drawing pack.
 
 {audience_hint}
 
+{TARGET_REPORT_STYLE_RULES}
+
 Client-stated project types:
 {project_types_text}
 
@@ -1290,7 +1332,7 @@ Deterministic rule engine result:
 Route-check instructions:
 - Use the structured rule result to guide the likely planning route, but write the outcome in professional consultant language.
 - Do not use harsh PASS / FAIL wording in the report unless there is a clear policy breach.
-- For typical dormer/rooflight LDC schemes, use "likely compliant subject to minor checks" where only standard confirmations are outstanding.
+- For typical dormer/rooflight LDC schemes, say the proposal is likely suitable for an LDC application where only standard confirmations are outstanding.
 - Explain the route briefly and avoid backend rule-engine wording.
 
 Planning reasoning requirements:
@@ -1369,7 +1411,7 @@ TOP SUMMARY
 - Include only:
   - Project Summary: {project_summary_value}
   - Likely Planning Route: {application_type_value}
-  - Overall Planning Position: The proposal appears broadly capable of complying with the relevant planning / permitted development requirements subject to final dimensional confirmation.
+  - Overall Planning Position: The proposal appears likely to comply with the main planning or permitted development requirements once the key dimensions and planning history are confirmed.
   - Local Authority: {authority_value}
 - Add a maximum of 3 concise Key Planning Considerations bullets.
 - Use professional consultant wording only.
@@ -1455,6 +1497,7 @@ Detected pages:
     output_text = response.output_text
     fire_status = infer_fire_statement_status(text, page_summary)
     output_text = polish_planning_report_text(output_text, address_text, fire_status, authority_value)
+    output_text = apply_target_report_language(output_text)
     if minor_class_b_condition_only:
         output_text = normalise_minor_class_b_route_text(output_text)
 
@@ -1466,10 +1509,10 @@ Detected pages:
             1,
         )
     top_summary_pattern = r"TOP SUMMARY\n([\s\S]*?)(?=\n[A-Z][A-Z /\-]+\n)"
-    compliance_position = "The proposal appears broadly capable of complying with the relevant planning / permitted development requirements subject to final dimensional confirmation." if application_type_value == "PD / LDC" else ("The proposal appears capable of progressing via the prior approval route subject to final dimensional confirmation and neighbour consultation requirements." if application_type_value == "PRIOR APPROVAL" else "The proposal is likely to require a formal planning application and should be assessed against the relevant local planning policies.")
+    compliance_position = "The proposal appears likely to comply with the main permitted development requirements once the key dimensions and planning history are confirmed." if application_type_value == "PD / LDC" else ("The proposal appears suitable for the prior approval route, provided the neighbour consultation and dimensional checks are satisfied." if application_type_value == "PRIOR APPROVAL" else "The proposal is likely to require a formal planning application and should be assessed against the relevant local planning policies.")
     if minor_class_b_condition_only:
         application_type_value = "PD / LDC"
-        compliance_position = "Likely compliant subject to minor checks"
+        compliance_position = "Likely suitable for an LDC application with minor checks outstanding"
     top_summary_replacement = (
         "TOP SUMMARY\n"
         f"Project Summary: {project_summary_value}\n"
@@ -1489,11 +1532,12 @@ Detected pages:
         )
         output_text = repaired.output_text
         output_text = polish_planning_report_text(output_text, address_text, fire_status, authority_value)
+        output_text = apply_target_report_language(output_text)
         top_summary_pattern = r"TOP SUMMARY\n([\s\S]*?)(?=\n[A-Z][A-Z /\-]+\n)"
-        compliance_position = "The proposal appears broadly capable of complying with the relevant planning / permitted development requirements subject to final dimensional confirmation." if application_type_value == "PD / LDC" else ("The proposal appears capable of progressing via the prior approval route subject to final dimensional confirmation and neighbour consultation requirements." if application_type_value == "PRIOR APPROVAL" else "The proposal is likely to require a formal planning application and should be assessed against the relevant local planning policies.")
+        compliance_position = "The proposal appears likely to comply with the main permitted development requirements once the key dimensions and planning history are confirmed." if application_type_value == "PD / LDC" else ("The proposal appears suitable for the prior approval route, provided the neighbour consultation and dimensional checks are satisfied." if application_type_value == "PRIOR APPROVAL" else "The proposal is likely to require a formal planning application and should be assessed against the relevant local planning policies.")
     if minor_class_b_condition_only:
         application_type_value = "PD / LDC"
-        compliance_position = "Likely compliant subject to minor checks"
+        compliance_position = "Likely suitable for an LDC application with minor checks outstanding"
         top_summary_replacement = (
             "TOP SUMMARY\n"
             f"Project Summary: {project_summary_value}\n"
@@ -1504,6 +1548,7 @@ Detected pages:
         output_text = re.sub(top_summary_pattern, top_summary_replacement, output_text, count=1)
         output_text = re.sub(r"^.*Overall Planning Risk Rating:.*$\n?", "", output_text, flags=re.MULTILINE)
         output_text = re.sub(r"^.*Planning Approval Probability:.*$\n?", "", output_text, flags=re.MULTILINE)
+    output_text = apply_target_report_language(output_text)
     output_text = simplify_report_text(output_text, max_bullets_per_section=5)
     gc.collect()
     return output_text
@@ -1581,6 +1626,7 @@ def simplify_report_text(report_text: str, max_bullets_per_section: int = 6) -> 
         out.append(line)
     text = "\n".join(out)
     text = re.sub(r"\n{3,}", "\n\n", text).strip()
+    text = apply_target_report_language(text)
     return text
 
 
