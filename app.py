@@ -1108,6 +1108,37 @@ def inject_custom_css():
         .stTextArea textarea {{ min-height: 90px; }}
         .streamlit-expanderHeader {{ border:1px solid #5D6472 !important; border-radius:12px !important; }}
         .stProgress > div > div > div > div {{ background: linear-gradient(90deg, #D4C29A, #c5b183); }}
+
+
+        /* Keep Streamlit sidebar restore button visible after the user collapses the sidebar */
+        [data-testid="collapsedControl"],
+        button[data-testid="collapsedControl"],
+        div[data-testid="collapsedControl"] {
+            display: flex !important;
+            visibility: visible !important;
+            opacity: 1 !important;
+            pointer-events: auto !important;
+            position: fixed !important;
+            top: 0.75rem !important;
+            left: 0.75rem !important;
+            z-index: 999999 !important;
+            background: #D4C29A !important;
+            color: #111111 !important;
+            border: 1px solid #D4C29A !important;
+            border-radius: 12px !important;
+            box-shadow: 0 10px 24px rgba(0,0,0,0.30) !important;
+        }
+        [data-testid="collapsedControl"] *,
+        button[data-testid="collapsedControl"] * {
+            color: #111111 !important;
+            fill: #111111 !important;
+            stroke: #111111 !important;
+        }
+        [data-testid="stSidebarCollapsed"] [data-testid="collapsedControl"] {
+            display: flex !important;
+            visibility: visible !important;
+            opacity: 1 !important;
+        }
         </style>
         """,
         unsafe_allow_html=True,
