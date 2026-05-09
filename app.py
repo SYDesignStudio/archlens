@@ -69,7 +69,6 @@ FREE_PREVIEW_NOTE = "Analysis preview is available first. Credits are used when 
 
 ARCHLENS_API_URL = os.getenv("ARCHLENS_API_URL", "https://archlens-api.onrender.com").rstrip("/")
 ARCHLENS_WEBHOOK_SECRET = os.getenv("ARCHLENS_WEBHOOK_SECRET", "archlens_secure_2026_SYDS_92838")
-ARCHLENS_BUY_CREDITS_URL = os.getenv("ARCHLENS_BUY_CREDITS_URL", "https://www.sydesignstudio.co.uk/category/archlens-ai-credits")
 
 
 def normalise_user_email(email: str) -> str:
@@ -171,13 +170,11 @@ PLANNING_REQUIRED_HEADINGS = [
     "TOP SUMMARY",
     "LOCAL AUTHORITY CONTEXT",
     "PD / PRIOR APPROVAL / PLANNING ROUTE",
-    "COMPLIANCE SNAPSHOT",
     "PLANNING ASSESSMENT",
     "DRAWING-PACK INCONSISTENCIES",
     "KEY RISKS",
     "MISSING INFORMATION",
     "RECOMMENDED ACTIONS",
-    "PROFESSIONAL CONCLUSION",
     "SUBMISSION READINESS",
 ]
 
@@ -201,13 +198,11 @@ PLANNING_SECTION_ORDER = [
     ("TOP SUMMARY", "Top Summary"),
     ("LOCAL AUTHORITY CONTEXT", "Local Authority Context"),
     ("PD / PRIOR APPROVAL / PLANNING ROUTE", "PD / Prior Approval / Planning Route"),
-    ("COMPLIANCE SNAPSHOT", "Compliance Snapshot"),
     ("PLANNING ASSESSMENT", "Planning Assessment"),
     ("DRAWING-PACK INCONSISTENCIES", "Drawing-Pack Inconsistencies"),
     ("KEY RISKS", "Key Risks"),
     ("MISSING INFORMATION", "Missing Information"),
     ("RECOMMENDED ACTIONS", "Recommended Actions"),
-    ("PROFESSIONAL CONCLUSION", "Professional Conclusion"),
     ("SUBMISSION READINESS", "Submission Readiness"),
 ]
 
@@ -222,7 +217,6 @@ PLANNING_SPECIAL_KEY_VALUE_SECTIONS = {
     "TOP SUMMARY",
     "LOCAL AUTHORITY CONTEXT",
     "PD / PRIOR APPROVAL / PLANNING ROUTE",
-    "COMPLIANCE SNAPSHOT",
     "SUBMISSION READINESS",
 }
 
@@ -1058,8 +1052,15 @@ def inject_custom_css():
         }}
 
         [data-testid="stSidebar"] {{
-            background: var(--sy-sidebar-bg) !important;
-            border-right: 1px solid var(--sy-border);
+            display: block !important;
+            min-width: 290px !important;
+            width: 290px !important;
+            background: linear-gradient(
+                180deg,
+                rgba(8,12,22,0.98) 0%,
+                rgba(5,8,15,0.98) 100%
+            ) !important;
+            border-right: 1px solid rgba(212,194,154,0.12) !important;
         }}
         [data-testid="stSidebar"] * {{ color: var(--sy-text); }}
         [data-testid="stSidebar"] [role="radiogroup"] label {{
@@ -1143,35 +1144,6 @@ def inject_custom_css():
         .stTextArea textarea {{ min-height: 90px; }}
         .streamlit-expanderHeader {{ border:1px solid #5D6472 !important; border-radius:12px !important; }}
         .stProgress > div > div > div > div {{ background: linear-gradient(90deg, #D4C29A, #c5b183); }}
-
-
-        /* Keep Streamlit sidebar restore control visible if the sidebar is collapsed */
-        [data-testid="collapsedControl"] {{
-            display: flex !important;
-            visibility: visible !important;
-            opacity: 1 !important;
-            position: fixed !important;
-            top: 0.85rem !important;
-            left: 0.85rem !important;
-            z-index: 999999 !important;
-            width: 42px !important;
-            height: 42px !important;
-            align-items: center !important;
-            justify-content: center !important;
-            border-radius: 12px !important;
-            background: var(--sy-accent) !important;
-            border: 1px solid var(--sy-accent-hover) !important;
-            box-shadow: 0 10px 24px rgba(0,0,0,0.28) !important;
-        }}
-        [data-testid="collapsedControl"] * {{
-            color: #111111 !important;
-            fill: #111111 !important;
-            stroke: #111111 !important;
-        }}
-        section[data-testid="stSidebar"] {{
-            min-width: 270px !important;
-            max-width: 270px !important;
-        }}
         </style>
         """,
         unsafe_allow_html=True,
@@ -1973,14 +1945,9 @@ def render_kpi_cards(sections: Dict[str, str], report_id: str, module_name: str)
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Report ID", report_id)
-    if module_name == "Planning Review":
-        c2.metric("Planning Position", v1)
-        c3.metric(label_2, v2)
-        c4.metric(label_3, v3)
-    else:
-        c2.metric("Risk Rating", v1)
-        c3.metric(label_2, v2)
-        c4.metric(label_3, v3)
+    c2.metric("Risk Rating", v1)
+    c3.metric(label_2, v2)
+    c4.metric(label_3, v3)
 
 
 def extract_summary_values(sections: Dict[str, str], module_name: str):
@@ -2099,7 +2066,7 @@ def build_simple_word_doc(title: str, body_text: str) -> BytesIO:
     return buffer
 
 
-st.set_page_config(page_title="ArchLens AI", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="ArchLens AI", layout="wide")
 inject_custom_css()
 
 if "authenticated" not in st.session_state:
@@ -2289,7 +2256,7 @@ def render_left_navigation():
         st.session_state["app_page"] = page
         st.markdown("---")
         st.link_button("Return to SY Design Studio", WEBSITE_HOME_URL, use_container_width=True)
-        st.link_button("Buy Credits", ARCHLENS_BUY_CREDITS_URL, use_container_width=True)
+        st.link_button("Buy Credits", WEBSITE_PRICING_URL, use_container_width=True)
     return page
 
 def intake_items():
