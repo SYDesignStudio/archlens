@@ -58,6 +58,7 @@ ARCHLENS_BUY_CREDITS_URL = os.getenv("ARCHLENS_BUY_CREDITS_URL", "https://www.sy
 EXPORT_CREDIT_COSTS = {
     "planning_pdf": 3,
     "building_pdf": 5,
+    "planning_statement_full": 3,
     "word": 1,
     "planning_statement_pdf": 3,
     "planning_statement_word": 1,
@@ -192,6 +193,15 @@ def export_unlock_key(report_id: str, export_type: str) -> str:
 
 
 def is_export_unlocked(report_id: str, export_type: str, record: Dict | None = None) -> bool:
+    if export_type in {"planning_statement_full", "planning_statement_pdf"}:
+        full_key = export_unlock_key(report_id, "planning_statement_full")
+        pdf_key = export_unlock_key(report_id, "planning_statement_pdf")
+        if st.session_state.get("unlocked_reports", {}).get(full_key) or st.session_state.get("unlocked_reports", {}).get(pdf_key):
+            return True
+        if record:
+            unlocked = record.get("unlocked_exports") or {}
+            if unlocked.get("planning_statement_full") or unlocked.get("planning_statement_pdf"):
+                return True
     key = export_unlock_key(report_id, export_type)
     if st.session_state.get("unlocked_reports", {}).get(key):
         return True
@@ -205,11 +215,15 @@ def mark_export_unlocked(report_id: str, export_type: str):
     key = export_unlock_key(report_id, export_type)
     unlocked = dict(st.session_state.get("unlocked_reports", {}) or {})
     unlocked[key] = True
+    if export_type == "planning_statement_full":
+        unlocked[export_unlock_key(report_id, "planning_statement_pdf")] = True
     st.session_state["unlocked_reports"] = unlocked
     for item in st.session_state.get("saved_projects", []):
         if item.get("report_id") == report_id:
             exports = dict(item.get("unlocked_exports") or {})
             exports[export_type] = True
+            if export_type == "planning_statement_full":
+                exports["planning_statement_pdf"] = True
             item["unlocked_exports"] = exports
 
 
@@ -751,6 +765,20 @@ def prune_saved_report_state():
         key: value for key, value in unlocked.items()
         if key.split(":", 1)[0] in active_report_ids
     }
+    purge_locked_planning_statement_payloads()
+
+
+def purge_locked_planning_statement_payloads():
+    """Remove statement payloads for reports whose statement has not been unlocked."""
+    for item in st.session_state.get("saved_projects", []) or []:
+        report_id = item.get("report_id", "")
+        if not is_export_unlocked(report_id, "planning_statement_full", item):
+            for key in (
+                "planning_statement_text",
+                "planning_statement_pdf_bytes",
+                "planning_statement_word_bytes",
+            ):
+                item.pop(key, None)
 
 
 def add_saved_project(project_record: Dict):
@@ -2707,36 +2735,118 @@ def update_saved_project(report_id: str, updates: Dict):
     prune_saved_report_state()
 
 
+def get_planning_statement_teaser(sections: Dict[str, str]) -> str:
+    overview = clean_summary_card_text(
+        sections.get("SITE AND PROPOSAL OVERVIEW", ""),
+        "The Planning Statement will set out the site context, proposal, planning policy position, design approach, amenity considerations and conclusion in a consultant-style format.",
+    )
+    first_sentence = re.split(r"(?<=[.!?])\s+", overview.replace("\n", " ").strip())[0]
+    return first_sentence[:360].strip()
+
+
+def clear_locked_planning_statement_state(report_id: str):
+    if is_export_unlocked(report_id, "planning_statement_full"):
+        return
+    st.session_state["planning_statement_text"] = None
+    st.session_state["planning_statement_pdf_file"] = None
+    st.session_state["planning_statement_word_file"] = None
+    for item in st.session_state.get("saved_projects", []) or []:
+        if item.get("report_id") == report_id:
+            for key in (
+                "planning_statement_text",
+                "planning_statement_pdf_bytes",
+                "planning_statement_word_bytes",
+            ):
+                item.pop(key, None)
+
+
+def unlock_planning_statement_access(report_id: str):
+    cost = get_export_cost("Planning Review", "planning_statement_full")
+    balance = st.session_state.get("credit_balance")
+    balance_label = get_credit_balance_label()
+    st.caption(f"Unlock full Planning Statement to continue. Requires {cost} credits. Current balance: {balance_label}.")
+
+    if balance is None:
+        st.button("Unlock Full Planning Statement", disabled=True, use_container_width=True, key=f"statement_full_sync_{report_id}")
+        st.caption("Checking credit balance before the Planning Statement can be unlocked.")
+        return
+
+    if int(balance) < cost:
+        st.button("Unlock Full Planning Statement", disabled=True, use_container_width=True, key=f"statement_full_locked_{report_id}")
+        st.caption("Add credits to unlock the full Planning Statement.")
+        return
+
+    if st.button("Unlock Full Planning Statement", use_container_width=True, key=f"statement_full_unlock_{report_id}"):
+        ok, message, _ = api_deduct_credits(current_user_name, cost, report_id, "planning_statement_full")
+        if ok:
+            mark_export_unlocked(report_id, "planning_statement_full")
+            st.success("Full Planning Statement unlocked.")
+            st.rerun()
+        else:
+            st.error(message or "Could not unlock the Planning Statement.")
+
+
+def ensure_unlocked_planning_statement_generated(report_id: str):
+    if st.session_state.get("planning_statement_text"):
+        return
+    with st.spinner("Preparing unlocked Planning Statement..."):
+        authority = extract_summary_values(st.session_state.get("sections") or {}, "Planning Review").get("authority", "")
+        statement_text = pdf_summary.generate_planning_statement(
+            st.session_state.get("report") or "",
+            sections=st.session_state.get("sections") or {},
+            project_address=st.session_state.get("wizard_project_address", ""),
+            client_name=st.session_state.get("wizard_client_name", ""),
+            local_authority=authority,
+            review_mode=st.session_state.get("wizard_review_mode", "Architect / Professional"),
+        )
+        statement_text = pdf_summary.normalise_planning_statement_text(statement_text)
+        st.session_state["planning_statement_text"] = statement_text
+        st.session_state["planning_statement_pdf_file"] = build_simple_pdf_doc("Planning Statement", statement_text, report_id)
+        st.session_state["planning_statement_word_file"] = build_simple_word_doc("Planning Statement", statement_text)
+        update_saved_project(report_id, {
+            "planning_statement_text": statement_text,
+            "planning_statement_pdf_bytes": st.session_state["planning_statement_pdf_file"].getvalue(),
+            "planning_statement_word_bytes": st.session_state["planning_statement_word_file"].getvalue(),
+        })
+
+
 def render_planning_statement_panel(report_id: str):
     st.markdown(
-        '<div class="sy-subtle-card"><div class="sy-section-label">Planning Statement</div><h3 style="margin:0 0 0.35rem 0;">Consultant-Style Planning Statement</h3><div class="sy-muted">Generate a planning statement from the current report, project inputs and local authority context. Preview is free; downloads unlock with credits.</div></div>',
+        '<div class="sy-subtle-card"><div class="sy-section-label">Planning Statement</div><h3 style="margin:0 0 0.35rem 0;">Consultant-Style Planning Statement</h3><div class="sy-muted">Unlock the full statement with credits to generate the browser preview and included PDF export. Word export remains a separate +1 credit unlock.</div></div>',
         unsafe_allow_html=True,
     )
-    statement_text = st.session_state.get("planning_statement_text")
-    if st.button("Generate Planning Statement", use_container_width=True, key=f"generate_statement_{report_id}"):
-        with st.spinner("Preparing planning statement..."):
-            authority = extract_summary_values(st.session_state.get("sections") or {}, "Planning Review").get("authority", "")
-            statement_text = pdf_summary.generate_planning_statement(
-                st.session_state.get("report") or "",
-                sections=st.session_state.get("sections") or {},
-                project_address=st.session_state.get("wizard_project_address", ""),
-                client_name=st.session_state.get("wizard_client_name", ""),
-                local_authority=authority,
-                review_mode=st.session_state.get("wizard_review_mode", "Architect / Professional"),
-            )
-            statement_text = pdf_summary.normalise_planning_statement_text(statement_text)
-            st.session_state["planning_statement_text"] = statement_text
-            st.session_state["planning_statement_pdf_file"] = build_simple_pdf_doc("Planning Statement", statement_text, report_id)
-            st.session_state["planning_statement_word_file"] = build_simple_word_doc("Planning Statement", statement_text)
-            update_saved_project(report_id, {
-                "planning_statement_text": statement_text,
-                "planning_statement_pdf_bytes": st.session_state["planning_statement_pdf_file"].getvalue(),
-                "planning_statement_word_bytes": st.session_state["planning_statement_word_file"].getvalue(),
-            })
-            st.success("Planning Statement generated.")
 
+    if not is_export_unlocked(report_id, "planning_statement_full"):
+        clear_locked_planning_statement_state(report_id)
+        teaser = get_planning_statement_teaser(st.session_state.get("sections") or {})
+        st.markdown(
+            f"""
+            <div class="sy-subtle-card">
+                <div class="sy-section-label">Locked Preview</div>
+                <h3 style="margin:0 0 0.45rem 0;">Planning Statement</h3>
+                <p style="margin:0 0 0.65rem 0;">This Planning Statement will be prepared in a consultant-style format for the current Planning Review.</p>
+                <p style="margin:0 0 0.85rem 0;"><strong>Sample:</strong> {html.escape(teaser)}</p>
+                <div style="filter:blur(5px);opacity:0.42;user-select:none;border-top:1px solid rgba(212,194,154,0.18);padding-top:0.75rem;">
+                    Site and Surroundings<br>
+                    Proposal Description<br>
+                    Planning History<br>
+                    Relevant Planning Policy<br>
+                    Design and Character<br>
+                    Residential Amenity<br>
+                    Highways and Parking<br>
+                    Conclusion
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        unlock_planning_statement_access(report_id)
+        return
+
+    ensure_unlocked_planning_statement_generated(report_id)
+    statement_text = st.session_state.get("planning_statement_text")
     if not statement_text:
-        st.caption("Generate the Planning Statement after the Planning Review report has been created.")
+        st.error("The Planning Statement could not be prepared. Please try again.")
         return
 
     with st.expander("Preview Planning Statement", expanded=True):
@@ -2884,7 +2994,7 @@ elif page == "Projects":
                 st.session_state["wizard_review_mode"] = st.selectbox("Report Mode", ["Architect / Professional", "Homeowner Summary"], index=["Architect / Professional", "Homeowner Summary"].index(st.session_state.get("wizard_review_mode", "Architect / Professional")))
                 st.caption("Tailored output for architects, agents and professionals.")
             st.markdown("<hr style='border-color:var(--sy-border);margin:1.25rem 0;'>", unsafe_allow_html=True)
-            st.caption("Downloads are unlocked using credits. Planning PDF = 3 credits. Building Regs PDF = 5 credits. Word export = 1 credit. Planning Statement PDF = 3 credits. Planning Statement Word = 1 credit.")
+            st.caption("Downloads are unlocked using credits. Planning PDF = 3 credits. Building Regs PDF = 5 credits. Word export = 1 credit. Full Planning Statement with PDF = 3 credits. Planning Statement Word = 1 credit.")
             wizard_buttons()
         elif step == 2:
             step_header(2, "Project details", "Add the basic project and site information used in the report cover, council detection and AI context.")
