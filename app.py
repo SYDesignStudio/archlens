@@ -35,7 +35,7 @@ DEFAULT_STATE = {
     "report_library": [],
     "app_theme": "Dark",
     "brand_logo_bytes": None,
-    "credit_balance": 0,
+    "credit_balance": None,
     "credit_transactions": [],
     "unlocked_reports": {},
 }
@@ -77,11 +77,22 @@ def sync_credit_balance_from_api(email: str):
     api_balance = api_get_credit_balance(email)
     if api_balance is not None:
         st.session_state["credit_balance"] = api_balance
-    return st.session_state.get("credit_balance", 0)
+        st.session_state["credit_balance_email"] = normalise_user_email(email)
+        st.session_state["credit_api_last_sync"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        st.session_state["credit_api_error"] = ""
+    else:
+        st.session_state["credit_api_error"] = "Credit API unavailable; keeping previous balance."
+    return st.session_state.get("credit_balance")
 
 
 def get_credit_balance() -> int:
-    return int(st.session_state.get("credit_balance", 0) or 0)
+    balance = st.session_state.get("credit_balance")
+    return int(balance) if balance is not None else 0
+
+
+def get_credit_balance_label() -> str:
+    balance = st.session_state.get("credit_balance")
+    return str(int(balance)) if balance is not None else "Syncing"
 
 BUILDING_REQUIRED_HEADINGS = [
     "PROJECT CLASSIFICATION",
@@ -620,6 +631,7 @@ def inject_custom_css():
             height:0 !important;
             min-height:0 !important;
             background:transparent !important;
+            overflow:visible !important;
         }}
         [data-testid="stToolbar"], .stAppDeployButton {{ display:none !important; }}
         #MainMenu {{ visibility:hidden !important; }}
@@ -635,6 +647,10 @@ def inject_custom_css():
             display: block !important;
             visibility: visible !important;
             opacity: 1 !important;
+            min-width: 252px !important;
+            width: 252px !important;
+            max-width: 252px !important;
+            pointer-events: auto !important;
             background: var(--sy-sidebar-bg) !important;
             border-right: 1px solid var(--sy-border);
         }}
@@ -740,9 +756,18 @@ def inject_custom_css():
             opacity: 1 !important;
             min-width: 252px !important;
             width: 252px !important;
+            max-width: 252px !important;
+            pointer-events: auto !important;
             background: linear-gradient(180deg, rgba(15,22,32,0.98), rgba(9,13,20,0.98)) !important;
         }}
-        [data-testid="stSidebar"]:not([aria-expanded="false"]) {{
+        [data-testid="stSidebar"][aria-expanded="true"],
+        [data-testid="stSidebar"]:not([aria-expanded]) {{
+            display:block !important;
+            visibility:visible !important;
+            opacity:1 !important;
+            min-width:252px !important;
+            width:252px !important;
+            max-width:252px !important;
             transform: none !important;
             margin-left: 0 !important;
             left: 0 !important;
@@ -832,7 +857,7 @@ def inject_custom_css():
             fill: #111111 !important;
             stroke: #111111 !important;
         }}
-        body:has([data-testid="stSidebar"]:not([aria-expanded="false"])) [data-testid="collapsedControl"] {{
+        body:has([data-testid="stSidebar"][aria-expanded="true"]) [data-testid="collapsedControl"] {{
             display: none !important;
             visibility: hidden !important;
             opacity: 0 !important;
@@ -1947,7 +1972,7 @@ def render_left_navigation():
             f"""
             <div class="sy-sidebar-account">
                 <div class="sy-sidebar-account-row"><span>Plan:</span><strong>{PLAN_LABELS.get(current_plan, 'Solo')}</strong></div>
-                <div class="sy-sidebar-account-row"><span>Credits:</span><strong>{get_credit_balance()}</strong></div>
+                <div class="sy-sidebar-account-row"><span>Credits:</span><strong>{get_credit_balance_label()}</strong></div>
                 <div class="sy-sidebar-account-row"><span>User:</span><strong>{current_user_name or 'Not shown'}</strong></div>
             </div>
             """,
@@ -2312,7 +2337,7 @@ st.markdown(
             <div class="sy-topbar-title">ARCHLENS HUB</div>
             <div class="sy-topbar-meta">AI-powered planning and building regulations intelligence for UK projects</div>
         </div>
-        <div class="sy-topbar-meta">Credits: {get_credit_balance()} &nbsp; | &nbsp; Plan: {PLAN_LABELS.get(current_plan, "Solo")}{(" &nbsp; | &nbsp; User: " + current_user_name) if current_user_name else ""}<span class="sy-user-badge">{user_initials}</span></div>
+        <div class="sy-topbar-meta">Credits: {get_credit_balance_label()} &nbsp; | &nbsp; Plan: {PLAN_LABELS.get(current_plan, "Solo")}{(" &nbsp; | &nbsp; User: " + current_user_name) if current_user_name else ""}<span class="sy-user-badge">{user_initials}</span></div>
     </div>
     """,
     unsafe_allow_html=True,
