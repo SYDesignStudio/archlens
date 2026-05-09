@@ -171,11 +171,13 @@ PLANNING_REQUIRED_HEADINGS = [
     "TOP SUMMARY",
     "LOCAL AUTHORITY CONTEXT",
     "PD / PRIOR APPROVAL / PLANNING ROUTE",
+    "COMPLIANCE SNAPSHOT",
     "PLANNING ASSESSMENT",
     "DRAWING-PACK INCONSISTENCIES",
     "KEY RISKS",
     "MISSING INFORMATION",
     "RECOMMENDED ACTIONS",
+    "PROFESSIONAL CONCLUSION",
     "SUBMISSION READINESS",
 ]
 
@@ -199,11 +201,13 @@ PLANNING_SECTION_ORDER = [
     ("TOP SUMMARY", "Top Summary"),
     ("LOCAL AUTHORITY CONTEXT", "Local Authority Context"),
     ("PD / PRIOR APPROVAL / PLANNING ROUTE", "PD / Prior Approval / Planning Route"),
+    ("COMPLIANCE SNAPSHOT", "Compliance Snapshot"),
     ("PLANNING ASSESSMENT", "Planning Assessment"),
     ("DRAWING-PACK INCONSISTENCIES", "Drawing-Pack Inconsistencies"),
     ("KEY RISKS", "Key Risks"),
     ("MISSING INFORMATION", "Missing Information"),
     ("RECOMMENDED ACTIONS", "Recommended Actions"),
+    ("PROFESSIONAL CONCLUSION", "Professional Conclusion"),
     ("SUBMISSION READINESS", "Submission Readiness"),
 ]
 
@@ -218,6 +222,7 @@ PLANNING_SPECIAL_KEY_VALUE_SECTIONS = {
     "TOP SUMMARY",
     "LOCAL AUTHORITY CONTEXT",
     "PD / PRIOR APPROVAL / PLANNING ROUTE",
+    "COMPLIANCE SNAPSHOT",
     "SUBMISSION READINESS",
 }
 
@@ -1063,41 +1068,6 @@ def inject_custom_css():
             margin-bottom: 0.15rem !important;
         }}
 
-        /* Keep Streamlit sidebar restore/collapse control visible.
-           Important: all braces are escaped because this CSS sits inside a Python f-string. */
-        [data-testid="collapsedControl"] {{
-            display: flex !important;
-            visibility: visible !important;
-            opacity: 1 !important;
-            pointer-events: auto !important;
-            z-index: 999999 !important;
-        }}
-        [data-testid="collapsedControl"] button {{
-            display: flex !important;
-            visibility: visible !important;
-            opacity: 1 !important;
-            pointer-events: auto !important;
-            background: var(--sy-accent) !important;
-            color: #111111 !important;
-            border-radius: 999px !important;
-            border: 1px solid var(--sy-accent) !important;
-            box-shadow: 0 10px 24px rgba(212, 194, 154, 0.25) !important;
-        }}
-        [data-testid="stSidebarCollapsedControl"] {{
-            display: flex !important;
-            visibility: visible !important;
-            opacity: 1 !important;
-            pointer-events: auto !important;
-            z-index: 999999 !important;
-        }}
-        [data-testid="stSidebarCollapseButton"] {{
-            display: flex !important;
-            visibility: visible !important;
-            opacity: 1 !important;
-            pointer-events: auto !important;
-            z-index: 999999 !important;
-        }}
-
         h1 {{ font-size: 2.35rem !important; letter-spacing: -0.035em !important; line-height: 1.08 !important; }}
         h2 {{ font-size: 1.45rem !important; letter-spacing: -0.02em !important; }}
         h3 {{ font-size: 1.12rem !important; }}
@@ -1173,6 +1143,35 @@ def inject_custom_css():
         .stTextArea textarea {{ min-height: 90px; }}
         .streamlit-expanderHeader {{ border:1px solid #5D6472 !important; border-radius:12px !important; }}
         .stProgress > div > div > div > div {{ background: linear-gradient(90deg, #D4C29A, #c5b183); }}
+
+
+        /* Keep Streamlit sidebar restore control visible if the sidebar is collapsed */
+        [data-testid="collapsedControl"] {{
+            display: flex !important;
+            visibility: visible !important;
+            opacity: 1 !important;
+            position: fixed !important;
+            top: 0.85rem !important;
+            left: 0.85rem !important;
+            z-index: 999999 !important;
+            width: 42px !important;
+            height: 42px !important;
+            align-items: center !important;
+            justify-content: center !important;
+            border-radius: 12px !important;
+            background: var(--sy-accent) !important;
+            border: 1px solid var(--sy-accent-hover) !important;
+            box-shadow: 0 10px 24px rgba(0,0,0,0.28) !important;
+        }}
+        [data-testid="collapsedControl"] * {{
+            color: #111111 !important;
+            fill: #111111 !important;
+            stroke: #111111 !important;
+        }}
+        section[data-testid="stSidebar"] {{
+            min-width: 270px !important;
+            max-width: 270px !important;
+        }}
         </style>
         """,
         unsafe_allow_html=True,
@@ -2100,7 +2099,7 @@ def build_simple_word_doc(title: str, body_text: str) -> BytesIO:
     return buffer
 
 
-st.set_page_config(page_title="ArchLens AI", layout="wide")
+st.set_page_config(page_title="ArchLens AI", layout="wide", initial_sidebar_state="expanded")
 inject_custom_css()
 
 if "authenticated" not in st.session_state:
