@@ -941,9 +941,11 @@ def inject_custom_css():
             min-height:42px !important; padding:0.62rem 1rem !important; font-size:0.84rem !important; line-height:1.15 !important;
         }}
         .stButton button:hover, .stDownloadButton button:hover, .stLinkButton a:hover {{ background: var(--sy-accent-hover) !important; border-color: var(--sy-accent-hover) !important; color: #111111 !important; filter:none !important; }}
+        .stButton button *, .stDownloadButton button *, .stLinkButton a * {{ color:#111111 !important; }}
         .stButton button:disabled, .stDownloadButton button:disabled {{
             background:rgba(255,255,255,0.06) !important; color:var(--sy-muted) !important; border-color:var(--sy-border) !important; box-shadow:none !important;
         }}
+        .stButton button:disabled *, .stDownloadButton button:disabled * {{ color:var(--sy-muted) !important; }}
 
         .stSelectbox label, .stTextInput label, .stTextArea label, .stNumberInput label, .stDateInput label, .stMultiSelect label, .stCheckbox label, .stRadio label {{
             color:var(--sy-text) !important; font-weight:700 !important; margin-bottom:0.3rem !important;
@@ -1047,6 +1049,16 @@ def inject_custom_css():
         .sy-step-title {{ font-size:0.78rem; font-weight:820; color:var(--sy-text); }}
         .sy-step-sub {{ font-size:0.66rem; color:var(--sy-muted); margin-top:0.12rem; }}
         .sy-form-card {{ border:1px solid var(--sy-border); border-radius:14px; background:linear-gradient(180deg, rgba(17,26,38,0.88), rgba(11,17,27,0.92)); padding:1.9rem 2rem; min-height:520px; box-shadow: var(--sy-card-shadow); }}
+        .sy-form-card-anchor {{ display:none; }}
+        div[data-testid="stVerticalBlockBorderWrapper"]:has(.sy-form-card-anchor) {{
+            border:1px solid var(--sy-border);
+            border-radius:14px;
+            background:linear-gradient(180deg, rgba(17,26,38,0.88), rgba(11,17,27,0.92));
+            box-shadow:var(--sy-card-shadow);
+            padding:1.5rem 1.7rem 1.65rem 1.7rem;
+            min-height:520px;
+            margin-top:0.75rem;
+        }}
         .sy-form-card .sy-subtle-card {{ background:transparent !important; border:0 !important; box-shadow:none !important; padding:0 0 1.2rem 0 !important; }}
         div[data-testid="column"]:has(.sy-subtle-card) {{
             border:1px solid var(--sy-border);
@@ -2621,6 +2633,35 @@ def visible_step_number(step_no: int) -> int:
     return {1: 1, 2: 1, 3: 2, 4: 3, 5: 3, 6: 4, 7: 5}.get(int(step_no), 1)
 
 
+def render_projects_intro_and_stepper(step: int, step_items):
+    step_html = '<div class="sy-step-row">'
+    progress_width = min(100, max(10, int((visible_step_number(step) / 5) * 100)))
+    for step_no, _icon, title, subtitle in step_items:
+        active = "active" if step == step_no or (step == 2 and step_no == 1) else ""
+        step_html += (
+            f'<div class="sy-step-item {active}">'
+            f'<div class="sy-step-icon">{visible_step_number(step_no)}</div>'
+            f'<div><div class="sy-step-title">{title}</div><div class="sy-step-sub">{subtitle}</div></div>'
+            f'</div>'
+        )
+    step_html += f'<div class="sy-step-progress"><span style="width:{progress_width}%;"></span></div></div>'
+    st.markdown(
+        f"""
+        <div class="sy-project-hero">
+            <div class="sy-project-hero-row">
+                <div>
+                    <h1>Projects</h1>
+                    <div class="sy-muted">Create a structured project intake, upload drawings, and generate a professional AI review report.</div>
+                </div>
+                <div class="sy-new-project-btn">+ New Project</div>
+            </div>
+            {step_html}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def step_header(step_no, title, subtitle):
     visible_step = visible_step_number(step_no)
     st.markdown(
@@ -2647,7 +2688,7 @@ def wizard_buttons(max_step=7):
             return max(1, 3)
         return previous_step
 
-    c1, c2, c3 = st.columns([0.35, 1, 0.35])
+    c1, c2, c3 = st.columns([0.45, 1, 0.45])
     with c1:
         if st.session_state.project_step > 1:
             if st.button("Back", use_container_width=True):
@@ -3092,120 +3133,102 @@ elif page == "Projects":
             (6, "⇧", "Upload", "Upload documents"),
             (7, "▤", "Report", "AI review report"),
         ]
-    st.markdown(
-        """
-        <div class="sy-project-hero">
-            <div class="sy-project-hero-row">
-                <div>
-                    <h1>Projects</h1>
-                    <div class="sy-muted">Create a structured project intake, upload drawings, and generate a professional AI review report.</div>
-                </div>
-                <div class="sy-new-project-btn">＋ New Project</div>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-    step_html = '<div class="sy-step-row">'
-    progress_width = min(100, max(10, int((visible_step_number(step) / 5) * 100)))
-    for step_no, icon, title, subtitle in step_items:
-        active = "active" if step == step_no or (step == 2 and step_no == 1) else ""
-        step_html += f'<div class="sy-step-item {active}"><div class="sy-step-icon">{visible_step_number(step_no)}</div><div><div class="sy-step-title">{title}</div><div class="sy-step-sub">{subtitle}</div></div></div>'
-    step_html += f'<div class="sy-step-progress"><span style="width:{progress_width}%;"></span></div></div>'
-    st.markdown(step_html, unsafe_allow_html=True)
     main_col, side_col = st.columns([2.15, 1.0], gap="large")
     with main_col:
-        if step == 1:
-            step_header(1, "Project Details", "Select whether this project needs a planning review or a building regulations review.")
-            f1, f2 = st.columns(2)
-            with f1:
-                st.session_state["wizard_review_module"] = st.selectbox("Review Module", allowed_review_modules, index=allowed_review_modules.index(st.session_state.get("wizard_review_module", allowed_review_modules[0])))
-                st.caption("Assess planning policies, site context, constraints and design.")
-            with f2:
-                st.session_state["wizard_review_mode"] = st.selectbox("Report Mode", ["Architect / Professional", "Homeowner Summary"], index=["Architect / Professional", "Homeowner Summary"].index(st.session_state.get("wizard_review_mode", "Architect / Professional")))
-                st.caption("Tailored output for architects, agents and professionals.")
-            st.markdown("<hr style='border-color:var(--sy-border);margin:1.7rem 0 1.25rem 0;'>", unsafe_allow_html=True)
-            st.markdown(
-                """
-                <div class="sy-credit-info">
-                    <div class="sy-info-icon">i</div>
-                    <div>
-                        <div style="font-weight:750;margin-bottom:0.25rem;">Downloads are unlocked using credits.</div>
-                        <div class="sy-muted">Planning PDF = 3 credits • Building Regs PDF = 5 credits • Word export = 1 credit.</div>
+        render_projects_intro_and_stepper(step, step_items)
+        with st.container(border=True):
+            st.markdown('<div class="sy-form-card-anchor"></div>', unsafe_allow_html=True)
+            if step == 1:
+                step_header(1, "Project Details", "Select whether this project needs a planning review or a building regulations review.")
+                f1, f2 = st.columns(2)
+                with f1:
+                    st.session_state["wizard_review_module"] = st.selectbox("Review Module", allowed_review_modules, index=allowed_review_modules.index(st.session_state.get("wizard_review_module", allowed_review_modules[0])))
+                    st.caption("Assess planning policies, site context, constraints and design.")
+                with f2:
+                    st.session_state["wizard_review_mode"] = st.selectbox("Report Mode", ["Architect / Professional", "Homeowner Summary"], index=["Architect / Professional", "Homeowner Summary"].index(st.session_state.get("wizard_review_mode", "Architect / Professional")))
+                    st.caption("Tailored output for architects, agents and professionals.")
+                st.markdown("<hr style='border-color:var(--sy-border);margin:1.7rem 0 1.25rem 0;'>", unsafe_allow_html=True)
+                st.markdown(
+                    """
+                    <div class="sy-credit-info">
+                        <div class="sy-info-icon">i</div>
+                        <div>
+                            <div style="font-weight:750;margin-bottom:0.25rem;">Downloads are unlocked using credits.</div>
+                            <div class="sy-muted">Planning PDF = 3 credits • Building Regs PDF = 5 credits • Word export = 1 credit.</div>
+                        </div>
                     </div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-            wizard_buttons()
-        elif step == 2:
-            step_header(2, "Project details", "Add the basic project and site information used in the report cover, council detection and AI context.")
-            st.session_state["wizard_project_name"] = st.text_input("Project name", value=st.session_state.get("wizard_project_name", ""), placeholder="e.g. 14 Lyon Road Rear Extension")
-            st.session_state["wizard_client_name"] = st.text_input("Client name", value=st.session_state.get("wizard_client_name", ""))
-            st.session_state["wizard_project_address"] = st.text_input("Project address", value=st.session_state.get("wizard_project_address", ""))
-            st.session_state["wizard_proposal_summary"] = st.text_area("Proposal description", value=st.session_state.get("wizard_proposal_summary", ""), height=120, placeholder="Briefly describe the proposal.")
-            wizard_buttons()
-        elif step == 3:
-            step_header(3, "Project type", "Select the relevant project and property type using clear check boxes.")
-            checkbox_grid("Project Type", PROJECT_TYPE_OPTIONS, "wizard_project_types", columns=2)
-            if st.session_state.get("wizard_review_module") == "Planning Review":
-                st.markdown('<div class="sy-section-divider"></div>', unsafe_allow_html=True)
-                single_choice_cards("Property Type", PROPERTY_TYPE_OPTIONS, "wizard_property_type", columns=2)
-            else:
-                st.session_state["wizard_property_type"] = "Not stated"
-                st.info("Property type is mainly used for Planning Review. Building Regulations will focus on technical compliance and uploaded drawings.")
-            wizard_buttons()
-        elif step == 4:
-            step_header(4, "Project scope", "Tick the works included. The AI will cross-check these selections against the uploaded plans and only rely on confirmed drawing information where there is a conflict.")
-            checkbox_grid("Scope items", SCOPE_ITEM_OPTIONS, "wizard_scope_items", columns=2)
-            if st.session_state.get("wizard_scope_items"):
-                st.caption("Selected scope will be passed into the AI context and checked against the uploaded drawings.")
-            wizard_buttons()
-        elif step == 5:
-            step_header(5, "Project specifics", "Enter the key follow-up information. User-entered measurements are reference only; if the uploaded plans show different dimensions, the plans take priority in the report.")
-            project_types = st.session_state.get("wizard_project_types", [])
-            if st.session_state.get("wizard_review_module") == "Planning Review" and "Ground Floor Rear Extension" in project_types:
-                c1, c2 = st.columns(2)
-                with c1:
-                    st.session_state["wizard_rear_depth"] = st.number_input("Approx. depth from rear wall (metres)", min_value=0.0, max_value=12.0, value=float(st.session_state.get("wizard_rear_depth", 6.0)), step=0.1)
-                with c2:
-                    st.session_state["wizard_rear_height"] = st.number_input("Approx. maximum height (metres)", min_value=0.0, max_value=6.0, value=float(st.session_state.get("wizard_rear_height", 4.0)), step=0.1)
-                st.caption("These dimensions help the initial route check. The uploaded plan measurements take priority if there is any difference.")
-            if st.session_state.get("wizard_review_module") == "Planning Review":
-                st.session_state["wizard_accuracy_answers"] = get_required_accuracy_answers(project_types)
-            else:
-                st.session_state["wizard_accuracy_answers"] = {}
-                st.info("Building Regulations mode will use the uploaded plans, specification notes and selected scope to focus the compliance review.")
-            st.session_state["wizard_review_focus"] = st.text_area(
-                "Specific review focus / planning notes",
-                value=st.session_state.get("wizard_review_focus", ""),
-                height=115,
-                placeholder="Example: Focus on PD Class A limits, prior approval risk, Part K stair geometry, Part M accessibility, fire escape strategy, or any specific issue the report should concentrate on."
-            )
-            wizard_buttons()
-        elif step == 6:
-            step_header(6, "Upload files", "Upload drawings and supporting information. PDF drawing packs work best for the live review.")
-            uploaded = st.file_uploader("Drop files here or click to browse", type=["pdf"], accept_multiple_files=True, key="wizard_pdf_upload")
-            if uploaded:
-                st.session_state["wizard_uploaded_files"] = uploaded
-                for f in uploaded:
-                    st.markdown(f'<div class="sy-upload-item"><strong>{f.name}</strong><br><span class="sy-muted">{round(f.size/(1024*1024),2)} MB</span></div>', unsafe_allow_html=True)
-                render_pdf_preview(uploaded)
-            else:
-                st.info("No files attached yet. Upload at least one drawing PDF before generating the report.")
-            wizard_buttons()
-        elif step == 7:
-            step_header(7, "Generate report", "Run the AI review and download the branded SY Design Studio report.")
-            uploaded_files = st.session_state.get("wizard_uploaded_files", [])
-            if uploaded_files:
-                st.success(f"{len(uploaded_files)} file(s) ready for analysis.")
-            else:
-                st.warning("No file uploaded yet. Go back to Step 6.")
-            if st.button("Analyse Drawing Pack", use_container_width=True):
-                run_archlens_analysis(uploaded_files)
-            st.markdown("")
-            render_report_download_panel(st.session_state.get("active_module", st.session_state.get("wizard_review_module")))
-            wizard_buttons()
+                    """,
+                    unsafe_allow_html=True,
+                )
+                wizard_buttons()
+            elif step == 2:
+                step_header(2, "Project details", "Add the basic project and site information used in the report cover, council detection and AI context.")
+                st.session_state["wizard_project_name"] = st.text_input("Project name", value=st.session_state.get("wizard_project_name", ""), placeholder="e.g. 14 Lyon Road Rear Extension")
+                st.session_state["wizard_client_name"] = st.text_input("Client name", value=st.session_state.get("wizard_client_name", ""))
+                st.session_state["wizard_project_address"] = st.text_input("Project address", value=st.session_state.get("wizard_project_address", ""))
+                st.session_state["wizard_proposal_summary"] = st.text_area("Proposal description", value=st.session_state.get("wizard_proposal_summary", ""), height=120, placeholder="Briefly describe the proposal.")
+                wizard_buttons()
+            elif step == 3:
+                step_header(3, "Project type", "Select the relevant project and property type using clear check boxes.")
+                checkbox_grid("Project Type", PROJECT_TYPE_OPTIONS, "wizard_project_types", columns=2)
+                if st.session_state.get("wizard_review_module") == "Planning Review":
+                    st.markdown('<div class="sy-section-divider"></div>', unsafe_allow_html=True)
+                    single_choice_cards("Property Type", PROPERTY_TYPE_OPTIONS, "wizard_property_type", columns=2)
+                else:
+                    st.session_state["wizard_property_type"] = "Not stated"
+                    st.info("Property type is mainly used for Planning Review. Building Regulations will focus on technical compliance and uploaded drawings.")
+                wizard_buttons()
+            elif step == 4:
+                step_header(4, "Project scope", "Tick the works included. The AI will cross-check these selections against the uploaded plans and only rely on confirmed drawing information where there is a conflict.")
+                checkbox_grid("Scope items", SCOPE_ITEM_OPTIONS, "wizard_scope_items", columns=2)
+                if st.session_state.get("wizard_scope_items"):
+                    st.caption("Selected scope will be passed into the AI context and checked against the uploaded drawings.")
+                wizard_buttons()
+            elif step == 5:
+                step_header(5, "Project specifics", "Enter the key follow-up information. User-entered measurements are reference only; if the uploaded plans show different dimensions, the plans take priority in the report.")
+                project_types = st.session_state.get("wizard_project_types", [])
+                if st.session_state.get("wizard_review_module") == "Planning Review" and "Ground Floor Rear Extension" in project_types:
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        st.session_state["wizard_rear_depth"] = st.number_input("Approx. depth from rear wall (metres)", min_value=0.0, max_value=12.0, value=float(st.session_state.get("wizard_rear_depth", 6.0)), step=0.1)
+                    with c2:
+                        st.session_state["wizard_rear_height"] = st.number_input("Approx. maximum height (metres)", min_value=0.0, max_value=6.0, value=float(st.session_state.get("wizard_rear_height", 4.0)), step=0.1)
+                    st.caption("These dimensions help the initial route check. The uploaded plan measurements take priority if there is any difference.")
+                if st.session_state.get("wizard_review_module") == "Planning Review":
+                    st.session_state["wizard_accuracy_answers"] = get_required_accuracy_answers(project_types)
+                else:
+                    st.session_state["wizard_accuracy_answers"] = {}
+                    st.info("Building Regulations mode will use the uploaded plans, specification notes and selected scope to focus the compliance review.")
+                st.session_state["wizard_review_focus"] = st.text_area(
+                    "Specific review focus / planning notes",
+                    value=st.session_state.get("wizard_review_focus", ""),
+                    height=115,
+                    placeholder="Example: Focus on PD Class A limits, prior approval risk, Part K stair geometry, Part M accessibility, fire escape strategy, or any specific issue the report should concentrate on."
+                )
+                wizard_buttons()
+            elif step == 6:
+                step_header(6, "Upload files", "Upload drawings and supporting information. PDF drawing packs work best for the live review.")
+                uploaded = st.file_uploader("Drop files here or click to browse", type=["pdf"], accept_multiple_files=True, key="wizard_pdf_upload")
+                if uploaded:
+                    st.session_state["wizard_uploaded_files"] = uploaded
+                    for f in uploaded:
+                        st.markdown(f'<div class="sy-upload-item"><strong>{f.name}</strong><br><span class="sy-muted">{round(f.size/(1024*1024),2)} MB</span></div>', unsafe_allow_html=True)
+                    render_pdf_preview(uploaded)
+                else:
+                    st.info("No files attached yet. Upload at least one drawing PDF before generating the report.")
+                wizard_buttons()
+            elif step == 7:
+                step_header(7, "Generate report", "Run the AI review and download the branded SY Design Studio report.")
+                uploaded_files = st.session_state.get("wizard_uploaded_files", [])
+                if uploaded_files:
+                    st.success(f"{len(uploaded_files)} file(s) ready for analysis.")
+                else:
+                    st.warning("No file uploaded yet. Go back to Step 6.")
+                if st.button("Analyse Drawing Pack", use_container_width=True):
+                    run_archlens_analysis(uploaded_files)
+                st.markdown("")
+                render_report_download_panel(st.session_state.get("active_module", st.session_state.get("wizard_review_module")))
+                wizard_buttons()
     with side_col:
         render_intake_panel_v2()
 
