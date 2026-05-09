@@ -54,6 +54,7 @@ def default_store() -> Dict:
     return {
         "users": {},
         "processed_orders": [],
+        "processed_unlocks": [],
         "transactions": [],
     }
 
@@ -73,6 +74,7 @@ def load_store() -> Dict:
 
     data.setdefault("users", {})
     data.setdefault("processed_orders", [])
+    data.setdefault("processed_unlocks", [])
     data.setdefault("transactions", [])
     return data
 
@@ -232,6 +234,23 @@ def deduct_credits(payload: DeductCreditRequest, x_archlens_secret: str = Header
     with STORE_LOCK:
         store = load_store()
         current_balance = int(store["users"].get(clean_email, 0) or 0)
+        export_type = str(payload.exportType or "export").strip() or "export"
+        report_id = str(payload.reportId or "").strip()
+        unlock_key = f"{clean_email}:{report_id}:{export_type}"
+        processed_unlocks = set(store.get("processed_unlocks", []))
+
+        if report_id and unlock_key in processed_unlocks:
+            return {
+                "success": True,
+                "duplicate": True,
+                "email": clean_email,
+                "credits_deducted": 0,
+                "credits": current_balance,
+                "new_balance": current_balance,
+                "report_id": payload.reportId,
+                "export_type": payload.exportType,
+                "source": payload.source,
+            }
 
         if current_balance < credits_to_deduct:
             raise HTTPException(
@@ -246,10 +265,13 @@ def deduct_credits(payload: DeductCreditRequest, x_archlens_secret: str = Header
             clean_email,
             -credits_to_deduct,
             new_balance,
-            reason=f"unlock_{payload.exportType or 'export'}",
+            reason=f"unlock_{export_type}",
             source=payload.source,
             reference=payload.reportId,
         )
+        if report_id:
+            store.setdefault("processed_unlocks", []).append(unlock_key)
+            store["processed_unlocks"] = store["processed_unlocks"][-1000:]
         save_store(store)
 
     print(

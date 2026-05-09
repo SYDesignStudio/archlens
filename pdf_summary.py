@@ -261,21 +261,42 @@ def image_to_base64(image_path: str) -> str:
 
 def detect_local_authority(address: str = "", text: str = "") -> str:
     combined = f"{address}\n{text}".lower()
+    postcode_match = re.search(r"\b([a-z]{1,2})\d[a-z\d]?\s*\d[a-z]{2}\b", combined, flags=re.IGNORECASE)
+    outward = ""
+    if postcode_match:
+        outward_match = re.match(r"([a-z]{1,2}\d[a-z\d]?)", postcode_match.group(0).replace(" ", ""), flags=re.IGNORECASE)
+        outward = outward_match.group(1).lower() if outward_match else ""
     authorities = {
-        "Hounslow": ["hounslow", "tw3", "tw4", "tw5", "tw7", "tw13", "tw14"],
-        "Ealing": ["ealing", "w5", "w7", "ub1", "ub2", "ub5"],
-        "Hillingdon": ["hillingdon", "uxbridge", "hayes", "ub3", "ub4", "ub7", "ha4", "ruislip"],
-        "Richmond upon Thames": ["richmond", "twickenham", "isleworth", "tw1", "tw2", "tw10", "tw11"],
-        "Brent": ["brent", "wembley", "harlesden", "nw10", "ha9"],
-        "Barnet": ["barnet", "edgware", "n20", "en4", "nw7"],
-        "Enfield": ["enfield", "n13", "n14", "en1", "en2", "en3", "en4", "en8", "berkshire gardens"],
-        "Slough": ["slough", "sl1", "sl2", "sl3"],
-        "Reading": ["reading", "rg1", "rg2", "rg30", "rg31"],
-        "Surrey Heath": ["surrey heath", "camberley", "gu15", "gu16"],
+        "Hounslow": ["hounslow", "london borough of hounslow"],
+        "Ealing": ["ealing", "london borough of ealing"],
+        "Hillingdon": ["hillingdon", "uxbridge", "hayes", "ruislip", "london borough of hillingdon"],
+        "Richmond upon Thames": ["richmond upon thames", "twickenham", "isleworth"],
+        "Brent": ["brent", "wembley", "harlesden"],
+        "Barnet": ["barnet", "edgware"],
+        "Enfield": ["enfield", "berkshire gardens"],
+        "Slough": ["slough", "slough borough council"],
+        "Reading": ["reading", "reading borough council"],
+        "Surrey Heath": ["surrey heath", "camberley"],
+    }
+    postcode_prefixes = {
+        "Hounslow": ["tw3", "tw4", "tw5", "tw7", "tw13", "tw14"],
+        "Ealing": ["w5", "w7", "ub1", "ub2", "ub5", "ub6"],
+        "Hillingdon": ["ub3", "ub4", "ub7", "ub8", "ub9", "ub10", "ha4"],
+        "Richmond upon Thames": ["tw1", "tw2", "tw9", "tw10", "tw11", "tw12"],
+        "Brent": ["nw10", "ha0", "ha9"],
+        "Barnet": ["n2", "n3", "n11", "n12", "n20", "en4", "en5", "nw7"],
+        "Enfield": ["n9", "n13", "n14", "n21", "en1", "en2", "en3"],
+        "Slough": ["sl1", "sl2", "sl3"],
+        "Reading": ["rg1", "rg2", "rg4", "rg6", "rg30", "rg31"],
+        "Surrey Heath": ["gu15", "gu16", "gu18", "gu19", "gu20", "gu24"],
     }
     for authority, needles in authorities.items():
         if any(needle in combined for needle in needles):
             return authority
+    if outward:
+        for authority, prefixes in postcode_prefixes.items():
+            if outward in prefixes:
+                return authority
     return "Not clearly identified"
 
 

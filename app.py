@@ -86,6 +86,13 @@ def find_email_in_payload(payload) -> str:
             found = find_email_in_payload(value)
             if found:
                 return found
+    elif isinstance(payload, str):
+        value = payload.strip()
+        if is_valid_email(value):
+            return value
+        match = re.search(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}", value)
+        if match and is_valid_email(match.group(0)):
+            return match.group(0)
     return ""
 
 
@@ -723,6 +730,8 @@ def add_saved_project(project_record: Dict):
     filtered.insert(0, project_record)
     latest = filtered[:5]
     st.session_state["saved_projects"] = latest
+    if st.session_state.get("report_library"):
+        st.session_state["report_library"] = (st.session_state.get("report_library") or [])[:5]
     active_report_ids = {item.get("report_id") for item in latest}
     unlocked = st.session_state.get("unlocked_reports", {}) or {}
     st.session_state["unlocked_reports"] = {
@@ -1843,7 +1852,7 @@ def build_word_report(file_name, address, client, date, practice_name, report_id
 
 def clean_summary_fallback(value: str, fallback: str) -> str:
     cleaned = str(value or "").strip()
-    if not cleaned or cleaned.lower() in {"unknown", "not shown", "not detected", "not provided", "n/a", "none"}:
+    if not cleaned or cleaned.lower() in {"unknown", "not shown", "not detected", "not provided", "not clearly identified", "n/a", "none"}:
         return fallback
     return cleaned
 
@@ -1959,7 +1968,7 @@ def render_at_a_glance(sections: Dict[str, str], report_id: str, module_name: st
     else:
         top_summary_rows = {k.upper(): v for k, v in parse_key_value_lines(sections.get("TOP SUMMARY", "")) if k}
         risk_summary = top_summary_rows.get("OVERALL RISK RATING") or sections.get("TOP SUMMARY", "")
-        summary_hint = top_summary_rows.get("REVIEW CONFIDENCE", "Unknown")
+        summary_hint = clean_summary_fallback(top_summary_rows.get("REVIEW CONFIDENCE", ""), "Professional review recommended")
         if "HIGH" in str(risk_summary).upper():
             st.error(f"High risk detected | Summary: {summary_hint}")
         elif "MEDIUM" in str(risk_summary).upper():
@@ -1992,20 +2001,37 @@ def render_sections(sections: Dict[str, str], report_text: str, module_name: str
 
 def build_simple_word_doc(title: str, body_text: str) -> BytesIO:
     doc = Document()
+    section = doc.sections[0]
+    section.top_margin = Inches(0.65)
+    section.bottom_margin = Inches(0.65)
+    section.left_margin = Inches(0.75)
+    section.right_margin = Inches(0.75)
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     run = p.add_run(title)
     run.bold = True
-    run.font.size = Pt(16)
+    run.font.size = Pt(18)
+    run.font.name = "Aptos Display"
+    meta = doc.add_paragraph("Prepared by SY Design Studio")
+    meta.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    meta.runs[0].font.size = Pt(9)
     doc.add_paragraph("")
     for line in body_text.splitlines():
         stripped = line.strip()
         if not stripped:
             doc.add_paragraph("")
+        elif re.match(r"^\d+\.?\s+\S", stripped):
+            heading = doc.add_paragraph()
+            run = heading.add_run(stripped)
+            run.bold = True
+            run.font.size = Pt(12)
+            heading.paragraph_format.space_before = Pt(8)
+            heading.paragraph_format.space_after = Pt(3)
         elif stripped.startswith("- "):
             doc.add_paragraph(stripped[2:], style="List Bullet")
         else:
-            doc.add_paragraph(stripped)
+            para = doc.add_paragraph(stripped)
+            para.paragraph_format.space_after = Pt(4)
     buffer = BytesIO()
     doc.save(buffer)
     buffer.seek(0)
@@ -2090,6 +2116,9 @@ def build_simple_pdf_doc(title: str, body_text: str, report_id: str = "") -> Byt
                 y -= 12
         y -= 2
 
+    c.setFont("Helvetica", 8)
+    c.setFillColor(mid_grey)
+    c.drawCentredString(width / 2, 28, f"Prepared by SY Design Studio | Ref: {report_id or 'Planning Statement'}")
     c.save()
     buffer.seek(0)
     return buffer
