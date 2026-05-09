@@ -773,15 +773,15 @@ def inject_custom_css():
             left: 0 !important;
         }}
         [data-testid="stSidebar"] > div:first-child {{
-            padding-top: 1.9rem !important;
+            padding-top: 1.65rem !important;
             padding-left: 1.15rem !important;
             padding-right: 1.15rem !important;
         }}
-        .sy-sidebar-brand {{ display:flex; align-items:center; gap:0.9rem; margin:0.25rem 0 1.55rem 0; }}
-        .sy-sidebar-brand img {{ width:56px; height:56px; object-fit:contain; border-radius:14px; }}
-        .sy-sidebar-brand-title {{ font-weight:850; font-size:1.08rem; line-height:1.15; }}
-        .sy-sidebar-brand-subtitle {{ font-size:0.78rem; color:var(--sy-muted); margin-top:0.2rem; }}
-        .sy-sidebar-account {{ border:1px solid rgba(212,194,154,0.16); background:rgba(18,24,33,0.82); border-radius:14px; padding:0.85rem; margin:0 0 1.2rem 0; }}
+        .sy-sidebar-brand {{ display:flex; align-items:center; gap:0.95rem; margin:0.1rem 0 1.35rem 0; }}
+        .sy-sidebar-brand img {{ width:72px; height:72px; object-fit:contain; border-radius:16px; filter:drop-shadow(0 10px 20px rgba(212,194,154,0.12)); }}
+        .sy-sidebar-brand-title {{ font-weight:850; font-size:1.16rem; line-height:1.12; }}
+        .sy-sidebar-brand-subtitle {{ font-size:0.80rem; color:var(--sy-muted); margin-top:0.24rem; }}
+        .sy-sidebar-account {{ border:1px solid rgba(212,194,154,0.16); background:rgba(18,24,33,0.82); border-radius:14px; padding:0.85rem; margin:0 0 1.35rem 0; }}
         .sy-sidebar-account-row {{ display:flex; justify-content:space-between; gap:0.55rem; font-size:0.78rem; padding:0.28rem 0; color:var(--sy-muted); }}
         .sy-sidebar-account-row strong {{ color:var(--sy-text); text-align:right; overflow-wrap:anywhere; }}
         [data-testid="stSidebar"] [role="radiogroup"] label {{ padding:0.72rem 0.8rem !important; border-radius:12px !important; margin-bottom:0.35rem !important; font-weight:650 !important; }}
@@ -790,7 +790,8 @@ def inject_custom_css():
             border:1px solid rgba(212,194,154,0.24) !important;
             box-shadow:0 10px 22px rgba(212,194,154,0.10);
         }}
-        .sy-sidebar-help {{ border:1px solid rgba(212,194,154,0.13); border-radius:14px; padding:0.75rem; margin-top:7rem; background:rgba(18,24,33,0.66); font-size:0.75rem; }}
+        [data-testid="stSidebar"] [data-testid="stLinkButton"] {{ margin-top:0.55rem !important; }}
+        .sy-sidebar-help {{ border:1px solid rgba(212,194,154,0.13); border-radius:14px; padding:0.75rem; margin-top:5.6rem; background:rgba(18,24,33,0.66); font-size:0.75rem; }}
         .sy-topbar {{ background:transparent !important; border:0 !important; box-shadow:none !important; padding:0 0 1rem 0 !important; margin-bottom:0.1rem !important; }}
         .sy-topbar-title {{ color:var(--sy-accent) !important; letter-spacing:0.28em !important; font-size:0.82rem !important; }}
         .sy-topbar-meta {{ color:var(--sy-muted) !important; font-size:0.82rem !important; }}
@@ -816,6 +817,37 @@ def inject_custom_css():
         .sy-footer {{ text-align:center; color:var(--sy-muted); font-size:0.72rem; margin-top:1.2rem; }}
         .stButton button, .stDownloadButton button, .stLinkButton a {{ border-radius:10px !important; color:#111111 !important; }}
         .stLinkButton a[href*="category"], .stLinkButton a[href*="pricing"] {{ background:rgba(255,255,255,0.04) !important; color:var(--sy-accent) !important; border:1px solid var(--sy-border) !important; box-shadow:none !important; }}
+        [data-testid="stSidebar"] [data-testid="stLinkButton"] a,
+        [data-testid="stSidebar"] [data-testid="stLinkButton"] a[href*="category"],
+        [data-testid="stSidebar"] [data-testid="stLinkButton"] a[href*="pricing"] {{
+            display:flex !important;
+            align-items:center !important;
+            justify-content:center !important;
+            width:100% !important;
+            height:60px !important;
+            padding:0.66rem 1rem !important;
+            border-radius:10px !important;
+            background:#D4C29A !important;
+            border:1px solid #D4C29A !important;
+            color:#111111 !important;
+            font-weight:800 !important;
+            box-shadow:0 12px 26px rgba(212,194,154,0.22) !important;
+        }}
+        [data-testid="stSidebar"] [data-testid="stLinkButton"] a *,
+        [data-testid="stSidebar"] [data-testid="stLinkButton"] a[href*="category"] *,
+        [data-testid="stSidebar"] [data-testid="stLinkButton"] a[href*="pricing"] * {{
+            color:#111111 !important;
+            margin:0 !important;
+            text-align:center !important;
+        }}
+        [data-testid="stSidebar"] [data-testid="stLinkButton"] a:hover,
+        [data-testid="stSidebar"] [data-testid="stLinkButton"] a[href*="category"]:hover,
+        [data-testid="stSidebar"] [data-testid="stLinkButton"] a[href*="pricing"]:hover {{
+            background:#C5B183 !important;
+            border-color:#C5B183 !important;
+            color:#111111 !important;
+            filter:none !important;
+        }}
         @media (max-width: 1100px) {{
             .block-container {{ padding-left:1rem !important; padding-right:1rem !important; }}
             .sy-step-row {{ grid-template-columns:1fr 1fr; }}
@@ -1958,7 +1990,7 @@ def render_left_navigation():
             st.markdown(
                 """
                 <div class="sy-sidebar-brand">
-                    <div style="width:52px;height:52px;border-radius:14px;border:1px solid rgba(212,194,154,0.25);display:flex;align-items:center;justify-content:center;color:#D4C29A;font-weight:900;">AL</div>
+                    <div style="width:68px;height:68px;border-radius:16px;border:1px solid rgba(212,194,154,0.25);display:flex;align-items:center;justify-content:center;color:#D4C29A;font-weight:900;box-shadow:0 10px 20px rgba(212,194,154,0.10);">AL</div>
                     <div>
                         <div class="sy-sidebar-brand-title">ArchLens AI</div>
                         <div class="sy-sidebar-brand-subtitle">by SY Design Studio</div>
@@ -2032,16 +2064,14 @@ def render_intake_panel():
     proposal_summary = st.session_state.get("wizard_proposal_summary", "")
     local_authority = detect_local_authority_for_display(project_address, proposal_summary)
 
-    st.markdown('<div class="sy-sidepanel">', unsafe_allow_html=True)
     st.markdown('<div class="sy-panel-title">Project Intake Readiness</div>', unsafe_allow_html=True)
     st.markdown(f"**{complete} of {total} key items completed**")
     st.progress(complete / max(total, 1))
     for label, done in items:
         icon = "✅" if done else "○"
         st.markdown(f"{icon} {label}")
-    st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown("<div style='height:0.9rem;'></div>", unsafe_allow_html=True)
 
-    st.markdown('<div class="sy-sidepanel">', unsafe_allow_html=True)
     st.markdown('<div class="sy-panel-title">Live Summary</div>', unsafe_allow_html=True)
     rows = [
         ("Project", st.session_state.get("wizard_project_name") or "Not named"),
@@ -2053,9 +2083,8 @@ def render_intake_panel():
     ]
     for label, value in rows:
         st.markdown(f'<div class="sy-data-row"><span>{label}</span><strong>{value}</strong></div>', unsafe_allow_html=True)
-    st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown("<div style='height:0.9rem;'></div>", unsafe_allow_html=True)
 
-    st.markdown('<div class="sy-sidepanel">', unsafe_allow_html=True)
     st.markdown('<div style="display:flex;justify-content:space-between;align-items:center;"><div class="sy-panel-title">Recent Downloads</div><div style="color:var(--sy-accent);font-size:0.78rem;">View all</div></div>', unsafe_allow_html=True)
     library = st.session_state.get("report_library", []) or []
     saved = st.session_state.get("saved_projects", []) or []
@@ -2071,7 +2100,6 @@ def render_intake_panel():
     else:
         st.markdown('<div class="sy-muted" style="font-size:0.78rem;">No downloads yet.</div>', unsafe_allow_html=True)
     st.markdown('<div style="margin-top:0.7rem;"><div class="sy-new-project-btn" style="width:100%;box-sizing:border-box;font-size:0.78rem;">Open full download history ↗</div></div>', unsafe_allow_html=True)
-    st.markdown('</div>', unsafe_allow_html=True)
 
 def step_header(step_no, title, subtitle):
     st.markdown(
@@ -2402,7 +2430,6 @@ elif page == "Projects":
     st.progress(step / 7)
     main_col, side_col = st.columns([2.15, 1.0], gap="large")
     with main_col:
-        st.markdown('<div class="sy-form-card">', unsafe_allow_html=True)
         if step == 1:
             step_header(1, "Project Details", "Select whether this project needs a planning review or a building regulations review.")
             f1, f2 = st.columns(2)
@@ -2482,7 +2509,6 @@ elif page == "Projects":
             st.markdown("")
             render_report_download_panel(st.session_state.get("active_module", st.session_state.get("wizard_review_module")))
             wizard_buttons()
-        st.markdown("</div>", unsafe_allow_html=True)
     with side_col:
         render_intake_panel()
 
