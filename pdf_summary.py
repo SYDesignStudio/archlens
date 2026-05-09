@@ -1526,7 +1526,11 @@ Detected pages:
     if minor_class_b_condition_only:
         output_text = normalise_minor_class_b_route_text(output_text)
 
-    if "PD / PRIOR APPROVAL / PLANNING ROUTE" in output_text and pd_route_reason:
+    if (
+        "PD / PRIOR APPROVAL / PLANNING ROUTE" in output_text
+        and pd_route_reason
+        and not re.search(r"(?im)^route position\s*:?", output_text)
+    ):
         route_insert = "Route position:\n" + pd_route_reason + "\n\n"
         output_text = output_text.replace(
             "PD / PRIOR APPROVAL / PLANNING ROUTE\n",
@@ -1606,6 +1610,7 @@ def simplify_report_text(report_text: str, max_bullets_per_section: int = 6) -> 
     text = re.sub(r"gROUND", "ground", text)
     text = re.sub(r"^Not provided$\n?", "", text, flags=re.MULTILINE)
     text = re.sub(r"ROUTE POSITION\s*\n\s*Not provided\s*\n", "ROUTE POSITION\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"(?im)^(route position\s*:?)\s*\n\s*(route position\s*:?)\s*\n", r"\1\n", text)
     text = re.sub(r"Project Summary:\s*PROPOSED\s+", "Project Summary: Proposed ", text)
     text = re.sub(r"Improve Accuracy\s*:\s*[^\n.]+[.]?", "", text, flags=re.IGNORECASE)
     text = re.sub(r"Selected scope items to cross-check\s*:[^\n.]*[.]?", "", text, flags=re.IGNORECASE)
