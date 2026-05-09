@@ -632,6 +632,9 @@ def inject_custom_css():
         }}
 
         [data-testid="stSidebar"] {{
+            display: block !important;
+            visibility: visible !important;
+            opacity: 1 !important;
             background: var(--sy-sidebar-bg) !important;
             border-right: 1px solid var(--sy-border);
         }}
@@ -732,9 +735,17 @@ def inject_custom_css():
                 var(--sy-bg) !important;
         }}
         [data-testid="stSidebar"] {{
+            display: block !important;
+            visibility: visible !important;
+            opacity: 1 !important;
             min-width: 252px !important;
             width: 252px !important;
             background: linear-gradient(180deg, rgba(15,22,32,0.98), rgba(9,13,20,0.98)) !important;
+        }}
+        [data-testid="stSidebar"]:not([aria-expanded="false"]) {{
+            transform: none !important;
+            margin-left: 0 !important;
+            left: 0 !important;
         }}
         [data-testid="stSidebar"] > div:first-child {{
             padding-top: 1.9rem !important;
@@ -820,6 +831,12 @@ def inject_custom_css():
             color: #111111 !important;
             fill: #111111 !important;
             stroke: #111111 !important;
+        }}
+        body:has([data-testid="stSidebar"]:not([aria-expanded="false"])) [data-testid="collapsedControl"] {{
+            display: none !important;
+            visibility: hidden !important;
+            opacity: 0 !important;
+            pointer-events: none !important;
         }}
 
         </style>
@@ -1742,7 +1759,7 @@ def build_simple_word_doc(title: str, body_text: str) -> BytesIO:
     return buffer
 
 
-st.set_page_config(page_title="ArchLens AI", layout="wide")
+st.set_page_config(page_title="ArchLens AI", layout="wide", initial_sidebar_state="expanded")
 inject_custom_css()
 
 if "authenticated" not in st.session_state:
