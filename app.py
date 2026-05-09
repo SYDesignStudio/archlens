@@ -35,7 +35,9 @@ DEFAULT_STATE = {
     "report_library": [],
     "app_theme": "Dark",
     "brand_logo_bytes": None,
-    "credit_balance": 0,
+    "ai_confidence": None,
+    "rule_engine_summary": None,
+    "credit_balance": 10,
     "credit_transactions": [],
     "unlocked_reports": {},
 }
@@ -46,6 +48,108 @@ for key, value in DEFAULT_STATE.items():
 MAX_FILE_SIZE_MB = 20
 MAX_PAGE_COUNT = 30
 STARTER_MONTHLY_REVIEW_LIMIT = 10
+
+# -----------------------------------------------------------------------------
+# CREDIT / TOKEN SYSTEM
+# User-facing name: Credits. Internal name can still be treated as tokens.
+# Session-based foundation first; move to Supabase/Stripe for live persistence.
+# -----------------------------------------------------------------------------
+CREDIT_PACKS = {
+    "10 Credits": {"credits": 10, "price": "£19"},
+    "30 Credits": {"credits": 30, "price": "£49"},
+    "75 Credits": {"credits": 75, "price": "£99"},
+}
+
+EXPORT_CREDIT_COSTS = {
+    "Planning Review": {"pdf": 3, "word": 1, "planning_statement": 3, "design_access_statement": 4},
+    "Building Regulations Review": {"pdf": 5, "word": 1},
+}
+
+FREE_PREVIEW_NOTE = "Analysis preview is available first. Credits are used when exports/downloads are unlocked."
+
+ARCHLENS_API_URL = os.getenv("ARCHLENS_API_URL", "https://archlens-api.onrender.com").rstrip("/")
+ARCHLENS_WEBHOOK_SECRET = os.getenv("ARCHLENS_WEBHOOK_SECRET", "archlens_secure_2026_SYDS_92838")
+ARCHLENS_BUY_CREDITS_URL = os.getenv("ARCHLENS_BUY_CREDITS_URL", "https://www.sydesignstudio.co.uk/category/archlens-ai-credits")
+
+
+def normalise_user_email(email: str) -> str:
+    return str(email or "").strip().lower()
+
+
+def api_get_credit_balance(email: str):
+    clean_email = normalise_user_email(email)
+    if not clean_email:
+        return None
+    try:
+        response = requests.get(
+            f"{ARCHLENS_API_URL}/user/{clean_email}",
+            timeout=10,
+        )
+        if response.status_code == 200:
+            data = response.json()
+            return int(data.get("credits", 0) or 0)
+    except Exception as exc:
+        print("Credit balance API error:", exc)
+    return None
+
+
+def api_deduct_credits(email: str, amount: int, report_id: str = "", export_type: str = ""):
+    clean_email = normalise_user_email(email)
+    amount = int(amount or 0)
+    if not clean_email:
+        return {
+            "success": False,
+            "message": "User email not found. Please launch ArchLens from your Wix member account.",
+        }
+    if amount <= 0:
+        return {"success": True, "credits": api_get_credit_balance(clean_email), "message": "No credits required."}
+
+    try:
+        response = requests.post(
+            f"{ARCHLENS_API_URL}/deduct-credits",
+            headers={
+                "Content-Type": "application/json",
+                "x-archlens-secret": ARCHLENS_WEBHOOK_SECRET,
+            },
+            json={
+                "email": clean_email,
+                "credits": amount,
+                "reportId": report_id,
+                "exportType": export_type,
+                "source": "archlens_download",
+            },
+            timeout=15,
+        )
+        try:
+            data = response.json()
+        except Exception:
+            data = {"detail": response.text}
+
+        if response.status_code == 200 and data.get("success", True):
+            return {
+                "success": True,
+                "credits": int(data.get("credits", data.get("new_balance", 0)) or 0),
+                "message": data.get("message", f"{amount} credits used."),
+            }
+
+        return {
+            "success": False,
+            "message": data.get("detail") or data.get("message") or "Credit deduction failed.",
+        }
+
+    except Exception as exc:
+        return {
+            "success": False,
+            "message": f"Could not connect to credit API: {exc}",
+        }
+
+
+def sync_credit_balance_from_api(email: str):
+    api_balance = api_get_credit_balance(email)
+    if api_balance is not None:
+        st.session_state["credit_balance"] = api_balance
+    return st.session_state.get("credit_balance", 0)
+
 
 BUILDING_REQUIRED_HEADINGS = [
     "PROJECT CLASSIFICATION",
@@ -479,6 +583,252 @@ def build_pd_context(project_types: List[str], property_type: str, rear_extensio
 
 
 
+
+
+# -----------------------------------------------------------------------------
+# AI CONFIDENCE SYSTEM
+# Rule-engine-first confidence labels. These are not legal certainty scores.
+# They are user-facing status labels based on deterministic checks, drawing
+# completeness, report sections and missing information.
+# -----------------------------------------------------------------------------
+PLANNING_CONFIDENCE_LABELS = [
+    "LIKELY COMPLIANT",
+    "LIKELY COMPLIANT SUBJECT TO MINOR CHECKS",
+    "LIKELY PRIOR APPROVAL",
+    "REQUIRES FURTHER REVIEW",
+    "LIKELY PLANNING PERMISSION REQUIRED",
+]
+
+BUILDING_CONFIDENCE_LABELS = [
+    "LIKELY COMPLIANT",
+    "PARTIAL INFORMATION",
+    "NON-COMPLIANT ITEMS FOUND",
+    "STRUCTURAL REVIEW REQUIRED",
+    "FIRE STRATEGY REVIEW REQUIRED",
+    "BUILDING CONTROL REVIEW ADVISED",
+]
+
+
+def _normalise_text(value) -> str:
+    return str(value or "").strip()
+
+
+
+
+def _is_minor_class_b_condition_issue_text(text_value: str) -> bool:
+    """Detect Class B/C loft cases where the only issue is a side-window
+    obscurity/non-opening annotation. This should not be presented as full
+    planning required where the main PD/LDC route remains available.
+    """
+    text = _normalise_text(text_value).upper()
+    if not any(t in text for t in ["CLASS B", "DORMER", "LOFT", "ROOF ENLARGEMENT", "ROOFLIGHT"]):
+        return False
+    if not any(t in text for t in ["SIDE WINDOWS", "SIDE-FACING", "SIDE ROOF WINDOWS", "OBSCURE", "1.7M"]):
+        return False
+    hard_fail_terms = [
+        "FRONT-FACING ROOF ENLARGEMENT",
+        "PRINCIPAL ELEVATION AND FRONTS A HIGHWAY",
+        "ABOVE THE HIGHEST PART",
+        "EXCEEDS HIGHEST ROOF",
+        "OVER LIMIT",
+        "ROOF VOLUME EXCEEDS",
+        "BALCONY",
+        "VERANDAH",
+        "RAISED PLATFORM",
+        "ARTICLE 4",
+        "LISTED BUILDING",
+        "FLAT OR MAISONETTE",
+        "NOT A SINGLE DWELLINGHOUSE",
+    ]
+    return not any(term in text for term in hard_fail_terms)
+
+def _extract_route_from_rule_summary(rule_summary: str) -> str:
+    """Pull a stable route/status label from the deterministic rule summary.
+
+    Planning reports should use professional status wording rather than hard PASS/FAIL labels.
+    Missing minor confirmations should not create a fail result for otherwise typical PD schemes.
+    """
+    text = _normalise_text(rule_summary).upper()
+    if _is_minor_class_b_condition_issue_text(text):
+        return "LIKELY COMPLIANT SUBJECT TO MINOR CHECKS"
+    if "PRIOR APPROVAL" in text:
+        return "LIKELY PRIOR APPROVAL"
+    if "FULL PLANNING" in text or "PLANNING PERMISSION" in text:
+        return "LIKELY PLANNING PERMISSION REQUIRED"
+    if "PD / LDC" in text or "PERMITTED DEVELOPMENT" in text or "PD POSSIBLE" in text or "LIKELY PD" in text or "PASS" in text:
+        return "LIKELY COMPLIANT"
+    if "FAIL" in text:
+        return "LIKELY PLANNING PERMISSION REQUIRED"
+    if "NEEDS CONFIRMATION" in text or "MANUAL" in text:
+        return "REQUIRES FURTHER REVIEW"
+    return "REQUIRES FURTHER REVIEW"
+
+def _count_report_signals(sections: Dict[str, str], needles: List[str]) -> int:
+    combined = "\n".join(sections.values()).upper()
+    return sum(1 for n in needles if n.upper() in combined)
+
+
+def calculate_planning_confidence(sections: Dict[str, str], rule_summary: str = "") -> Dict[str, object]:
+    """Return user-facing planning confidence label and explanation.
+
+    This avoids fake percentage certainty and avoids harsh FAIL/PASS wording.
+    The label is based on the deterministic rule-engine result first, then adjusted
+    for actual report findings. Typical PD/LDC schemes with minor missing checks
+    should show as likely compliant subject to minor checks, not failed.
+    """
+    route_label = _extract_route_from_rule_summary(rule_summary)
+    missing_text = _normalise_text(sections.get("MISSING INFORMATION", "")).upper()
+    risk_text = _normalise_text(sections.get("KEY RISKS", "")).upper()
+    readiness_text = _normalise_text(sections.get("SUBMISSION READINESS", "")).upper()
+    route_text = _normalise_text(sections.get("PD / PRIOR APPROVAL / PLANNING ROUTE", "")).upper()
+    top_text = _normalise_text(sections.get("TOP SUMMARY", "")).upper()
+    combined = "\n".join([missing_text, risk_text, readiness_text, route_text, top_text, _normalise_text(rule_summary).upper()])
+
+    blockers = _count_report_signals(sections, [
+        "NOT CLEARLY SHOWN",
+        "NOT CLEARLY DIMENSIONED",
+        "INSUFFICIENT",
+        "REQUIRES CONFIRMATION",
+        "MISSING",
+    ])
+    minor_class_b_condition_only = _is_minor_class_b_condition_issue_text(combined)
+    clear_policy_issue = any(x in combined for x in [
+        "FULL PLANNING REQUIRED",
+        "LIKELY PLANNING PERMISSION REQUIRED",
+        "EXCEEDS",
+        "OUTSIDE CLASS",
+        "FRONT-FACING ROOF ENLARGEMENT",
+        "ABOVE THE HIGHEST PART",
+        "ARTICLE 4",
+        "LISTED BUILDING",
+    ])
+    if minor_class_b_condition_only:
+        clear_policy_issue = False
+    high_risk = "HIGH" in risk_text or "NOT READY" in readiness_text
+
+    if minor_class_b_condition_only:
+        label = "LIKELY COMPLIANT SUBJECT TO MINOR CHECKS"
+    elif route_label == "LIKELY PRIOR APPROVAL" and not clear_policy_issue:
+        label = "LIKELY PRIOR APPROVAL"
+    elif route_label == "LIKELY PLANNING PERMISSION REQUIRED" or clear_policy_issue:
+        label = "LIKELY PLANNING PERMISSION REQUIRED"
+    elif route_label == "LIKELY COMPLIANT":
+        label = "LIKELY COMPLIANT" if blockers <= 1 and not high_risk else "LIKELY COMPLIANT SUBJECT TO MINOR CHECKS"
+    elif route_label == "LIKELY COMPLIANT SUBJECT TO MINOR CHECKS":
+        label = "LIKELY COMPLIANT SUBJECT TO MINOR CHECKS"
+    elif blockers <= 3 and ("PD / LDC" in combined or "CLASS B" in combined or "PERMITTED DEVELOPMENT" in combined):
+        label = "LIKELY COMPLIANT SUBJECT TO MINOR CHECKS"
+    else:
+        label = "REQUIRES FURTHER REVIEW"
+
+    triggers = []
+    if minor_class_b_condition_only:
+        triggers.append("Loft/dormer proposal appears capable of a PD/LDC route, subject to side-window annotation checks.")
+    elif "CLASS B" in combined or "DORMER" in combined or "ROOF" in combined:
+        triggers.append("Roof enlargement checks appear to be the main planning route issue.")
+    elif "PRIOR APPROVAL" in combined:
+        triggers.append("Larger home extension / prior approval route appears relevant.")
+    elif "FULL PLANNING" in combined:
+        triggers.append("The proposal may require a householder planning application.")
+    else:
+        triggers.append("Planning route has been assessed using the uploaded drawings and rule checks.")
+    if blockers:
+        triggers.append("Some standard confirmation items may still need checking before submission.")
+    if "PD / LDC" in combined or "PERMITTED DEVELOPMENT" in combined:
+        triggers.append("A Lawful Development Certificate route may be appropriate where PD criteria are met.")
+
+    return {
+        "module": "Planning Review",
+        "label": label,
+        "basis": "Planning rules + drawing review",
+        "triggers": triggers[:3],
+        "note": "Indicative review only. The local authority makes the final decision.",
+    }
+
+def calculate_building_confidence(sections: Dict[str, str]) -> Dict[str, object]:
+    combined = "\n".join(sections.values()).upper()
+    compliance = _normalise_text(sections.get("COMPLIANCE STATUS BY APPROVED DOCUMENT", "")).upper()
+    missing = _normalise_text(sections.get("MISSING INFORMATION", "")).upper()
+    risks = _normalise_text(sections.get("KEY RISKS", "")).upper()
+
+    fail_count = compliance.count("FAIL") + combined.count("NON-COMPLIANT")
+    partial_count = compliance.count("PARTLY") + compliance.count("REVIEW REQUIRED") + missing.count("NOT CLEARLY")
+
+    if "STRUCTURAL" in risks and any(x in risks for x in ["REQUIRED", "CALC", "ENGINEER"]):
+        label = "STRUCTURAL REVIEW REQUIRED"
+    elif "FIRE" in risks and any(x in risks for x in ["UNCLEAR", "REQUIRED", "ESCAPE", "STRATEGY"]):
+        label = "FIRE STRATEGY REVIEW REQUIRED"
+    elif fail_count > 0:
+        label = "NON-COMPLIANT ITEMS FOUND"
+    elif partial_count > 0 or "MISSING" in missing:
+        label = "PARTIAL INFORMATION"
+    elif "READY" in _normalise_text(sections.get("BUILDING CONTROL SUBMISSION READINESS", "")).upper():
+        label = "LIKELY COMPLIANT"
+    else:
+        label = "BUILDING CONTROL REVIEW ADVISED"
+
+    triggers = []
+    if fail_count:
+        triggers.append("One or more Approved Document checks are marked as fail/non-compliant.")
+    if partial_count:
+        triggers.append("Some compliance items require further details or confirmation.")
+    if "STRUCTURAL" in combined:
+        triggers.append("Structural information or engineer confirmation is relevant.")
+    if "FIRE" in combined:
+        triggers.append("Fire strategy information is relevant to the review.")
+    if not triggers:
+        triggers.append("No major issue was identified from the visible report sections.")
+
+    return {
+        "module": "Building Regulations Review",
+        "label": label,
+        "basis": "Drawing/report checks",
+        "triggers": triggers[:4],
+        "note": "This is an AI-assisted review status. Formal Building Control approval is still required.",
+    }
+
+
+def calculate_ai_confidence(module_name: str, sections: Dict[str, str], rule_summary: str = "") -> Dict[str, object]:
+    if module_name == "Planning Review":
+        return calculate_planning_confidence(sections, rule_summary)
+    return calculate_building_confidence(sections)
+
+
+def confidence_badge_style(label: str) -> str:
+    label_u = _normalise_text(label).upper()
+    if label_u in {"LIKELY COMPLIANT", "LIKELY COMPLIANT SUBJECT TO MINOR CHECKS", "LIKELY PRIOR APPROVAL"}:
+        return "background:#DDF3E4;color:#14532D;border-color:#B7E4C7;"
+    if label_u in {"LIKELY PLANNING PERMISSION REQUIRED", "REQUIRES FURTHER REVIEW", "PARTIAL INFORMATION", "STRUCTURAL REVIEW REQUIRED", "FIRE STRATEGY REVIEW REQUIRED", "BUILDING CONTROL REVIEW ADVISED"}:
+        return "background:#FFF3CD;color:#6B4E00;border-color:#F1D48A;"
+    return "background:#F8D7DA;color:#842029;border-color:#F1AEB5;"
+
+
+def render_ai_confidence_card(confidence):
+    if not confidence:
+        return
+    label = _normalise_text(confidence.get("label", "MANUAL REVIEW ADVISED"))
+    style = confidence_badge_style(label)
+    triggers = confidence.get("triggers", []) or []
+    st.markdown(
+        f"""
+        <div class="sy-subtle-card">
+            <div class="sy-section-label">Planning Confidence</div>
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap;">
+                <h3 style="margin:0;">Review Status</h3>
+                <span style="display:inline-block;padding:0.42rem 0.72rem;border-radius:999px;border:1px solid; font-weight:800; letter-spacing:0.02em; {style}">{label}</span>
+            </div>
+            <div class="sy-muted" style="margin-top:0.45rem;">Basis: {confidence.get('basis', 'Rule and drawing checks')}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    if triggers:
+        st.markdown("**What caused this result?**")
+        for t in triggers:
+            st.markdown(f"- {t}")
+    if confidence.get("note"):
+        st.caption(str(confidence.get("note")))
+
 PLAN_LABELS = {
     "starter": "Solo",
     "pro": "Studio",
@@ -520,7 +870,9 @@ def get_verified_plan_and_user() -> Tuple[str, str, bool]:
 
 
 def get_allowed_review_modules(plan: str) -> List[str]:
-    return ["Planning Review", "Building Regulations Review"] if plan == "pro" else ["Planning Review"]
+    # Token system: both modules can be selected by authenticated users.
+    # Downloads are controlled by credits rather than the old monthly plan gate.
+    return ["Planning Review", "Building Regulations Review"]
 
 
 def get_plan_upgrade_message(feature_name: str) -> str:
@@ -531,6 +883,117 @@ def add_saved_project(project_record: Dict):
     filtered = [item for item in saved if item.get("report_id") != project_record.get("report_id")]
     filtered.insert(0, project_record)
     st.session_state["saved_projects"] = filtered[:25]
+
+
+def get_credit_balance() -> int:
+    return int(st.session_state.get("credit_balance", 0) or 0)
+
+
+def add_credit_transaction(amount: int, reason: str, report_id: str = "", balance_after=None):
+    transactions = st.session_state.get("credit_transactions", []) or []
+    transactions.insert(0, {
+        "date": time.strftime("%Y-%m-%d %H:%M"),
+        "amount": int(amount),
+        "reason": reason,
+        "report_id": report_id,
+        "balance_after": get_credit_balance() if balance_after is None else balance_after,
+    })
+    st.session_state["credit_transactions"] = transactions[:100]
+
+
+def grant_credits(amount: int, reason: str = "Credits added"):
+    new_balance = get_credit_balance() + int(amount)
+    st.session_state["credit_balance"] = new_balance
+    add_credit_transaction(int(amount), reason, balance_after=new_balance)
+
+
+def spend_credits(amount: int, reason: str, report_id: str = "", export_type: str = ""):
+    amount = int(amount)
+    balance = get_credit_balance()
+
+    if amount <= 0:
+        return True, "No credits required."
+
+    if balance < amount:
+        return False, f"Not enough credits. You need {amount} credits but only have {balance}."
+
+    user_email = normalise_user_email(st.session_state.get("auth_user_name", ""))
+
+    # Live persistence: deduct from ArchLens API first, then update Streamlit session.
+    api_result = api_deduct_credits(
+        user_email,
+        amount,
+        report_id=report_id,
+        export_type=export_type,
+    )
+
+    if not api_result.get("success"):
+        return False, api_result.get("message", "Credit deduction failed. Please try again.")
+
+    new_balance = int(api_result.get("credits", max(0, balance - amount)) or 0)
+    st.session_state["credit_balance"] = new_balance
+    add_credit_transaction(-amount, reason, report_id=report_id, balance_after=new_balance)
+    return True, f"Unlocked successfully. {amount} credits used. New balance: {new_balance}."
+
+
+def get_export_credit_cost(module_name: str, export_type: str) -> int:
+    return int(EXPORT_CREDIT_COSTS.get(module_name, {}).get(export_type, 0))
+
+
+def is_report_unlocked(report_id: str, export_type: str) -> bool:
+    unlocked = st.session_state.get("unlocked_reports", {}) or {}
+    return bool(unlocked.get(report_id, {}).get(export_type, False))
+
+
+def mark_report_unlocked(report_id: str, export_type: str, cost: int = 0):
+    unlocked = st.session_state.get("unlocked_reports", {}) or {}
+    unlocked.setdefault(report_id, {})[export_type] = True
+    st.session_state["unlocked_reports"] = unlocked
+    saved = st.session_state.get("saved_projects", []) or []
+    for item in saved:
+        if item.get("report_id") == report_id:
+            item[f"{export_type}_unlocked"] = True
+            item["credits_used"] = int(item.get("credits_used", 0) or 0) + int(cost or 0)
+    st.session_state["saved_projects"] = saved
+
+
+def unlock_report_export(report_id: str, module_name: str, export_type: str):
+    if is_report_unlocked(report_id, export_type):
+        return True, "Already unlocked. You can download again without using more credits."
+    cost = get_export_credit_cost(module_name, export_type)
+    ok, message = spend_credits(cost, f"Unlock {export_type.upper()} export", report_id=report_id, export_type=export_type)
+    if ok:
+        mark_report_unlocked(report_id, export_type, cost)
+    return ok, message
+
+
+def render_credit_balance_card(compact: bool = False):
+    balance = get_credit_balance()
+    if compact:
+        st.caption(f"Credits: {balance}")
+        return
+    st.markdown(
+        f'''<div class="sy-subtle-card">
+            <div class="sy-section-label">Credits</div>
+            <h3 style="margin:0;">{balance} credits available</h3>
+            <div class="sy-muted" style="margin-top:0.35rem;">{FREE_PREVIEW_NOTE}</div>
+        </div>''',
+        unsafe_allow_html=True,
+    )
+
+
+def render_buy_credits_panel():
+    st.markdown("### Buy Credits")
+    st.caption("Stripe/Wix payment automation is the next phase. These buttons simulate credit top-ups for testing the app flow.")
+    cols = st.columns(len(CREDIT_PACKS))
+    for idx, (pack_name, pack) in enumerate(CREDIT_PACKS.items()):
+        with cols[idx]:
+            st.markdown(f"**{pack_name}**")
+            st.caption(pack["price"])
+            if st.button(f"Add {pack['credits']} credits", key=f"add_credit_pack_{idx}", use_container_width=True):
+                grant_credits(pack["credits"], f"Test top-up: {pack_name}")
+                st.success(f"Added {pack['credits']} credits.")
+                st.rerun()
 
 
 def inject_custom_css():
@@ -579,7 +1042,7 @@ def inject_custom_css():
             color: var(--sy-text) !important;
             font-size: 15px;
         }}
-        [data-testid="stToolbar"], .stAppDeployButton {{ display:none !important; }}
+        header[data-testid="stHeader"], [data-testid="stToolbar"], .stAppDeployButton {{ display:none !important; }}
         #MainMenu {{ visibility:hidden !important; }}
         footer {{ visibility:hidden !important; }}
 
@@ -594,10 +1057,14 @@ def inject_custom_css():
             border-right: 1px solid var(--sy-border);
         }}
         [data-testid="stSidebar"] * {{ color: var(--sy-text); }}
+        [data-testid="stSidebar"] [role="radiogroup"] label {{
+            padding: 0.42rem 0.55rem !important;
+            border-radius: 12px !important;
+            margin-bottom: 0.15rem !important;
+        }}
 
-        /* Keep Streamlit sidebar restore/collapse controls visible.
-           Important: double braces are required because this CSS is inside a Python f-string. */
-        [data-testid="stSidebarCollapsedControl"],
+        /* Keep Streamlit sidebar restore/collapse control visible.
+           Important: all braces are escaped because this CSS sits inside a Python f-string. */
         [data-testid="collapsedControl"] {{
             display: flex !important;
             visibility: visible !important;
@@ -605,16 +1072,30 @@ def inject_custom_css():
             pointer-events: auto !important;
             z-index: 999999 !important;
         }}
-        button[kind="header"] {{
+        [data-testid="collapsedControl"] button {{
             display: flex !important;
             visibility: visible !important;
             opacity: 1 !important;
             pointer-events: auto !important;
+            background: var(--sy-accent) !important;
+            color: #111111 !important;
+            border-radius: 999px !important;
+            border: 1px solid var(--sy-accent) !important;
+            box-shadow: 0 10px 24px rgba(212, 194, 154, 0.25) !important;
         }}
-        [data-testid="stSidebar"] [role="radiogroup"] label {{
-            padding: 0.42rem 0.55rem !important;
-            border-radius: 12px !important;
-            margin-bottom: 0.15rem !important;
+        [data-testid="stSidebarCollapsedControl"] {{
+            display: flex !important;
+            visibility: visible !important;
+            opacity: 1 !important;
+            pointer-events: auto !important;
+            z-index: 999999 !important;
+        }}
+        [data-testid="stSidebarCollapseButton"] {{
+            display: flex !important;
+            visibility: visible !important;
+            opacity: 1 !important;
+            pointer-events: auto !important;
+            z-index: 999999 !important;
         }}
 
         h1 {{ font-size: 2.35rem !important; letter-spacing: -0.035em !important; line-height: 1.08 !important; }}
@@ -692,74 +1173,6 @@ def inject_custom_css():
         .stTextArea textarea {{ min-height: 90px; }}
         .streamlit-expanderHeader {{ border:1px solid #5D6472 !important; border-radius:12px !important; }}
         .stProgress > div > div > div > div {{ background: linear-gradient(90deg, #D4C29A, #c5b183); }}
-
-        /* --- ArchLens Hub target HUD refinements --- */
-        .block-container {{
-            max-width: 1380px !important;
-            padding-left: 3.2rem !important;
-            padding-right: 3.2rem !important;
-            padding-top: 1.35rem !important;
-        }}
-        .stApp {{
-            background:
-                radial-gradient(circle at 18% 8%, rgba(212,194,154,0.10), transparent 28%),
-                radial-gradient(circle at 80% 15%, rgba(31,44,64,0.35), transparent 28%),
-                var(--sy-bg) !important;
-        }}
-        [data-testid="stSidebar"] {{
-            min-width: 252px !important;
-            width: 252px !important;
-            background: linear-gradient(180deg, rgba(15,22,32,0.98), rgba(9,13,20,0.98)) !important;
-        }}
-        [data-testid="stSidebar"] > div:first-child {{
-            padding-top: 1.9rem !important;
-            padding-left: 1.15rem !important;
-            padding-right: 1.15rem !important;
-        }}
-        .sy-sidebar-brand {{ display:flex; align-items:center; gap:0.9rem; margin:0.25rem 0 1.55rem 0; }}
-        .sy-sidebar-brand img {{ width:56px; height:56px; object-fit:contain; border-radius:14px; }}
-        .sy-sidebar-brand-title {{ font-weight:850; font-size:1.08rem; line-height:1.15; }}
-        .sy-sidebar-brand-subtitle {{ font-size:0.78rem; color:var(--sy-muted); margin-top:0.2rem; }}
-        .sy-sidebar-account {{ border:1px solid rgba(212,194,154,0.16); background:rgba(18,24,33,0.82); border-radius:14px; padding:0.85rem; margin:0 0 1.2rem 0; }}
-        .sy-sidebar-account-row {{ display:flex; justify-content:space-between; gap:0.55rem; font-size:0.78rem; padding:0.28rem 0; color:var(--sy-muted); }}
-        .sy-sidebar-account-row strong {{ color:var(--sy-text); text-align:right; overflow-wrap:anywhere; }}
-        [data-testid="stSidebar"] [role="radiogroup"] label {{ padding:0.72rem 0.8rem !important; border-radius:12px !important; margin-bottom:0.35rem !important; font-weight:650 !important; }}
-        [data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) {{
-            background:linear-gradient(90deg, rgba(212,194,154,0.38), rgba(212,194,154,0.14)) !important;
-            border:1px solid rgba(212,194,154,0.24) !important;
-            box-shadow:0 10px 22px rgba(212,194,154,0.10);
-        }}
-        .sy-sidebar-help {{ border:1px solid rgba(212,194,154,0.13); border-radius:14px; padding:0.75rem; margin-top:7rem; background:rgba(18,24,33,0.66); font-size:0.75rem; }}
-        .sy-topbar {{ background:transparent !important; border:0 !important; box-shadow:none !important; padding:0 0 1rem 0 !important; margin-bottom:0.1rem !important; }}
-        .sy-topbar-title {{ color:var(--sy-accent) !important; letter-spacing:0.28em !important; font-size:0.82rem !important; }}
-        .sy-topbar-meta {{ color:var(--sy-muted) !important; font-size:0.82rem !important; }}
-        .sy-user-badge {{ display:inline-flex; align-items:center; justify-content:center; width:32px; height:32px; border-radius:999px; background:rgba(212,194,154,0.18); color:var(--sy-accent); font-weight:800; margin-left:0.65rem; }}
-        .sy-project-hero {{ border:1px solid var(--sy-border); background:rgba(18,24,33,0.92); border-radius:18px; padding:1.45rem 1.55rem; margin-bottom:1rem; box-shadow: var(--sy-card-shadow); }}
-        .sy-project-hero-row {{ display:flex; align-items:flex-start; justify-content:space-between; gap:1rem; }}
-        .sy-project-hero h1 {{ font-size:1.75rem !important; margin:0 0 0.55rem 0 !important; }}
-        .sy-new-project-btn {{ display:inline-flex; align-items:center; gap:0.45rem; justify-content:center; min-width:132px; padding:0.66rem 1rem; border-radius:10px; background:linear-gradient(180deg,#DEC991,#CBB176); color:#111 !important; font-weight:800; font-size:0.86rem; box-shadow:0 12px 26px rgba(212,194,154,0.26); }}
-        .sy-step-row {{ display:grid; grid-template-columns:repeat(5, 1fr); gap:1rem; padding:0.95rem 0 1.05rem 0; border-top:1px solid var(--sy-border); border-bottom:1px solid var(--sy-border); margin-bottom:1.05rem; }}
-        .sy-step-item {{ display:flex; align-items:center; gap:0.68rem; opacity:0.62; }}
-        .sy-step-item.active {{ opacity:1; }}
-        .sy-step-icon {{ width:32px; height:32px; border-radius:999px; display:flex; align-items:center; justify-content:center; background:rgba(255,255,255,0.04); border:1px solid var(--sy-border); color:var(--sy-muted); font-size:0.95rem; }}
-        .sy-step-item.active .sy-step-icon {{ background:rgba(212,194,154,0.14); border-color:rgba(212,194,154,0.42); color:var(--sy-accent); }}
-        .sy-step-title {{ font-size:0.80rem; font-weight:800; color:var(--sy-text); }}
-        .sy-step-sub {{ font-size:0.70rem; color:var(--sy-muted); margin-top:0.12rem; }}
-        .sy-form-card {{ border:1px solid var(--sy-border); border-radius:18px; background:rgba(18,24,33,0.72); padding:1.25rem; min-height:330px; box-shadow: var(--sy-card-shadow); }}
-        .sy-form-card .sy-subtle-card {{ background:transparent !important; border:0 !important; box-shadow:none !important; padding:0 0 1rem 0 !important; }}
-        .sy-sidepanel {{ border-radius:16px !important; background:rgba(18,24,33,0.84) !important; padding:1rem !important; margin-bottom:0.9rem !important; position:relative !important; top:0 !important; }}
-        .sy-sidepanel .sy-data-row strong {{ max-width:150px; overflow-wrap:anywhere; }}
-        .sy-panel-title {{ color:var(--sy-text) !important; letter-spacing:0 !important; text-transform:none !important; font-size:0.94rem !important; margin-bottom:0.4rem !important; }}
-        .sy-recent-download {{ display:flex; gap:0.55rem; align-items:flex-start; padding:0.42rem 0; border-bottom:1px solid rgba(255,255,255,0.06); font-size:0.75rem; }}
-        .sy-file-icon {{ color:#F0B5FF; font-size:1rem; line-height:1; }}
-        .sy-footer {{ text-align:center; color:var(--sy-muted); font-size:0.72rem; margin-top:1.2rem; }}
-        .stButton button, .stDownloadButton button, .stLinkButton a {{ border-radius:10px !important; color:#111111 !important; }}
-        .stLinkButton a[href*="category"], .stLinkButton a[href*="pricing"] {{ background:rgba(255,255,255,0.04) !important; color:var(--sy-accent) !important; border:1px solid var(--sy-border) !important; box-shadow:none !important; }}
-        @media (max-width: 1100px) {{
-            .block-container {{ padding-left:1rem !important; padding-right:1rem !important; }}
-            .sy-step-row {{ grid-template-columns:1fr 1fr; }}
-        }}
-
         </style>
         """,
         unsafe_allow_html=True,
@@ -1535,12 +1948,13 @@ def build_word_report(file_name, address, client, date, practice_name, report_id
 def extract_summary_value(sections: Dict[str, str], module_name: str):
     top_summary_rows = {k.upper(): v for k, v in parse_key_value_lines(sections.get("TOP SUMMARY", "")) if k}
     if module_name == "Planning Review":
-        authority_value = "Unknown"
-        for line in sections.get("TOP SUMMARY", "").splitlines():
-            stripped = line.strip()
-            if stripped and ":" not in stripped:
-                authority_value = stripped
-                break
+        authority_value = top_summary_rows.get("LOCAL AUTHORITY", "Unknown")
+        if authority_value == "Unknown":
+            for line in sections.get("TOP SUMMARY", "").splitlines():
+                stripped = line.strip()
+                if stripped and ":" not in stripped:
+                    authority_value = stripped
+                    break
         return (
             "Not shown",
             top_summary_rows.get("APPLICATION TYPE", top_summary_rows.get("LIKELY ROUTE", "Unknown")),
@@ -1560,20 +1974,26 @@ def render_kpi_cards(sections: Dict[str, str], report_id: str, module_name: str)
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Report ID", report_id)
-    c2.metric("Risk Rating", v1)
-    c3.metric(label_2, v2)
-    c4.metric(label_3, v3)
+    if module_name == "Planning Review":
+        c2.metric("Planning Position", v1)
+        c3.metric(label_2, v2)
+        c4.metric(label_3, v3)
+    else:
+        c2.metric("Risk Rating", v1)
+        c3.metric(label_2, v2)
+        c4.metric(label_3, v3)
 
 
 def extract_summary_values(sections: Dict[str, str], module_name: str):
     top_summary_rows = {k.upper(): v for k, v in parse_key_value_lines(sections.get("TOP SUMMARY", "")) if k}
     if module_name == "Planning Review":
-        authority_value = "Unknown"
-        for line in sections.get("TOP SUMMARY", "").splitlines():
-            stripped = line.strip()
-            if stripped and ":" not in stripped:
-                authority_value = stripped
-                break
+        authority_value = top_summary_rows.get("LOCAL AUTHORITY", "Unknown")
+        if authority_value == "Unknown":
+            for line in sections.get("TOP SUMMARY", "").splitlines():
+                stripped = line.strip()
+                if stripped and ":" not in stripped:
+                    authority_value = stripped
+                    break
         return {
             "risk": "Not shown",
             "route": top_summary_rows.get("APPLICATION TYPE", top_summary_rows.get("LIKELY ROUTE", "Unknown")),
@@ -1680,7 +2100,7 @@ def build_simple_word_doc(title: str, body_text: str) -> BytesIO:
     return buffer
 
 
-st.set_page_config(page_title="ArchLens AI", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="ArchLens AI", layout="wide")
 inject_custom_css()
 
 if "authenticated" not in st.session_state:
@@ -1836,75 +2256,41 @@ def get_required_accuracy_answers(project_types):
 
 def render_left_navigation():
     logo_uri = app_logo_data_uri()
+    theme = st.session_state.get("app_theme", "Dark")
+    light_mode = str(theme).lower().startswith("light")
+    logo_box_bg = "transparent" if light_mode else "#061225"
+    logo_padding = "0px" if light_mode else "8px"
+    logo_subtitle_colour = "#6B7280" if light_mode else "#9FB2D8"
     with st.sidebar:
         if logo_uri:
             st.markdown(
-                f"""
-                <div class="sy-sidebar-brand">
-                    <img src="{logo_uri}" />
+                f'''
+                <div style="display:flex;align-items:center;gap:1rem;margin:0.9rem 0 1.45rem 0;">
+                    <img src="{logo_uri}" style="width:112px;height:112px;object-fit:contain;border-radius:18px;background:{logo_box_bg};padding:{logo_padding};" />
                     <div>
-                        <div class="sy-sidebar-brand-title">ArchLens AI</div>
-                        <div class="sy-sidebar-brand-subtitle">by SY Design Studio</div>
+                        <div style="font-weight:850;font-size:1.28rem;line-height:1.15;">ArchLens AI</div>
+                        <div style="font-size:0.86rem;color:{logo_subtitle_colour};margin-top:0.25rem;">SY Design Studio</div>
                     </div>
                 </div>
-                """,
+                ''',
                 unsafe_allow_html=True,
             )
         else:
-            st.markdown(
-                """
-                <div class="sy-sidebar-brand">
-                    <div style="width:52px;height:52px;border-radius:14px;border:1px solid rgba(212,194,154,0.25);display:flex;align-items:center;justify-content:center;color:#D4C29A;font-weight:900;">AL</div>
-                    <div>
-                        <div class="sy-sidebar-brand-title">ArchLens AI</div>
-                        <div class="sy-sidebar-brand-subtitle">by SY Design Studio</div>
-                    </div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-
-        st.markdown(
-            f"""
-            <div class="sy-sidebar-account">
-                <div class="sy-sidebar-account-row"><span>Plan:</span><strong>{PLAN_LABELS.get(current_plan, 'Solo')}</strong></div>
-                <div class="sy-sidebar-account-row"><span>Credits:</span><strong>{get_credit_balance()}</strong></div>
-                <div class="sy-sidebar-account-row"><span>User:</span><strong>{current_user_name or 'Not shown'}</strong></div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-        nav_options = {
-            "⌂  Dashboard": "Dashboard",
-            "▣  Projects": "Projects",
-            "▤  Reports": "Reports",
-            "⚙  Settings": "Settings",
-        }
-        current_page = st.session_state.get("app_page", "Projects")
-        current_label = next((label for label, value in nav_options.items() if value == current_page), "▣  Projects")
-        selected_label = st.radio(
+            st.markdown("### ArchLens AI")
+        st.caption(f"Plan: {PLAN_LABELS.get(current_plan, 'Solo')}")
+        st.caption(f"Credits: {get_credit_balance()}")
+        if current_user_name:
+            st.caption(f"User: {current_user_name}")
+        page = st.radio(
             "Navigation",
-            list(nav_options.keys()),
-            index=list(nav_options.keys()).index(current_label),
+            ["Dashboard", "Projects", "Reports", "Settings"],
+            index=["Dashboard", "Projects", "Reports", "Settings"].index(st.session_state.get("app_page", "Projects")),
             label_visibility="collapsed",
         )
-        page = nav_options[selected_label]
         st.session_state["app_page"] = page
-
-        st.markdown("<div style='height:1.35rem'></div>", unsafe_allow_html=True)
-        st.link_button("Return to SY Design Studio →", WEBSITE_HOME_URL, use_container_width=True)
-        st.link_button("◎  Buy Credits ↗", ARCHLENS_BUY_CREDITS_URL, use_container_width=True)
-
-        st.markdown(
-            """
-            <div class="sy-sidebar-help">
-                <div style="color:var(--sy-muted);">Need help?</div>
-                <strong style="color:var(--sy-text);">Contact support</strong>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+        st.markdown("---")
+        st.link_button("Return to SY Design Studio", WEBSITE_HOME_URL, use_container_width=True)
+        st.link_button("Buy Credits", ARCHLENS_BUY_CREDITS_URL, use_container_width=True)
     return page
 
 def intake_items():
@@ -1927,17 +2313,14 @@ def render_intake_panel():
     project_address = st.session_state.get("wizard_project_address", "")
     proposal_summary = st.session_state.get("wizard_proposal_summary", "")
     local_authority = detect_local_authority_for_display(project_address, proposal_summary)
-
     st.markdown('<div class="sy-sidepanel">', unsafe_allow_html=True)
-    st.markdown('<div class="sy-panel-title">Project Intake Readiness</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sy-panel-title">Intake Readiness</div>', unsafe_allow_html=True)
     st.markdown(f"**{complete} of {total} key items completed**")
-    st.progress(complete / max(total, 1))
     for label, done in items:
-        icon = "✅" if done else "○"
+        icon = "✅" if done else "•"
         st.markdown(f"{icon} {label}")
-    st.markdown('</div>', unsafe_allow_html=True)
-
-    st.markdown('<div class="sy-sidepanel">', unsafe_allow_html=True)
+    st.progress(complete / max(total, 1))
+    st.markdown("---")
     st.markdown('<div class="sy-panel-title">Live Summary</div>', unsafe_allow_html=True)
     rows = [
         ("Project", st.session_state.get("wizard_project_name") or "Not named"),
@@ -1949,24 +2332,6 @@ def render_intake_panel():
     ]
     for label, value in rows:
         st.markdown(f'<div class="sy-data-row"><span>{label}</span><strong>{value}</strong></div>', unsafe_allow_html=True)
-    st.markdown('</div>', unsafe_allow_html=True)
-
-    st.markdown('<div class="sy-sidepanel">', unsafe_allow_html=True)
-    st.markdown('<div style="display:flex;justify-content:space-between;align-items:center;"><div class="sy-panel-title">Recent Downloads</div><div style="color:var(--sy-accent);font-size:0.78rem;">View all</div></div>', unsafe_allow_html=True)
-    library = st.session_state.get("report_library", []) or []
-    saved = st.session_state.get("saved_projects", []) or []
-    recent_items = library[:4] if library else saved[:4]
-    if recent_items:
-        for item in recent_items:
-            filename = item.get("file_name") or item.get("project_address") or "ArchLens_Report.pdf"
-            date = item.get("date", "")
-            st.markdown(
-                f'<div class="sy-recent-download"><div class="sy-file-icon">▣</div><div><strong>{filename}</strong><br><span class="sy-muted">{date}</span></div></div>',
-                unsafe_allow_html=True,
-            )
-    else:
-        st.markdown('<div class="sy-muted" style="font-size:0.78rem;">No downloads yet.</div>', unsafe_allow_html=True)
-    st.markdown('<div style="margin-top:0.7rem;"><div class="sy-new-project-btn" style="width:100%;box-sizing:border-box;font-size:0.78rem;">Open full download history ↗</div></div>', unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
 def step_header(step_no, title, subtitle):
@@ -1982,28 +2347,16 @@ def step_header(step_no, title, subtitle):
     )
 
 def wizard_buttons(max_step=7):
-    def _next_step(current_step: int) -> int:
-        next_step = min(max_step, current_step + 1)
-        if st.session_state.get("wizard_review_module") == "Planning Review" and next_step == 4:
-            return min(max_step, 5)
-        return next_step
-
-    def _previous_step(current_step: int) -> int:
-        previous_step = max(1, current_step - 1)
-        if st.session_state.get("wizard_review_module") == "Planning Review" and previous_step == 4:
-            return max(1, 3)
-        return previous_step
-
     c1, c2, c3 = st.columns([0.35, 1, 0.35])
     with c1:
         if st.session_state.project_step > 1:
             if st.button("Back", use_container_width=True):
-                st.session_state.project_step = _previous_step(int(st.session_state.project_step))
+                st.session_state.project_step -= 1
                 st.rerun()
     with c3:
         if st.session_state.project_step < max_step:
-            if st.button("Continue  →", use_container_width=True):
-                st.session_state.project_step = _next_step(int(st.session_state.project_step))
+            if st.button("Continue", use_container_width=True):
+                st.session_state.project_step += 1
                 st.rerun()
 
 def run_archlens_analysis(uploaded_files):
@@ -2020,6 +2373,7 @@ def run_archlens_analysis(uploaded_files):
     accuracy_answers = st.session_state.get("wizard_accuracy_answers", {}) or {}
     scope_items = st.session_state.get("wizard_scope_items", []) or []
     review_focus = st.session_state.get("wizard_review_focus") or ""
+    rule_engine_summary = ""
     drawing_priority_instruction = (
         "Important instruction: cross-check all user-entered project type, scope items and measurements against the uploaded drawing PDF. "
         "If the uploaded plans show different dimensions or scope, the uploaded plans take priority. "
@@ -2028,12 +2382,8 @@ def run_archlens_analysis(uploaded_files):
     )
     config = MODULE_CONFIG[review_module]
 
-    if current_plan == "starter" and review_module == "Building Regulations Review":
-        st.warning(get_plan_upgrade_message("Building Regulations Review"))
-        st.stop()
-    if current_plan == "starter" and st.session_state.get("starter_review_count", 0) >= STARTER_MONTHLY_REVIEW_LIMIT:
-        st.error("You have reached your 10 monthly reviews on Solo. Upgrade to Studio for unlimited project reviews.")
-        st.stop()
+    # Token system: module access is no longer blocked by Solo/Studio here.
+    # Keep file-size/page limits below to protect AI/API costs.
     if not uploaded_files:
         st.error("Please upload at least one PDF drawing pack before running the review.")
         st.stop()
@@ -2099,14 +2449,16 @@ def run_archlens_analysis(uploaded_files):
                     if extra_bits:
                         proposal_summary_for_ai = (proposal_summary_for_ai.strip() + " | " + extra_bits + " | Drawing dimensions take priority if different.").strip(" |")
                 if scope_items:
-                    proposal_summary_for_ai = (proposal_summary_for_ai.strip() + " | Selected scope items to cross-check: " + ", ".join(scope_items)).strip(" |")
+                    proposal_summary_for_ai = (proposal_summary_for_ai.strip() + " | Scope noted: " + ", ".join(scope_items)).strip(" |")
                 if review_focus:
                     proposal_summary_for_ai = (proposal_summary_for_ai.strip() + " | Specific review focus / notes: " + review_focus).strip(" |")
-                proposal_summary_for_ai = (proposal_summary_for_ai.strip() + " | " + drawing_priority_instruction).strip(" |")
+                # Do not pass internal drawing-priority instructions into report wording.
+                # The report prompt already includes this rule internally.
+                proposal_summary_for_ai = proposal_summary_for_ai.strip(" |")
                 pd_context = build_pd_context(project_types, property_type, rear_extension_depth_m, rear_extension_height_m, accuracy_answers)
                 accuracy_context = build_accuracy_context(accuracy_answers)
                 if accuracy_context:
-                    proposal_summary_for_ai = (proposal_summary_for_ai.strip() + " | Rule intake answers: " + accuracy_context).strip(" |")
+                    proposal_summary_for_ai = (proposal_summary_for_ai.strip() + " | PD answers: " + accuracy_context).strip(" |")
 
                 # Run deterministic householder PD rule checks before the AI narrative.
                 # AI should explain these results, not replace them.
@@ -2152,6 +2504,7 @@ def run_archlens_analysis(uploaded_files):
             st.stop()
 
         sections = parse_report_sections(report, config["required_headings"])
+        ai_confidence = calculate_ai_confidence(review_module, sections, rule_engine_summary)
         extracted_report_address = extract_address_from_report(report, "Not provided")
         clean_project_address = clean_input_value(project_address, extracted_report_address)
         clean_client_name = clean_input_value(client_name, "Not provided")
@@ -2169,6 +2522,8 @@ def run_archlens_analysis(uploaded_files):
         st.session_state.last_filename = file.name
         st.session_state.report_id = report_id
         st.session_state.active_module = review_module
+        st.session_state.ai_confidence = ai_confidence
+        st.session_state.rule_engine_summary = rule_engine_summary
         st.session_state["planning_statement_text"] = None
         st.session_state["planning_statement_file"] = None
         if current_plan == "starter":
@@ -2186,6 +2541,10 @@ def run_archlens_analysis(uploaded_files):
             "local_authority": local_authority,
             "pdf_bytes": pdf_file.getvalue(),
             "word_bytes": word_file.getvalue(),
+            "ai_confidence": ai_confidence,
+            "pdf_unlocked": False,
+            "word_unlocked": False,
+            "credits_used": 0,
         })
         smooth_progress(progress_bar, status_text, 95, 100, "Finalising report...", 0.4)
         status_text.text("Analysis complete. 100%")
@@ -2208,34 +2567,51 @@ def render_report_download_panel(module_name=None, show_sections=True):
     report_id = st.session_state.report_id or "N/A"
     module_name = module_name or st.session_state.get("active_module", "Planning Review")
     st.markdown('<div class="sy-subtle-card"><div class="sy-section-label">Review Output</div><h3 style="margin:0 0 0.35rem 0;">Latest Professional Report</h3><div class="sy-muted">Download the branded PDF or review the AI report sections.</div></div>', unsafe_allow_html=True)
+    render_ai_confidence_card(st.session_state.get("ai_confidence"))
     render_at_a_glance(sections, report_id, module_name)
     base_filename = (st.session_state.last_filename or "drawing_pack").rsplit(".", 1)[0]
     suffix = "Planning" if module_name == "Planning Review" else "BuildingRegs"
     c1, c2 = st.columns(2)
+    pdf_cost = get_export_credit_cost(module_name, "pdf")
+    word_cost = get_export_credit_cost(module_name, "word")
     with c1:
-        st.download_button("Download Branded PDF Report", st.session_state.pdf_file, file_name=f"{base_filename}_{suffix}_AI_Review_Report.pdf", mime="application/pdf", use_container_width=True)
+        if is_report_unlocked(report_id, "pdf"):
+            st.download_button("Download Branded PDF Report", st.session_state.pdf_file, file_name=f"{base_filename}_{suffix}_AI_Review_Report.pdf", mime="application/pdf", use_container_width=True)
+        else:
+            if st.button(f"Unlock PDF Report — {pdf_cost} credits", use_container_width=True):
+                ok, msg = unlock_report_export(report_id, module_name, "pdf")
+                if ok:
+                    st.success(msg)
+                    st.rerun()
+                else:
+                    st.error(msg)
     with c2:
-        if current_plan == "pro":
+        if is_report_unlocked(report_id, "word"):
             st.download_button("Download Word Report", st.session_state.word_file, file_name=f"{base_filename}_{suffix}_AI_Review_Report.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document", use_container_width=True)
         else:
-            st.button("Download Word Report 🔒 Studio", disabled=True, use_container_width=True)
+            if st.button(f"Unlock Word Report — {word_cost} credit", use_container_width=True):
+                ok, msg = unlock_report_export(report_id, module_name, "word")
+                if ok:
+                    st.success(msg)
+                    st.rerun()
+                else:
+                    st.error(msg)
     if show_sections:
         render_sections(sections, report, module_name)
 
 page = render_left_navigation()
 
 # Main shell header
-user_initials = "".join([part[:1] for part in (current_user_name or "SY").replace("@", " ").replace(".", " ").split()[:2]]).upper() or "SY"
 st.markdown(
-    f"""
+    f'''
     <div class="sy-topbar">
         <div>
-            <div class="sy-topbar-title">ARCHLENS HUB</div>
+            <div class="sy-topbar-title">Architect AI Workspace</div>
             <div class="sy-topbar-meta">AI-powered planning and building regulations intelligence for UK projects</div>
         </div>
-        <div class="sy-topbar-meta">Credits: {get_credit_balance()} &nbsp; | &nbsp; Plan: {PLAN_LABELS.get(current_plan, "Solo")}{(" &nbsp; | &nbsp; User: " + current_user_name) if current_user_name else ""}<span class="sy-user-badge">{user_initials}</span></div>
+        <div class="sy-topbar-meta">Credits: {get_credit_balance()} | Plan: {PLAN_LABELS.get(current_plan, "Solo")}{(" | User: " + current_user_name) if current_user_name else ""}</div>
     </div>
-    """,
+    ''',
     unsafe_allow_html=True,
 )
 
@@ -2244,72 +2620,33 @@ if page == "Dashboard":
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Saved projects", len(st.session_state.get("saved_projects", [])))
     c2.metric("Reports generated", len(st.session_state.get("saved_projects", [])))
-    c3.metric("Current plan", PLAN_LABELS.get(current_plan, "Solo"))
-    c4.metric("Solo reviews used", f"{st.session_state.get('starter_review_count', 0)} / {STARTER_MONTHLY_REVIEW_LIMIT}" if current_plan == "starter" else "Unlimited")
+    c3.metric("Credits", get_credit_balance())
+    c4.metric("Current plan", PLAN_LABELS.get(current_plan, "Solo"))
     st.markdown("### Recent projects")
     saved_projects = st.session_state.get("saved_projects", [])
     if saved_projects:
         for item in saved_projects[:6]:
             st.markdown(f"**{item.get('project_address', 'Not provided')}**")
-            st.caption(f"{item.get('module', '')} • {item.get('date', '')} • Report ID: {item.get('report_id', '')}")
+            conf = item.get("ai_confidence") or {}
+            status_text = f" • Status: {conf.get('label')}" if conf.get("label") else ""
+            st.caption(f"{item.get('module', '')} • {item.get('date', '')} • Report ID: {item.get('report_id', '')}{status_text}")
             st.markdown("---")
     else:
         st.info("No projects yet. Go to Projects to start a new intake.")
 
 elif page == "Projects":
+    st.markdown('<div class="sy-hero"><div class="sy-hero-copy"><h1>Projects</h1><div class="sy-muted">Create a structured project intake, upload drawings, and generate a professional AI review report.</div></div></div>', unsafe_allow_html=True)
     step = int(st.session_state.get("project_step", 1))
-    review_module_for_steps = st.session_state.get("wizard_review_module", "Planning Review")
-    if review_module_for_steps == "Building Regulations Review":
-        step_items = [
-            (1, "▣", "Details", "Project information"),
-            (3, "➜", "Type", "Select project type"),
-            (4, "◇", "Scope", "Define review scope"),
-            (6, "⇧", "Upload", "Upload documents"),
-            (7, "▤", "Report", "AI review report"),
-        ]
-    else:
-        step_items = [
-            (1, "▣", "Details", "Project information"),
-            (3, "➜", "Type", "Select project type"),
-            (5, "◇", "Specifics", "Planning checks"),
-            (6, "⇧", "Upload", "Upload documents"),
-            (7, "▤", "Report", "AI review report"),
-        ]
-    st.markdown(
-        """
-        <div class="sy-project-hero">
-            <div class="sy-project-hero-row">
-                <div>
-                    <h1>Projects</h1>
-                    <div class="sy-muted">Create a structured project intake, upload drawings, and generate a professional AI review report.</div>
-                </div>
-                <div class="sy-new-project-btn">＋ New Project</div>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-    step_html = '<div class="sy-step-row">'
-    for step_no, icon, title, subtitle in step_items:
-        active = "active" if step == step_no or (step == 2 and step_no == 1) else ""
-        step_html += f'<div class="sy-step-item {active}"><div class="sy-step-icon">{icon}</div><div><div class="sy-step-title">{title}</div><div class="sy-step-sub">{subtitle}</div></div></div>'
-    step_html += '</div>'
-    st.markdown(step_html, unsafe_allow_html=True)
-    st.progress(step / 7)
-    main_col, side_col = st.columns([2.15, 1.0], gap="large")
+    steps = ["Module", "Details", "Type", "Scope", "Specifics", "Upload", "Report"]
+    st.progress(step / len(steps))
+    st.caption(" → ".join([f"**{name}**" if i + 1 == step else name for i, name in enumerate(steps)]))
+    main_col, side_col = st.columns([1.65, 0.82], gap="large")
     with main_col:
-        st.markdown('<div class="sy-form-card">', unsafe_allow_html=True)
         if step == 1:
-            step_header(1, "Project Details", "Select whether this project needs a planning review or a building regulations review.")
-            f1, f2 = st.columns(2)
-            with f1:
-                st.session_state["wizard_review_module"] = st.selectbox("Review Module", allowed_review_modules, index=allowed_review_modules.index(st.session_state.get("wizard_review_module", allowed_review_modules[0])))
-                st.caption("Assess planning policies, site context, constraints and design.")
-            with f2:
-                st.session_state["wizard_review_mode"] = st.selectbox("Report Mode", ["Architect / Professional", "Homeowner Summary"], index=["Architect / Professional", "Homeowner Summary"].index(st.session_state.get("wizard_review_mode", "Architect / Professional")))
-                st.caption("Tailored output for architects, agents and professionals.")
-            st.markdown("<hr style='border-color:var(--sy-border);margin:1.25rem 0;'>", unsafe_allow_html=True)
+            step_header(1, "Choose module", "Select whether this project needs a planning review or a building regulations review.")
+            st.session_state["wizard_review_module"] = st.selectbox("Review Module", allowed_review_modules, index=allowed_review_modules.index(st.session_state.get("wizard_review_module", allowed_review_modules[0])))
             st.caption("Downloads are unlocked using credits. Planning PDF = 3 credits. Building Regs PDF = 5 credits. Word export = 1 credit.")
+            st.session_state["wizard_review_mode"] = st.selectbox("Report Mode", ["Architect / Professional", "Homeowner Summary"], index=["Architect / Professional", "Homeowner Summary"].index(st.session_state.get("wizard_review_mode", "Architect / Professional")))
             wizard_buttons()
         elif step == 2:
             step_header(2, "Project details", "Add the basic project and site information used in the report cover, council detection and AI context.")
@@ -2367,7 +2704,7 @@ elif page == "Projects":
                 st.info("No files attached yet. Upload at least one drawing PDF before generating the report.")
             wizard_buttons()
         elif step == 7:
-            step_header(7, "Generate report", "Run the AI review and download the branded SY Design Studio report.")
+            step_header(7, "Generate report", "Run the AI review first, then unlock PDF or Word exports using credits.")
             uploaded_files = st.session_state.get("wizard_uploaded_files", [])
             if uploaded_files:
                 st.success(f"{len(uploaded_files)} file(s) ready for analysis.")
@@ -2378,7 +2715,6 @@ elif page == "Projects":
             st.markdown("")
             render_report_download_panel(st.session_state.get("active_module", st.session_state.get("wizard_review_module")))
             wizard_buttons()
-        st.markdown("</div>", unsafe_allow_html=True)
     with side_col:
         render_intake_panel()
 
@@ -2394,6 +2730,9 @@ elif page == "Reports":
                 st.caption(f"Report ID: {item.get('report_id', '')} • {item.get('filename', '')}")
             with c2:
                 st.write(item.get("module", ""))
+                conf = item.get("ai_confidence") or {}
+                if conf.get("label"):
+                    st.caption(f"Status: {conf.get('label')}")
                 st.caption(f"Council: {item.get('local_authority', 'Not detected')}")
             with c3:
                 st.write(item.get("date", ""))
@@ -2401,16 +2740,34 @@ elif page == "Reports":
             d1, d2 = st.columns(2)
             pdf_bytes = item.get("pdf_bytes")
             word_bytes = item.get("word_bytes")
+            report_id_item = item.get("report_id", "")
+            module_item = item.get("module", "Planning Review")
             with d1:
-                if pdf_bytes:
-                    st.download_button("Download PDF", pdf_bytes, file_name=f"{item.get('report_id', 'report')}_ArchLens_Report.pdf", mime="application/pdf", use_container_width=True, key=f"pdf_{item.get('report_id','')}")
+                if pdf_bytes and item.get("pdf_unlocked"):
+                    st.download_button("Download PDF", pdf_bytes, file_name=f"{report_id_item or 'report'}_ArchLens_Report.pdf", mime="application/pdf", use_container_width=True, key=f"pdf_{report_id_item}")
+                elif pdf_bytes:
+                    cost = get_export_credit_cost(module_item, "pdf")
+                    if st.button(f"Unlock PDF — {cost} credits", use_container_width=True, key=f"unlock_pdf_{report_id_item}"):
+                        ok, msg = unlock_report_export(report_id_item, module_item, "pdf")
+                        if ok:
+                            st.success(msg)
+                            st.rerun()
+                        else:
+                            st.error(msg)
                 else:
                     st.caption("PDF download available for reports generated after this update.")
             with d2:
-                if current_plan == "pro" and word_bytes:
-                    st.download_button("Download Word", word_bytes, file_name=f"{item.get('report_id', 'report')}_ArchLens_Report.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document", use_container_width=True, key=f"docx_{item.get('report_id','')}")
-                elif current_plan != "pro":
-                    st.button("Word Report 🔒 Studio", disabled=True, use_container_width=True, key=f"docx_locked_{item.get('report_id','')}")
+                if word_bytes and item.get("word_unlocked"):
+                    st.download_button("Download Word", word_bytes, file_name=f"{report_id_item or 'report'}_ArchLens_Report.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document", use_container_width=True, key=f"docx_{report_id_item}")
+                elif word_bytes:
+                    cost = get_export_credit_cost(module_item, "word")
+                    if st.button(f"Unlock Word — {cost} credit", use_container_width=True, key=f"unlock_word_{report_id_item}"):
+                        ok, msg = unlock_report_export(report_id_item, module_item, "word")
+                        if ok:
+                            st.success(msg)
+                            st.rerun()
+                        else:
+                            st.error(msg)
                 else:
                     st.caption("Word download available for reports generated after this update.")
             st.markdown('</div>', unsafe_allow_html=True)
@@ -2424,8 +2781,8 @@ elif page == "Settings":
         st.markdown("### Account")
         st.write(f"Current plan: **{PLAN_LABELS.get(current_plan, 'Solo')}**")
         st.write(f"User: **{current_user_name or 'Not shown'}**")
-        if current_plan == "starter":
-            st.write(f"Monthly reviews used: **{st.session_state.get('starter_review_count', 0)} / {STARTER_MONTHLY_REVIEW_LIMIT}**")
+        st.write(f"Credits available: **{get_credit_balance()}**")
+        st.caption("This version uses session-based credits for testing. Live credits should be moved to Supabase/Stripe so balances persist.")
         st.markdown("### Appearance")
         selected_theme = st.radio("App theme", ["Dark", "Light"], index=["Dark", "Light"].index(st.session_state.get("app_theme", "Dark")), horizontal=True)
         if selected_theme != st.session_state.get("app_theme", "Dark"):
@@ -2440,11 +2797,28 @@ elif page == "Settings":
             st.success("SY Design Studio logo is loaded for branded PDF exports.")
         else:
             st.warning("Logo file not found. Add assets/sy_design_studio_logo.png to your project.")
+    st.markdown("---")
+    render_buy_credits_panel()
+
+    st.markdown("---")
+    st.markdown("### Credit Transactions")
+    transactions = st.session_state.get("credit_transactions", []) or []
+    if transactions:
+        for tx in transactions[:8]:
+            sign = "+" if int(tx.get("amount", 0)) > 0 else ""
+            st.caption(f"{tx.get('date')} • {sign}{tx.get('amount')} credits • {tx.get('reason')} • Balance: {tx.get('balance_after')}")
+    else:
+        st.caption("No credit transactions yet.")
+
     if st.button("Clear current project/report"):
+        # Do not reset credit balance, credit transactions, unlocked reports or report library.
+        # Credits are money-related and must persist in the user session.
+        preserve_keys = {"credit_balance", "credit_transactions", "unlocked_reports", "saved_projects", "report_library"}
         for key, value in DEFAULT_STATE.items():
-            st.session_state[key] = value
+            if key not in preserve_keys:
+                st.session_state[key] = value
         for key in list(st.session_state.keys()):
             if key.startswith("wizard_"):
                 st.session_state[key] = WIZARD_DEFAULTS.get(key, "")
         st.session_state["project_step"] = 1
-        st.success("Current project cleared.")
+        st.success("Current project cleared. Credits and previously generated report library were kept.")
