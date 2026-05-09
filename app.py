@@ -47,6 +47,42 @@ MAX_FILE_SIZE_MB = 20
 MAX_PAGE_COUNT = 30
 STARTER_MONTHLY_REVIEW_LIMIT = 10
 
+ARCHLENS_API_URL = os.getenv("ARCHLENS_API_URL", "https://archlens-api.onrender.com").rstrip("/")
+ARCHLENS_WEBHOOK_SECRET = os.getenv("ARCHLENS_WEBHOOK_SECRET", "archlens_secure_2026_SYDS_92838")
+ARCHLENS_BUY_CREDITS_URL = os.getenv("ARCHLENS_BUY_CREDITS_URL", "https://www.sydesignstudio.co.uk/category/archlens-ai-credits")
+
+
+def normalise_user_email(email: str) -> str:
+    return str(email or "").strip().lower()
+
+
+def api_get_credit_balance(email: str):
+    clean_email = normalise_user_email(email)
+    if not clean_email:
+        return None
+    try:
+        response = requests.get(
+            f"{ARCHLENS_API_URL}/user/{clean_email}",
+            timeout=10,
+        )
+        if response.status_code == 200:
+            data = response.json()
+            return int(data.get("credits", 0) or 0)
+    except Exception as exc:
+        print("Credit balance API error:", exc)
+    return None
+
+
+def sync_credit_balance_from_api(email: str):
+    api_balance = api_get_credit_balance(email)
+    if api_balance is not None:
+        st.session_state["credit_balance"] = api_balance
+    return st.session_state.get("credit_balance", 0)
+
+
+def get_credit_balance() -> int:
+    return int(st.session_state.get("credit_balance", 0) or 0)
+
 BUILDING_REQUIRED_HEADINGS = [
     "PROJECT CLASSIFICATION",
     "PROJECT DETAILS",
