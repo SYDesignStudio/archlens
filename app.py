@@ -234,6 +234,7 @@ def refresh_authenticated_session_from_token() -> Tuple[str, str, bool]:
 
 def admin_api_headers(admin_email: str) -> Dict[str, str]:
     refresh_authenticated_session_from_token()
+    token_value = get_current_url_token()
     current_email = normalise_user_email(find_email_in_payload(admin_email) or admin_email or get_authenticated_user_email())
     print(
         "ArchLens Admin API headers:",
@@ -246,6 +247,7 @@ def admin_api_headers(admin_email: str) -> Dict[str, str]:
     return {
         "x-archlens-secret": ARCHLENS_WEBHOOK_SECRET,
         "x-archlens-admin-email": current_email,
+        "Authorization": f"Bearer {token_value}",
     }
 
 
@@ -2878,6 +2880,8 @@ def render_admin_area():
     with st.expander("Admin diagnostics", expanded=True):
         st.write(f"Frontend email: **{frontend_email or 'Not detected'}**")
         st.write(f"Backend authenticated email: **{(session_payload or {}).get('authenticated_email', 'Not confirmed')}**")
+        parsed_admin_emails = (session_payload or {}).get("admin_emails", [])
+        st.write(f"Parsed ADMIN_EMAILS: **{', '.join(parsed_admin_emails) if parsed_admin_emails else 'Not confirmed'}**")
         st.write(f"is_admin result: **{backend_is_admin}**")
         st.write(f"Token age: **{token_diagnostics.get('token_age', 'Not available')}**")
         st.write(f"Token expiry: **{token_diagnostics.get('token_expiry', 'Not available')}**")
