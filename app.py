@@ -55,11 +55,11 @@ MAX_SAVED_REPORTS = 5
 ARCHLENS_API_URL = os.getenv("ARCHLENS_API_URL", "https://archlens-api.onrender.com").rstrip("/")
 ARCHLENS_WEBHOOK_SECRET = os.getenv("ARCHLENS_WEBHOOK_SECRET", "archlens_secure_2026_SYDS_92838")
 ARCHLENS_BUY_CREDITS_URL = os.getenv("ARCHLENS_BUY_CREDITS_URL", "https://www.sydesignstudio.co.uk/category/archlens-ai-credits")
-ADMIN_EMAILS = {
-    str(item or "").strip().lower()
-    for item in os.getenv("ADMIN_EMAILS", "").split(",")
-    if str(item or "").strip().lower()
-}
+ADMIN_EMAILS = [
+    email.strip().lower()
+    for email in os.getenv("ADMIN_EMAILS", "").split(",")
+    if email.strip()
+]
 EXPORT_CREDIT_COSTS = {
     "planning_pdf": 3,
     "building_pdf": 5,
@@ -175,14 +175,37 @@ def api_deduct_credits(email: str, credits: int, report_id: str, export_type: st
 
 
 def is_admin_user(email: str) -> bool:
-    clean_email = normalise_user_email(email)
-    return bool(clean_email and clean_email in ADMIN_EMAILS)
+    current_email = normalise_user_email(email)
+    is_allowed = bool(current_email and current_email in ADMIN_EMAILS)
+    print(
+        "ArchLens Admin validation:",
+        {
+            "current_authenticated_email": current_email,
+            "admin_emails": ADMIN_EMAILS,
+            "is_admin": is_allowed,
+        },
+    )
+    return is_allowed
+
+
+def get_authenticated_user_email() -> str:
+    session_email = find_email_in_payload(st.session_state.get("auth_user_name", ""))
+    return normalise_user_email(session_email or st.session_state.get("auth_user_name", ""))
 
 
 def admin_api_headers(admin_email: str) -> Dict[str, str]:
+    current_email = normalise_user_email(find_email_in_payload(admin_email) or admin_email or get_authenticated_user_email())
+    print(
+        "ArchLens Admin API headers:",
+        {
+            "current_authenticated_email": current_email,
+            "admin_emails": ADMIN_EMAILS,
+            "is_admin": bool(current_email and current_email in ADMIN_EMAILS),
+        },
+    )
     return {
         "x-archlens-secret": ARCHLENS_WEBHOOK_SECRET,
-        "x-archlens-admin-email": normalise_user_email(admin_email),
+        "x-archlens-admin-email": current_email,
     }
 
 
@@ -241,7 +264,7 @@ def api_record_user_activity(email: str, plan: str):
 
 
 def api_record_report_generation(record: Dict):
-    clean_email = normalise_user_email(current_user_name)
+    clean_email = normalise_user_email(get_authenticated_user_email() or current_user_name)
     if not is_valid_email(clean_email):
         return
     try:
@@ -2401,12 +2424,13 @@ if not st.session_state.get("authenticated", False):
 
 current_plan = st.session_state.get("auth_plan", "starter")
 current_user_name = st.session_state.get("auth_user_name", "")
+current_user_email = get_authenticated_user_email()
 if current_user_name:
-    sync_credit_balance_from_api(current_user_name)
+    sync_credit_balance_from_api(current_user_email or current_user_name)
     if st.session_state.get("account_status") == "suspended":
         st.error("Your ArchLens account is currently suspended. Please contact SY Design Studio support.")
         st.stop()
-    api_record_user_activity(current_user_name, current_plan)
+    api_record_user_activity(current_user_email or current_user_name, current_plan)
 allowed_review_modules = get_allowed_review_modules(current_plan)
 
 # -------------------------------
@@ -2565,17 +2589,17 @@ def render_left_navigation():
             "▤  Reports": "Reports",
             "⚙  Settings": "Settings",
         }
-        if is_admin_user(current_user_name):
+        if is_admin_user(current_user_email or current_user_name):
             nav_options["✦  Admin"] = "Admin"
         current_page = st.session_state.get("app_page", "Projects")
         try:
             requested_page = str(st.query_params.get("page", "")).strip().lower()
         except Exception:
             requested_page = ""
-        if requested_page == "admin" and is_admin_user(current_user_name):
+        if requested_page == "admin" and is_admin_user(current_user_email or current_user_name):
             current_page = "Admin"
             st.session_state["app_page"] = "Admin"
-        if current_page == "Admin" and not is_admin_user(current_user_name):
+        if current_page == "Admin" and not is_admin_user(current_user_email or current_user_name):
             current_page = "Projects"
             st.session_state["app_page"] = "Projects"
         current_label = next((label for label, value in nav_options.items() if value == current_page), "▣  Projects")
@@ -2766,8 +2790,8 @@ def filter_rows(rows: List[Dict], search: str) -> List[Dict]:
 
 
 def render_admin_area():
-    if not is_admin_user(current_user_name):
-        st.error("Admin access denied.")
+    if not is_admin_user(current_user_email or current_user_name):
+        st.error("Authenticated user email is not listed in ADMIN_EMAILS.")
         st.caption("This area is restricted to approved ArchLens administrators.")
         return
 
@@ -2876,13 +2900,13 @@ def render_admin_area():
                         "action": action,
                         "credits": int(credit_amount or 0),
                         "reason": reason.strip(),
-                        "admin_email": current_user_name,
+                        "admin_email": current_user_email or current_user_name,
                     },
                 )
                 if result:
                     st.success(f"Credits updated for {normalise_user_email(target_email)}. New balance: {result.get('new_credits')}.")
-                    if normalise_user_email(target_email) == normalise_user_email(current_user_name):
-                        sync_credit_balance_from_api(current_user_name)
+                    if normalise_user_email(target_email) == normalise_user_email(current_user_email or current_user_name):
+                        sync_credit_balance_from_api(current_user_email or current_user_name)
                     st.rerun()
                 else:
                     st.error(error or "Credit adjustment failed.")

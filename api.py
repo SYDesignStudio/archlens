@@ -92,9 +92,18 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def configured_admin_emails() -> set:
+def configured_admin_emails() -> List[str]:
     raw = os.getenv("ADMIN_EMAILS", "")
-    return {normalise_email(item) for item in raw.split(",") if normalise_email(item)}
+    return [
+        email.strip().lower()
+        for email in raw.split(",")
+        if email.strip()
+    ]
+
+
+@app.on_event("startup")
+def log_admin_config() -> None:
+    print(f"ArchLens Admin: {len(configured_admin_emails())} admin email(s) loaded from ADMIN_EMAILS.")
 
 
 def default_store() -> Dict:
@@ -183,10 +192,19 @@ def update_user_meta(store: Dict, email: str, plan: str = "", status: str = "") 
 
 def verify_admin_access(x_archlens_secret: str, x_archlens_admin_email: str) -> str:
     verify_secret(x_archlens_secret)
-    clean_admin = normalise_email(x_archlens_admin_email)
+    clean_admin = str(x_archlens_admin_email or "").strip().lower()
     admins = configured_admin_emails()
-    if not admins or clean_admin not in admins:
-        raise HTTPException(status_code=403, detail="Admin access denied")
+    is_allowed = bool(clean_admin and clean_admin in admins)
+    print(
+        "ArchLens Admin validation:",
+        {
+            "authenticated_email": clean_admin,
+            "admin_emails": admins,
+            "is_admin": is_allowed,
+        },
+    )
+    if not is_allowed:
+        raise HTTPException(status_code=403, detail="Authenticated user email is not listed in ADMIN_EMAILS")
     return clean_admin
 
 
