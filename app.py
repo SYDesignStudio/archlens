@@ -110,7 +110,11 @@ def get_current_url_token() -> str:
         token_value = ""
     if isinstance(token_value, list):
         token_value = token_value[0] if token_value else ""
-    return str(token_value or "").strip()
+    token_value = str(token_value or "").strip()
+    if token_value:
+        st.session_state["auth_token"] = token_value
+        return token_value
+    return str(st.session_state.get("auth_token", "") or "").strip()
 
 
 def get_token_diagnostics() -> Dict[str, str]:
@@ -244,10 +248,12 @@ def admin_api_headers(admin_email: str) -> Dict[str, str]:
             "is_admin": bool(current_email and current_email in ADMIN_EMAILS),
         },
     )
+    print("ArchLens Admin token header present:", bool(token_value))
     return {
         "x-archlens-secret": ARCHLENS_WEBHOOK_SECRET,
         "x-archlens-admin-email": current_email,
         "Authorization": f"Bearer {token_value}",
+        "x-archlens-token": token_value,
     }
 
 
@@ -894,6 +900,7 @@ def get_verified_plan_and_user() -> Tuple[str, str, bool]:
     token_value = str(token_value).strip()
     if not token_value:
         return "starter", "", False
+    st.session_state["auth_token"] = token_value
 
     try:
         payload = jwt.decode(
