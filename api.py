@@ -217,13 +217,24 @@ def update_user_meta(store: Dict, email: str, plan: str = "", status: str = "") 
     store.setdefault("user_meta", {})[clean_email] = meta
 
 
-def email_from_admin_token(authorization: str = "", x_archlens_token: str = "") -> str:
+def email_from_admin_token(authorization: str = "", x_archlens_token: str = "", query_token: str = "") -> str:
     header_token = str(x_archlens_token or "").strip()
+    query_token_value = str(query_token or "").strip()
     auth_value = str(authorization or "").strip()
     token_value = header_token
     if not token_value and auth_value.lower().startswith("bearer "):
         token_value = auth_value.split(" ", 1)[1].strip()
-    print("ArchLens Admin token received:", bool(token_value))
+    if not token_value:
+        token_value = query_token_value
+    print(
+        "ArchLens Admin diagnostics request:",
+        {
+            "authorization_header_present": bool(auth_value),
+            "x_archlens_token_present": bool(header_token),
+            "query_token_present": bool(query_token_value),
+            "token_received": bool(token_value),
+        },
+    )
     if not token_value:
         raise HTTPException(status_code=401, detail="Missing admin auth token")
     try:
@@ -238,9 +249,9 @@ def email_from_admin_token(authorization: str = "", x_archlens_token: str = "") 
     return clean_email
 
 
-def verify_admin_access(x_archlens_secret: str, authorization: str = "", x_archlens_token: str = "") -> str:
+def verify_admin_access(x_archlens_secret: str, authorization: str = "", x_archlens_token: str = "", token: str = "") -> str:
     verify_secret(x_archlens_secret)
-    clean_admin = email_from_admin_token(authorization, x_archlens_token)
+    clean_admin = email_from_admin_token(authorization, x_archlens_token, token)
     admins = configured_admin_emails()
     is_allowed = bool(clean_admin and clean_admin in admins)
     print(
@@ -256,8 +267,8 @@ def verify_admin_access(x_archlens_secret: str, authorization: str = "", x_archl
     return clean_admin
 
 
-def admin_session_payload(authorization: str = "", x_archlens_token: str = "") -> Dict:
-    clean_admin = email_from_admin_token(authorization, x_archlens_token)
+def admin_session_payload(authorization: str = "", x_archlens_token: str = "", token: str = "") -> Dict:
+    clean_admin = email_from_admin_token(authorization, x_archlens_token, token)
     admins = configured_admin_emails()
     is_allowed = bool(clean_admin and clean_admin in admins)
     return {
@@ -506,8 +517,9 @@ def admin_summary(
     x_archlens_secret: str = Header(default=""),
     authorization: str = Header(default=""),
     x_archlens_token: str = Header(default=""),
+    token: str = "",
 ):
-    verify_admin_access(x_archlens_secret, authorization, x_archlens_token)
+    verify_admin_access(x_archlens_secret, authorization, x_archlens_token, token)
     with STORE_LOCK:
         store = load_store()
         users = store.get("users", {})
@@ -536,9 +548,10 @@ def admin_session(
     x_archlens_secret: str = Header(default=""),
     authorization: str = Header(default=""),
     x_archlens_token: str = Header(default=""),
+    token: str = "",
 ):
     verify_secret(x_archlens_secret)
-    payload = admin_session_payload(authorization, x_archlens_token)
+    payload = admin_session_payload(authorization, x_archlens_token, token)
     print(
         "ArchLens Admin session:",
         {
@@ -557,8 +570,9 @@ def admin_users(
     x_archlens_secret: str = Header(default=""),
     authorization: str = Header(default=""),
     x_archlens_token: str = Header(default=""),
+    token: str = "",
 ):
-    verify_admin_access(x_archlens_secret, authorization, x_archlens_token)
+    verify_admin_access(x_archlens_secret, authorization, x_archlens_token, token)
     with STORE_LOCK:
         store = load_store()
         users = store.get("users", {})
@@ -589,8 +603,9 @@ def admin_reports(
     x_archlens_secret: str = Header(default=""),
     authorization: str = Header(default=""),
     x_archlens_token: str = Header(default=""),
+    token: str = "",
 ):
-    verify_admin_access(x_archlens_secret, authorization, x_archlens_token)
+    verify_admin_access(x_archlens_secret, authorization, x_archlens_token, token)
     with STORE_LOCK:
         store = load_store()
         reports = store.get("reports", [])[:500]
@@ -602,8 +617,9 @@ def admin_audit_log(
     x_archlens_secret: str = Header(default=""),
     authorization: str = Header(default=""),
     x_archlens_token: str = Header(default=""),
+    token: str = "",
 ):
-    verify_admin_access(x_archlens_secret, authorization, x_archlens_token)
+    verify_admin_access(x_archlens_secret, authorization, x_archlens_token, token)
     with STORE_LOCK:
         store = load_store()
         audit_log = store.get("audit_log", [])[:500]
@@ -616,8 +632,9 @@ def admin_adjust_credits(
     x_archlens_secret: str = Header(default=""),
     authorization: str = Header(default=""),
     x_archlens_token: str = Header(default=""),
+    token: str = "",
 ):
-    admin_email = verify_admin_access(x_archlens_secret, authorization, x_archlens_token)
+    admin_email = verify_admin_access(x_archlens_secret, authorization, x_archlens_token, token)
     clean_email = normalise_email(payload.email)
     action = str(payload.action or "").strip().lower()
     credits_value = int(payload.credits or 0)
@@ -691,8 +708,9 @@ def admin_set_user_status(
     x_archlens_secret: str = Header(default=""),
     authorization: str = Header(default=""),
     x_archlens_token: str = Header(default=""),
+    token: str = "",
 ):
-    admin_email = verify_admin_access(x_archlens_secret, authorization, x_archlens_token)
+    admin_email = verify_admin_access(x_archlens_secret, authorization, x_archlens_token, token)
     clean_email = normalise_email(payload.email)
     status = str(payload.status or "").strip().lower()
     reason = str(payload.reason or "").strip()
@@ -741,12 +759,13 @@ def admin_add_credits(
     x_archlens_secret: str = Header(default=""),
     authorization: str = Header(default=""),
     x_archlens_token: str = Header(default=""),
+    token: str = "",
 ):
     """
     Protected manual restore/top-up endpoint.
     Use this to restore credits already purchased if a Wix event failed before automation was fixed.
     """
-    admin_email = verify_admin_access(x_archlens_secret, authorization, x_archlens_token)
+    admin_email = verify_admin_access(x_archlens_secret, authorization, x_archlens_token, token)
 
     clean_email = normalise_email(payload.email)
     credits_to_add = int(payload.credits or 0)
@@ -807,6 +826,7 @@ def admin_restore_credits(
     x_archlens_secret: str = Header(default=""),
     authorization: str = Header(default=""),
     x_archlens_token: str = Header(default=""),
+    token: str = "",
 ):
     """
     Protected browser-friendly restore endpoint.
@@ -818,4 +838,5 @@ def admin_restore_credits(
         x_archlens_secret=x_archlens_secret,
         authorization=authorization,
         x_archlens_token=x_archlens_token,
+        token=token,
     )

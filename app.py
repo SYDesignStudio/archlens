@@ -274,10 +274,12 @@ def admin_session_check():
 
 
 def admin_api_get(path: str):
+    token_value = get_current_url_token()
     try:
         response = requests.get(
             f"{ARCHLENS_API_URL}{path}",
             headers=admin_api_headers(current_user_name),
+            params={"token": token_value} if token_value else None,
             timeout=12,
         )
         if response.status_code == 200:
@@ -297,11 +299,13 @@ def admin_api_get(path: str):
 
 
 def admin_api_post(path: str, payload: Dict):
+    token_value = get_current_url_token()
     try:
         response = requests.post(
             f"{ARCHLENS_API_URL}{path}",
             json=payload,
             headers=admin_api_headers(current_user_name),
+            params={"token": token_value} if token_value else None,
             timeout=12,
         )
         if response.status_code == 200:
