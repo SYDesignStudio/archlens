@@ -103,6 +103,36 @@ def find_email_in_payload(payload) -> str:
     return ""
 
 
+def get_current_url_token() -> str:
+    try:
+        token_value = st.query_params.get("token", "")
+    except Exception:
+        token_value = ""
+    if isinstance(token_value, list):
+        token_value = token_value[0] if token_value else ""
+    return str(token_value or "").strip()
+
+
+def get_token_diagnostics() -> Dict[str, str]:
+    token_value = get_current_url_token()
+    diagnostics = {"token_age": "Not available", "token_expiry": "Not available"}
+    if not token_value:
+        return diagnostics
+    try:
+        payload = jwt.decode(token_value, options={"verify_signature": False})
+        now = int(time.time())
+        issued_at = payload.get("iat")
+        expires_at = payload.get("exp")
+        if issued_at:
+            diagnostics["token_age"] = f"{max(0, now - int(issued_at))} seconds"
+        if expires_at:
+            remaining = int(expires_at) - now
+            diagnostics["token_expiry"] = f"{time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(int(expires_at)))} ({remaining} seconds remaining)"
+    except Exception as exc:
+        diagnostics["token_age"] = f"Could not read token timing: {exc}"
+    return diagnostics
+
+
 def api_get_credit_balance(email: str):
     clean_email = normalise_user_email(email)
     if not is_valid_email(clean_email):
@@ -193,7 +223,17 @@ def get_authenticated_user_email() -> str:
     return normalise_user_email(session_email or st.session_state.get("auth_user_name", ""))
 
 
+def refresh_authenticated_session_from_token() -> Tuple[str, str, bool]:
+    token_plan, token_user_name, has_valid_token = get_verified_plan_and_user()
+    if has_valid_token:
+        st.session_state["authenticated"] = True
+        st.session_state["auth_plan"] = token_plan
+        st.session_state["auth_user_name"] = token_user_name
+    return token_plan, token_user_name, has_valid_token
+
+
 def admin_api_headers(admin_email: str) -> Dict[str, str]:
+    refresh_authenticated_session_from_token()
     current_email = normalise_user_email(find_email_in_payload(admin_email) or admin_email or get_authenticated_user_email())
     print(
         "ArchLens Admin API headers:",
@@ -209,6 +249,22 @@ def admin_api_headers(admin_email: str) -> Dict[str, str]:
     }
 
 
+def clear_admin_error_state():
+    st.session_state["admin_api_error"] = ""
+    st.session_state["admin_access_denied"] = False
+
+
+def admin_session_check():
+    data, error = admin_api_get("/admin/session")
+    if data and data.get("is_admin"):
+        clear_admin_error_state()
+        st.session_state["admin_session"] = data
+        return data, ""
+    st.session_state["admin_api_error"] = error
+    st.session_state["admin_access_denied"] = True
+    return data, error
+
+
 def admin_api_get(path: str):
     try:
         response = requests.get(
@@ -217,14 +273,19 @@ def admin_api_get(path: str):
             timeout=12,
         )
         if response.status_code == 200:
+            st.session_state["admin_api_error"] = ""
             return response.json(), ""
         try:
             detail = response.json().get("detail", "")
         except Exception:
             detail = response.text
-        return None, detail or f"Admin API returned {response.status_code}"
+        message = detail or f"Admin API returned {response.status_code}"
+        st.session_state["admin_api_error"] = message
+        return None, message
     except Exception as exc:
-        return None, f"Admin API unavailable: {exc}"
+        message = f"Admin API unavailable: {exc}"
+        st.session_state["admin_api_error"] = message
+        return None, message
 
 
 def admin_api_post(path: str, payload: Dict):
@@ -236,14 +297,19 @@ def admin_api_post(path: str, payload: Dict):
             timeout=12,
         )
         if response.status_code == 200:
+            st.session_state["admin_api_error"] = ""
             return response.json(), ""
         try:
             detail = response.json().get("detail", "")
         except Exception:
             detail = response.text
-        return None, detail or f"Admin API returned {response.status_code}"
+        message = detail or f"Admin API returned {response.status_code}"
+        st.session_state["admin_api_error"] = message
+        return None, message
     except Exception as exc:
-        return None, f"Admin API unavailable: {exc}"
+        message = f"Admin API unavailable: {exc}"
+        st.session_state["admin_api_error"] = message
+        return None, message
 
 
 def api_record_user_activity(email: str, plan: str):
@@ -2589,19 +2655,19 @@ def render_left_navigation():
             "▤  Reports": "Reports",
             "⚙  Settings": "Settings",
         }
-        if is_admin_user(current_user_email or current_user_name):
-            nav_options["✦  Admin"] = "Admin"
-        current_page = st.session_state.get("app_page", "Projects")
         try:
             requested_page = str(st.query_params.get("page", "")).strip().lower()
         except Exception:
             requested_page = ""
+        if is_admin_user(current_user_email or current_user_name) or requested_page == "admin":
+            nav_options["✦  Admin"] = "Admin"
+        current_page = st.session_state.get("app_page", "Projects")
         if requested_page == "admin" and is_admin_user(current_user_email or current_user_name):
             current_page = "Admin"
             st.session_state["app_page"] = "Admin"
-        if current_page == "Admin" and not is_admin_user(current_user_email or current_user_name):
-            current_page = "Projects"
-            st.session_state["app_page"] = "Projects"
+        elif requested_page == "admin":
+            current_page = "Admin"
+            st.session_state["app_page"] = "Admin"
         current_label = next((label for label, value in nav_options.items() if value == current_page), "▣  Projects")
         selected_label = st.radio(
             "Navigation",
@@ -2790,9 +2856,33 @@ def filter_rows(rows: List[Dict], search: str) -> List[Dict]:
 
 
 def render_admin_area():
-    if not is_admin_user(current_user_email or current_user_name):
-        st.error("Authenticated user email is not listed in ADMIN_EMAILS.")
+    left, right = st.columns([1, 0.32])
+    with right:
+        if st.button("Refresh Admin Session", use_container_width=True):
+            for key in ("admin_api_error", "admin_access_denied", "admin_session"):
+                st.session_state.pop(key, None)
+            refresh_authenticated_session_from_token()
+            st.rerun()
+
+    session_payload, session_error = admin_session_check()
+    backend_is_admin = bool(session_payload and session_payload.get("is_admin"))
+    token_diagnostics = get_token_diagnostics()
+    frontend_email = get_authenticated_user_email()
+
+    if backend_is_admin:
+        clear_admin_error_state()
+    else:
+        st.error(session_error or "Authenticated user email is not listed in ADMIN_EMAILS.")
         st.caption("This area is restricted to approved ArchLens administrators.")
+
+    with st.expander("Admin diagnostics", expanded=True):
+        st.write(f"Frontend email: **{frontend_email or 'Not detected'}**")
+        st.write(f"Backend authenticated email: **{(session_payload or {}).get('authenticated_email', 'Not confirmed')}**")
+        st.write(f"is_admin result: **{backend_is_admin}**")
+        st.write(f"Token age: **{token_diagnostics.get('token_age', 'Not available')}**")
+        st.write(f"Token expiry: **{token_diagnostics.get('token_expiry', 'Not available')}**")
+
+    if not backend_is_admin:
         return
 
     st.markdown(
@@ -2813,6 +2903,8 @@ def render_admin_area():
     reports_payload, reports_error = admin_api_get("/admin/reports")
     audit_payload, audit_error = admin_api_get("/admin/audit-log")
     api_errors = [msg for msg in [summary_error, users_error, reports_error, audit_error] if msg]
+    if backend_is_admin:
+        api_errors = [msg for msg in api_errors if "not listed in ADMIN_EMAILS" not in msg]
     if api_errors:
         st.warning("Admin API data is partially unavailable. " + " ".join(api_errors[:2]))
 

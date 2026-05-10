@@ -208,6 +208,17 @@ def verify_admin_access(x_archlens_secret: str, x_archlens_admin_email: str) -> 
     return clean_admin
 
 
+def admin_session_payload(admin_email: str) -> Dict:
+    clean_admin = str(admin_email or "").strip().lower()
+    admins = configured_admin_emails()
+    is_allowed = bool(clean_admin and clean_admin in admins)
+    return {
+        "authenticated_email": clean_admin,
+        "is_admin": is_allowed,
+        "admin_email_count": len(admins),
+    }
+
+
 def verify_secret(x_archlens_secret: str) -> None:
     if x_archlens_secret != ARCHLENS_WEBHOOK_SECRET:
         raise HTTPException(status_code=401, detail="Invalid webhook secret")
@@ -468,6 +479,26 @@ def admin_summary(
         "recent_credit_changes": transactions[:20],
         "recent_errors": errors[:10],
     }
+
+
+@app.get("/admin/session")
+def admin_session(
+    x_archlens_secret: str = Header(default=""),
+    x_archlens_admin_email: str = Header(default=""),
+):
+    verify_secret(x_archlens_secret)
+    payload = admin_session_payload(x_archlens_admin_email)
+    print(
+        "ArchLens Admin session:",
+        {
+            "authenticated_email": payload["authenticated_email"],
+            "admin_email_count": payload["admin_email_count"],
+            "is_admin": payload["is_admin"],
+        },
+    )
+    if not payload["is_admin"]:
+        raise HTTPException(status_code=403, detail="Authenticated user email is not listed in ADMIN_EMAILS")
+    return payload
 
 
 @app.get("/admin/users")
