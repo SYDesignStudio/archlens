@@ -1677,37 +1677,101 @@ def infer_planning_statement_mode(report_text: str, sections: Optional[Dict[str,
 
 
 def build_planning_statement_structure(statement_mode: str) -> str:
-    return """Use these exact planning statement sections in this order:
-Site and Surroundings
-Proposal Description
-Planning History
-Relevant Planning Policy
-Design and Character
-Residential Amenity
-Highways and Parking
-Conclusion"""
+    return """Use this exact planning statement structure and order:
+PLANNING STATEMENT
+[Proposal Title]
+[Site Address]
+
+1. Introduction
+2. Site and Surroundings
+3. Proposed Development
+4. Design and Appearance
+5. Impact on Neighbouring Amenity
+6. Planning Considerations
+7. Conclusion"""
 
 
 PLANNING_STATEMENT_HEADINGS = [
-    "Site and Surroundings",
-    "Proposal Description",
-    "Planning History",
-    "Relevant Planning Policy",
-    "Design and Character",
-    "Residential Amenity",
-    "Highways and Parking",
-    "Conclusion",
+    "1. Introduction",
+    "2. Site and Surroundings",
+    "3. Proposed Development",
+    "4. Design and Appearance",
+    "5. Impact on Neighbouring Amenity",
+    "6. Planning Considerations",
+    "7. Conclusion",
 ]
 
 
 def normalise_planning_statement_text(statement_text: str) -> str:
     text = apply_target_report_language(statement_text or "")
-    text = re.sub(r"(?im)^\s*\d+[\.)]\s*", "", text)
-    text = re.sub(r"(?im)^Highways\s*/\s*Parking\s*$", "Highways and Parking", text)
-    text = re.sub(r"(?im)^Highways\s+and\s+Parking\s*$", "Highways and Parking", text)
-    text = re.sub(r"(?im)^Planning Assessment\s*$", "", text)
-    text = re.sub(r"(?im)^Permitted Development / Lawful Development Assessment\s*$", "", text)
-    text = re.sub(r"(?im)^Compliance with Prior Approval Requirements\s*$", "", text)
+    text = (
+        text.replace("\u25a0", "-")
+        .replace("\uf0b7", "-")
+        .replace("\u2022", "-")
+        .replace("\u00a0", " ")
+    )
+    text = re.sub(r"\ben\s*[-\s]*suite\b", "en-suite", text, flags=re.IGNORECASE)
+    text = re.sub(r"[ \t]+", " ", text)
+
+    heading_map = {
+        "introduction": "1. Introduction",
+        "site and surroundings": "2. Site and Surroundings",
+        "site context": "2. Site and Surroundings",
+        "proposal description": "3. Proposed Development",
+        "proposed development": "3. Proposed Development",
+        "design and character": "4. Design and Appearance",
+        "design and appearance": "4. Design and Appearance",
+        "residential amenity": "5. Impact on Neighbouring Amenity",
+        "impact on neighbouring amenity": "5. Impact on Neighbouring Amenity",
+        "neighbouring amenity": "5. Impact on Neighbouring Amenity",
+        "planning considerations": "6. Planning Considerations",
+        "relevant planning policy": "6. Planning Considerations",
+        "planning history": "6. Planning Considerations",
+        "highways and parking": "6. Planning Considerations",
+        "highways / parking": "6. Planning Considerations",
+        "planning assessment": "6. Planning Considerations",
+        "permitted development / lawful development assessment": "6. Planning Considerations",
+        "compliance with prior approval requirements": "6. Planning Considerations",
+        "conclusion": "7. Conclusion",
+    }
+    ordered_headings = PLANNING_STATEMENT_HEADINGS
+
+    title_lines: List[str] = []
+    section_lines: Dict[str, List[str]] = {heading: [] for heading in ordered_headings}
+    seen_headings = set()
+    current_heading: Optional[str] = None
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            if current_heading and section_lines[current_heading] and section_lines[current_heading][-1] != "":
+                section_lines[current_heading].append("")
+            continue
+        if re.match(r"(?i)^planning statement$", line):
+            continue
+        if re.match(r"(?i)^\[(proposal title|site address)\]$", line):
+            continue
+        candidate = re.sub(r"^\s*\d+[\.)]\s*", "", line).strip()
+        candidate_key = re.sub(r"\s+", " ", candidate).lower()
+        replacement = heading_map.get(candidate_key)
+        if replacement:
+            current_heading = replacement
+            seen_headings.add(replacement)
+            continue
+        if current_heading:
+            section_lines[current_heading].append(line)
+        else:
+            title_lines.append(line)
+
+    output_lines: List[str] = ["PLANNING STATEMENT"]
+    output_lines.extend(title_lines[:2])
+    for heading in ordered_headings:
+        content = section_lines.get(heading, [])
+        if output_lines and output_lines[-1] != "":
+            output_lines.append("")
+        output_lines.append(heading)
+        output_lines.extend(content)
+
+    text = "\n".join(output_lines)
     text = re.sub(r"\n{3,}", "\n\n", text).strip()
     return text
 
@@ -1730,9 +1794,9 @@ def generate_planning_statement(
     readiness_context = sections.get("SUBMISSION READINESS", "")
 
     audience_hint = (
-        "Write a concise professional planning statement suitable for a UK submission prepared by an architectural practice."
+        "Write a professional planning statement suitable for a UK householder planning submission prepared by an architectural practice."
         if review_mode == "Architect / Professional"
-        else "Write a plain-English homeowner-friendly planning statement draft while keeping the structure professional."
+        else "Write a plain-English planning statement suitable for a homeowner while keeping the document submission-ready."
     )
 
     prompt = f"""
@@ -1748,9 +1812,10 @@ Local Authority: {local_authority or 'Not provided'}
 Detected statement mode: {statement_mode}
 
 Use the report findings below to draft a practical planning statement.
+The master style is a short UK architectural practice planning statement: clear title block, numbered headings, simple professional paragraphs and no checklist tone.
 Keep it factual, clean, concise and application-ready.
 Do not invent measurements or policy references that are not supported by the report.
-Write like an approved planning statement prepared by a UK architectural practice.
+Write like a real planning statement prepared by a UK architectural practice for submission with a planning application.
 
 Critical route rules:
 - Always follow the detected statement mode.
@@ -1760,15 +1825,28 @@ Critical route rules:
 - If the report refers to side gable, rear dormer and front rooflights, describe that exact combination.
 - Always align the proposal description with the detected report content rather than generic wording.
 - Do not add extra section headings outside the required Planning Statement structure.
-- Where route-specific reasoning is needed, include it naturally under Relevant Planning Policy, Design and Character, Residential Amenity or Conclusion.
+- Where route-specific reasoning is needed, include it naturally under Planning Considerations, Design and Appearance, Impact on Neighbouring Amenity or Conclusion.
+- Do not use report-card wording, risk-rating wording, checklist labels, confidence scores or backend/system language.
 
 Design reasoning rules:
 - If a rear extension is located to the rear of the property and is not visible from the public highway, explain clearly that it would not be visible from the public highway and would therefore not impact the character or appearance of the street scene.
 - Use concise planning officer style reasoning where relevant.
 - Do not mention fire statements unless they are genuinely relevant to the scheme.
 - Keep the statement clean and submission-ready.
+- Use short paragraphs as the main format. Use bullets only where they are genuinely needed.
+- The first section should begin naturally, for example: "This Planning Statement has been prepared in support of..."
+- Adapt the proposal title and wording to the actual project type and report content. Do not hard-code a rear extension or any example wording.
 
 {structure_text}
+
+Section guidance:
+1. Introduction - state the application type, proposal, site address and purpose of the statement.
+2. Site and Surroundings - describe the dwelling, residential context, street scene and relevant surrounding pattern only where supported.
+3. Proposed Development - describe the actual proposed works, internal layout improvements and drawing information where available.
+4. Design and Appearance - explain scale, form, materials, subordination and relationship to the host dwelling.
+5. Impact on Neighbouring Amenity - cover privacy, outlook, daylight, overshadowing and overbearing impact in plain language.
+6. Planning Considerations - cover the likely planning route, local authority context, policy considerations and planning balance.
+7. Conclusion - give a concise professional conclusion on acceptability and submission readiness.
 
 Use these report sections:
 PROJECT CLASSIFICATION:
@@ -1794,32 +1872,42 @@ Full report text:
         response = _call_responses_api("gpt-5", prompt)
         return normalise_planning_statement_text(response.output_text)
     except Exception:
+        proposal_title = sections.get("PROJECT CLASSIFICATION", "").splitlines()[0].strip() or "Proposed Residential Development"
+        site_address = project_address or "Site address to be confirmed"
+        intro_application = "householder planning application"
+        if statement_mode == "prior_approval":
+            intro_application = "prior approval application"
+        elif statement_mode == "pd":
+            intro_application = "lawful development certificate application"
         fallback_parts = [
-            "Site and Surroundings",
+            "PLANNING STATEMENT",
+            proposal_title,
+            site_address,
+            "",
+            "1. Introduction",
+            f"This Planning Statement has been prepared in support of a {intro_application} for {site_address}.",
+            "The proposal seeks to improve the use and functionality of the existing property and should be read alongside the submitted drawings and supporting information.",
+            "",
+            "2. Site and Surroundings",
             sections.get("SITE AND PROPOSAL OVERVIEW", "The application site forms part of an established residential setting and should be assessed in that context."),
             "",
-            "Proposal Description",
+            "3. Proposed Development",
             sections.get("PROJECT CLASSIFICATION", "The proposal should be read alongside the submitted drawings and supporting information."),
             "",
-            "Planning History",
-            "Planning history, permitted development rights, Article 4 status and any relevant conditions should be confirmed before submission.",
+            "4. Design and Appearance",
+            "The proposed works should be assessed in the context of the host dwelling and surrounding built form, with regard to scale, appearance, materials and relationship to the established pattern of development.",
             "",
-            "Relevant Planning Policy",
+            "5. Impact on Neighbouring Amenity",
+            "The proposal should be considered with regard to outlook, enclosure, daylight, privacy and the relationship with adjoining occupiers.",
+            "",
+            "6. Planning Considerations",
             "\n\n".join([
                 sections.get("LOCAL AUTHORITY CONTEXT", "The proposal should be assessed against the relevant local and strategic planning policy framework."),
-                sections.get("PD / PRIOR APPROVAL / PLANNING ROUTE", "The likely statutory route should be confirmed before submission."),
+                sections.get("PD / PRIOR APPROVAL / PLANNING ROUTE", "The likely planning route should be confirmed before submission."),
+                "Planning history, permitted development rights, Article 4 status and any relevant conditions should be checked before submission where they are not already confirmed.",
             ]).strip(),
             "",
-            "Design and Character",
-            "The proposal should be assessed in the context of the host dwelling and surrounding built form, with regard to scale, visual impact, roof form and relationship to the established pattern of development.",
-            "",
-            "Residential Amenity",
-            "The proposal should be considered with regard to outlook, enclosure, daylight, privacy and relationship to adjoining occupiers.",
-            "",
-            "Highways and Parking",
-            "No highways or parking concerns are identified from the available report information, but any site-specific parking or access changes should be checked before submission.",
-            "",
-            "Conclusion",
+            "7. Conclusion",
             sections.get("SUBMISSION READINESS", "Further confirmation of route and supporting information may be required prior to submission."),
         ]
         return normalise_planning_statement_text("\n".join(fallback_parts))

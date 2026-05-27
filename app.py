@@ -2338,38 +2338,50 @@ def render_sections(sections: Dict[str, str], report_text: str, module_name: str
 
 
 def build_simple_word_doc(title: str, body_text: str) -> BytesIO:
+    cleaned = str(body_text or "").replace("\u25a0", "-").replace("\uf0b7", "-").replace("\u2022", "-").replace("â€¢", "-").replace("\u00a0", " ")
+    lines = [line.strip() for line in cleaned.splitlines()]
+    if lines and lines[0].lower() == title.strip().lower():
+        lines = lines[1:]
+
     doc = Document()
     section = doc.sections[0]
-    section.top_margin = Inches(0.65)
-    section.bottom_margin = Inches(0.65)
-    section.left_margin = Inches(0.75)
-    section.right_margin = Inches(0.75)
+    section.top_margin = Inches(0.72)
+    section.bottom_margin = Inches(0.72)
+    section.left_margin = Inches(0.82)
+    section.right_margin = Inches(0.82)
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     run = p.add_run(title)
     run.bold = True
     run.font.size = Pt(18)
     run.font.name = "Aptos Display"
-    meta = doc.add_paragraph("Prepared by SY Design Studio")
-    meta.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    meta.runs[0].font.size = Pt(9)
-    doc.add_paragraph("")
-    for line in body_text.splitlines():
+    seen_numbered_heading = False
+    for line in lines:
         stripped = line.strip()
         if not stripped:
-            doc.add_paragraph("")
+            if seen_numbered_heading:
+                doc.add_paragraph("")
         elif re.match(r"^\d+\.?\s+\S", stripped):
+            seen_numbered_heading = True
             heading = doc.add_paragraph()
             run = heading.add_run(stripped)
             run.bold = True
             run.font.size = Pt(12)
-            heading.paragraph_format.space_before = Pt(8)
-            heading.paragraph_format.space_after = Pt(3)
+            heading.paragraph_format.space_before = Pt(10)
+            heading.paragraph_format.space_after = Pt(4)
+        elif not seen_numbered_heading:
+            subtitle = doc.add_paragraph()
+            subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            run = subtitle.add_run(stripped)
+            run.font.size = Pt(10)
+            subtitle.paragraph_format.space_after = Pt(2)
         elif stripped.startswith("- "):
-            doc.add_paragraph(stripped[2:], style="List Bullet")
+            bullet = doc.add_paragraph(stripped[2:], style="List Bullet")
+            bullet.paragraph_format.space_after = Pt(3)
         else:
             para = doc.add_paragraph(stripped)
-            para.paragraph_format.space_after = Pt(4)
+            para.paragraph_format.line_spacing = 1.08
+            para.paragraph_format.space_after = Pt(6)
     buffer = BytesIO()
     doc.save(buffer)
     buffer.seek(0)
@@ -2385,13 +2397,18 @@ def build_simple_pdf_doc(title: str, body_text: str, report_id: str = "") -> Byt
     buffer = BytesIO()
     c = canvas.Canvas(buffer, pagesize=A4)
     width, height = A4
-    left = 48
-    right = 48
-    y = height - 58
+    left = 54
+    right = 54
+    y = height - 62
     usable_width = width - left - right
-    gold = colors.HexColor(SY_BRAND["gold"])
     charcoal = colors.HexColor(SY_BRAND["charcoal"])
     mid_grey = colors.HexColor(SY_BRAND["mid_grey"])
+    body_lines = [
+        line.strip()
+        for line in str(body_text or "").replace("\u25a0", "-").replace("\uf0b7", "-").replace("\u2022", "-").replace("â€¢", "-").replace("\u00a0", " ").splitlines()
+    ]
+    if body_lines and body_lines[0].lower() == title.strip().lower():
+        body_lines = body_lines[1:]
 
     def wrap_line(text: str, font: str, size: float, max_width: float) -> List[str]:
         words = str(text or "").split()
@@ -2415,44 +2432,49 @@ def build_simple_pdf_doc(title: str, body_text: str, report_id: str = "") -> Byt
         c.setFillColor(mid_grey)
         c.drawCentredString(width / 2, 28, f"Prepared by SY Design Studio | Ref: {report_id or 'Planning Statement'}")
         c.showPage()
-        y = height - 58
+        y = height - 62
 
-    c.setFillColor(gold)
+    c.setFillColor(charcoal)
     c.setFont("Helvetica-Bold", 16)
-    c.drawString(left, y, title)
-    y -= 18
-    c.setFillColor(mid_grey)
-    c.setFont("Helvetica", 9)
-    c.drawString(left, y, "Prepared by SY Design Studio")
-    y -= 28
+    c.drawCentredString(width / 2, y, title)
+    y -= 24
 
-    for raw_line in body_text.splitlines():
+    seen_numbered_heading = False
+    for raw_line in body_lines:
         line = raw_line.strip()
         if y < 70:
             new_page()
         if not line:
-            y -= 9
+            if seen_numbered_heading:
+                y -= 8
             continue
-        is_heading = bool(re.match(r"^\d+\.?\s+|^[A-Z][A-Za-z /&-]{4,}$", line)) and len(line) < 90
+        is_heading = bool(re.match(r"^\d+\.?\s+\S", line)) and len(line) < 90
         if is_heading:
-            y -= 8
-            c.setFillColor(gold)
+            seen_numbered_heading = True
+            y -= 7
+            c.setFillColor(charcoal)
             c.setFont("Helvetica-Bold", 11)
             for wrapped in wrap_line(line, "Helvetica-Bold", 11, usable_width):
                 c.drawString(left, y, wrapped)
+                y -= 15
+        elif not seen_numbered_heading:
+            c.setFillColor(charcoal)
+            c.setFont("Helvetica", 10)
+            for wrapped in wrap_line(line, "Helvetica", 10, usable_width):
+                c.drawCentredString(width / 2, y, wrapped)
                 y -= 14
         else:
             c.setFillColor(charcoal)
-            c.setFont("Helvetica", 9.2)
+            c.setFont("Helvetica", 9.6)
             bullet = line.startswith(("- ", "• "))
             clean = line[2:].strip() if bullet else line
             x = left + 10 if bullet else left
             if bullet:
                 c.drawString(left, y, "•")
-            for wrapped in wrap_line(clean, "Helvetica", 9.2, usable_width - (10 if bullet else 0)):
+            for wrapped in wrap_line(clean, "Helvetica", 9.6, usable_width - (10 if bullet else 0)):
                 c.drawString(x, y, wrapped)
-                y -= 12
-        y -= 2
+                y -= 13
+        y -= 3
 
     c.setFont("Helvetica", 8)
     c.setFillColor(mid_grey)
@@ -3364,7 +3386,7 @@ def update_saved_project(report_id: str, updates: Dict):
 def get_planning_statement_teaser(sections: Dict[str, str]) -> str:
     overview = clean_summary_card_text(
         sections.get("SITE AND PROPOSAL OVERVIEW", ""),
-        "The Planning Statement will set out the site context, proposal, planning policy position, design approach, amenity considerations and conclusion in a consultant-style format.",
+        "This Planning Statement has been prepared in support of the current planning application and will explain the site, proposal, design approach, amenity impact, planning considerations and conclusion.",
     )
     first_sentence = re.split(r"(?<=[.!?])\s+", overview.replace("\n", " ").strip())[0]
     return first_sentence[:360].strip()
@@ -3427,8 +3449,8 @@ def ensure_unlocked_planning_statement_generated(report_id: str):
         )
         statement_text = pdf_summary.normalise_planning_statement_text(statement_text)
         st.session_state["planning_statement_text"] = statement_text
-        st.session_state["planning_statement_pdf_file"] = build_simple_pdf_doc("Planning Statement", statement_text, report_id)
-        st.session_state["planning_statement_word_file"] = build_simple_word_doc("Planning Statement", statement_text)
+        st.session_state["planning_statement_pdf_file"] = build_simple_pdf_doc("PLANNING STATEMENT", statement_text, report_id)
+        st.session_state["planning_statement_word_file"] = build_simple_word_doc("PLANNING STATEMENT", statement_text)
         update_saved_project(report_id, {
             "planning_statement_text": statement_text,
             "planning_statement_pdf_bytes": st.session_state["planning_statement_pdf_file"].getvalue(),
@@ -3449,18 +3471,17 @@ def render_planning_statement_panel(report_id: str):
             f"""
             <div class="sy-subtle-card">
                 <div class="sy-section-label">Locked Preview</div>
-                <h3 style="margin:0 0 0.45rem 0;">Planning Statement</h3>
-                <p style="margin:0 0 0.65rem 0;">This Planning Statement will be prepared in a consultant-style format for the current Planning Review.</p>
+                <h3 style="margin:0 0 0.45rem 0;">PLANNING STATEMENT</h3>
+                <p style="margin:0 0 0.65rem 0;">This Planning Statement will be prepared in the format expected for a planning submission.</p>
                 <p style="margin:0 0 0.85rem 0;"><strong>Sample:</strong> {html.escape(teaser)}</p>
                 <div style="filter:blur(5px);opacity:0.42;user-select:none;border-top:1px solid rgba(212,194,154,0.18);padding-top:0.75rem;">
-                    Site and Surroundings<br>
-                    Proposal Description<br>
-                    Planning History<br>
-                    Relevant Planning Policy<br>
-                    Design and Character<br>
-                    Residential Amenity<br>
-                    Highways and Parking<br>
-                    Conclusion
+                    1. Introduction<br>
+                    2. Site and Surroundings<br>
+                    3. Proposed Development<br>
+                    4. Design and Appearance<br>
+                    5. Impact on Neighbouring Amenity<br>
+                    6. Planning Considerations<br>
+                    7. Conclusion
                 </div>
             </div>
             """,
