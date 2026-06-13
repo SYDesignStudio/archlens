@@ -40,7 +40,7 @@ for key, value in DEFAULT_STATE.items():
         st.session_state[key] = value
 
 MAX_FILE_SIZE_MB = 20
-MAX_PAGE_COUNT = 30
+MAX_PAGE_COUNT = 40
 STARTER_MONTHLY_REVIEW_LIMIT = 10
 
 BUILDING_REQUIRED_HEADINGS = [
