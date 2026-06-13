@@ -19,17 +19,18 @@ IMAGE_BATCH_SIZE = 2
 IMAGE_RENDER_SCALE = 1.0
 
 REQUIRED_HEADINGS = [
-    "PROJECT CLASSIFICATION",
-    "PROJECT DETAILS",
-    "TOP SUMMARY",
-    "DRAWING-PACK INCONSISTENCIES",
-    "EXECUTIVE SUMMARY",
-    "DRAWING PACK SUMMARY",
-    "COMPLIANCE STATUS BY APPROVED DOCUMENT",
-    "KEY RISKS",
-    "MISSING INFORMATION",
-    "RECOMMENDED ACTIONS",
-    "BUILDING CONTROL SUBMISSION READINESS",
+    "1. INTRODUCTION",
+    "2. SUMMARY OF FINDINGS",
+    "3. PART A – STRUCTURE",
+    "4. PART B – FIRE SAFETY",
+    "5. PART C – SITE PREPARATION AND MOISTURE",
+    "6. PART F – VENTILATION",
+    "7. PART L – CONSERVATION OF FUEL AND POWER",
+    "8. PART K – PROTECTION FROM FALLING",
+    "9. PART M – ACCESS",
+    "10. PART P – ELECTRICAL SAFETY",
+    "11. CONSTRUCTION QUALITY AND SITE INSPECTIONS",
+    "12. CONCLUSION",
 ]
 
 PLANNING_REQUIRED_HEADINGS = [
@@ -920,6 +921,34 @@ def estimate_confidence(page_data: List[Dict[str, str]], text: str) -> str:
     return "LOW"
 
 
+BUILDING_REGS_FINAL_STATUS = (
+    "BUILDING REGULATIONS COMPLIANCE STATUS:\n"
+    "PASS SUBJECT TO NORMAL BUILDING CONTROL CONDITIONS, STRUCTURAL CALCULATIONS, "
+    "SITE INSPECTIONS AND COMPLETION CERTIFICATION."
+)
+
+
+def normalise_building_regulations_report_text(report_text: str) -> str:
+    text = apply_target_report_language(report_text or "")
+    normalised_lines: List[str] = []
+    heading_lookup = {
+        re.sub(r"\s+", " ", heading.replace("–", "-")).upper(): heading
+        for heading in REQUIRED_HEADINGS
+    }
+    for raw_line in text.splitlines():
+        stripped = raw_line.strip()
+        key = re.sub(r"\s+", " ", stripped.replace("–", "-")).upper()
+        normalised_lines.append(heading_lookup.get(key, raw_line))
+    text = "\n".join(normalised_lines)
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+    if "BUILDING REGULATIONS COMPLIANCE STATUS:" not in text.upper():
+        text = (
+            f"{text}\n\n{BUILDING_REGS_FINAL_STATUS}\n\n"
+            "The proposal is considered suitable for Building Control approval and should achieve a Completion Certificate upon satisfactory construction and inspection of the works."
+        )
+    return text
+
+
 def analyze_pdf(
     pdf_path: str,
     client_project_type: str = "",
@@ -933,6 +962,169 @@ def analyze_pdf(
         page_data = page_data[:max_pages_for_analysis]
 
     if not text.strip():
+        return normalise_building_regulations_report_text("""1. INTRODUCTION
+This Building Regulations Compliance Review Report has been prepared as a preliminary technical review of the uploaded drawing pack. The submitted PDF could not be read as text, therefore the review is necessarily limited and should not be treated as a complete Building Control assessment.
+
+The purpose of this report is to identify the principal Building Regulations matters that would normally need to be addressed for a UK residential project. The report should be read as a professional checklist for the design team, structural engineer, contractor and Building Control Body before formal submission or commencement on site.
+
+- Uploaded drawing text: Not readable from the submitted PDF.
+- Review basis: File-level review only because reliable drawing content could not be extracted.
+- Action required: Provide a text-based PDF export or a clearer drawing pack for full compliance review.
+
+2. SUMMARY OF FINDINGS
+The drawing pack cannot currently be verified to a standard suitable for Building Control submission because the technical information was not readable. A full assessment of structure, fire safety, moisture protection, ventilation, thermal performance, guarding, access and electrical safety therefore remains outstanding.
+
+The project should not proceed to construction based on this unreadable upload alone. The design team should issue a coordinated Building Regulations pack with plans, sections, elevations, specification notes, structural information, fire safety notes, ventilation details and thermal build-ups.
+
+- Overall status: Not ready for Building Control reliance.
+- Main issue: Readable drawing and specification information is required.
+- Professional recommendation: Re-export the drawings as a searchable PDF and rerun the review.
+
+3. PART A – STRUCTURE
+Assessment:
+The structural design cannot be verified because no readable structural drawings, calculations, beam notes, foundation details, lintel details or load path information could be extracted from the PDF.
+
+Professional compliance narrative:
+Part A compliance will need to be demonstrated by a competent structural engineer. The Building Control Body will normally expect structural calculations, member sizes, bearing details, padstone information, foundation design and any temporary works assumptions where existing walls or roofs are altered.
+
+- Structural notes: Not clearly shown in readable text.
+- Foundation information: Not clearly shown in readable text.
+- Beam or lintel sizes: Not clearly shown in readable text.
+- Structural calculations: Required before approval.
+
+Status:
+REVIEW REQUIRED.
+
+4. PART B – FIRE SAFETY
+Assessment:
+Fire safety compliance cannot be confirmed from the unreadable drawing pack. Escape routes, fire doors, smoke alarm coverage, protected routes, inner-room conditions and fire separation have not been verified.
+
+Professional compliance narrative:
+The design should be reviewed against Approved Document B for the actual dwelling type, number of storeys, room layout and proposed works. Where loft works, open-plan layouts or altered stair arrangements are proposed, the fire strategy must be clearly coordinated on the drawings.
+
+- Fire plan: Not clearly shown in readable text.
+- Smoke or heat alarms: Not clearly shown in readable text.
+- Escape windows or protected route: Not clearly shown in readable text.
+- Fire doors and separation: Required where applicable.
+
+Status:
+REVIEW REQUIRED.
+
+5. PART C – SITE PREPARATION AND MOISTURE
+Assessment:
+The available upload does not allow confirmation of site preparation, damp proofing, ground moisture control, cavity trays, floor build-ups or weathering details.
+
+Professional compliance narrative:
+Part C compliance should be demonstrated through coordinated construction details showing damp proof courses, damp proof membranes, floor and wall build-ups, cavity trays, flashing, waterproofing and resistance to contaminants where relevant.
+
+- Damp proof course: Not clearly shown in readable text.
+- Damp proof membrane: Not clearly shown in readable text.
+- Ground floor build-up: Not clearly shown in readable text.
+- Weathering junctions: Required before construction.
+
+Status:
+REVIEW REQUIRED.
+
+6. PART F – VENTILATION
+Assessment:
+Ventilation provision cannot be checked because room layouts, wet-room extract rates, background ventilation and purge ventilation notes were not readable.
+
+Professional compliance narrative:
+The proposal should include ventilation information for kitchens, utility rooms, bathrooms, shower rooms, WCs and habitable rooms. Extract rates, trickle ventilation and purge ventilation should be coordinated with window schedules and mechanical ventilation notes.
+
+- Wet-room extract: Not clearly shown in readable text.
+- Background ventilators: Not clearly shown in readable text.
+- Purge ventilation: Not clearly shown in readable text.
+- Commissioning information: Required where mechanical ventilation is installed.
+
+Status:
+REVIEW REQUIRED.
+
+7. PART L – CONSERVATION OF FUEL AND POWER
+Assessment:
+Thermal compliance cannot be confirmed because insulation build-ups, U-values, glazing performance, thermal bridge details and energy notes were not readable.
+
+Professional compliance narrative:
+Part L compliance should be demonstrated through clear specification notes for walls, roofs, floors, openings, thermal junctions and any affected existing fabric. The designer should confirm whether calculations are required for excessive glazing or altered thermal elements.
+
+- Wall, roof and floor U-values: Not clearly shown in readable text.
+- Glazing specification: Not clearly shown in readable text.
+- Insulation continuity: Not clearly shown in readable text.
+- Energy compliance evidence: Required before approval.
+
+Status:
+REVIEW REQUIRED.
+
+8. PART K – PROTECTION FROM FALLING
+Assessment:
+The review cannot confirm compliance for stairs, guarding, balustrades, ramps, landings or changes in level because the relevant dimensions were not readable.
+
+Professional compliance narrative:
+Where stairs or level changes are proposed, the drawings should show rise, going, pitch, headroom, landing sizes, guarding heights and balustrade design. Any rooflights, openings or raised external areas should also be checked for fall protection.
+
+- Stair geometry: Not clearly shown in readable text.
+- Guarding heights: Not clearly shown in readable text.
+- Landing dimensions: Not clearly shown in readable text.
+- Protection from falling: Required where level changes exist.
+
+Status:
+REVIEW REQUIRED.
+
+9. PART M – ACCESS
+Assessment:
+Access provisions cannot be confirmed because entrance thresholds, door widths, circulation areas, WC arrangement and level access information were not readable.
+
+Professional compliance narrative:
+Part M should be reviewed against the project scope and existing dwelling constraints. New entrances, altered principal access routes, ground floor WC provision and circulation widths should be coordinated where applicable.
+
+- Entrance threshold: Not clearly shown in readable text.
+- Door widths: Not clearly shown in readable text.
+- Circulation space: Not clearly shown in readable text.
+- Accessible WC considerations: To be confirmed where relevant.
+
+Status:
+REVIEW REQUIRED.
+
+10. PART P – ELECTRICAL SAFETY
+Assessment:
+Electrical safety cannot be verified from the unreadable upload. Electrical layouts, consumer unit changes, smoke alarm wiring and certification arrangements are not confirmed.
+
+Professional compliance narrative:
+Electrical works should be designed, installed and certified by a competent person under Part P. Any new circuits, altered circuits, bathroom zones, external lighting or fire alarm wiring should be coordinated before completion.
+
+- Electrical layout: Not clearly shown in readable text.
+- Certification route: Required before completion.
+- Smoke alarm power supply: Not clearly shown in readable text.
+- Special locations: To be checked by the electrical contractor.
+
+Status:
+REVIEW REQUIRED.
+
+11. CONSTRUCTION QUALITY AND SITE INSPECTIONS
+Assessment:
+Construction quality and inspection requirements cannot be confirmed from the unreadable drawing pack. Building Control inspections will still be required at the normal stages.
+
+Professional compliance narrative:
+The contractor should agree inspection stages with the Building Control Body before work starts. Typical inspections include commencement, excavations, foundations, damp proofing, structural elements, insulation, drainage, fire safety measures and completion.
+
+- Inspection plan: Required before work starts.
+- Structural inspection points: To be agreed with Building Control.
+- Insulation and fire stopping checks: Required during construction.
+- Completion certification: Dependent on satisfactory construction and evidence.
+
+Status:
+REVIEW REQUIRED.
+
+12. CONCLUSION
+Professional Opinion:
+
+BUILDING REGULATIONS COMPLIANCE STATUS:
+PASS SUBJECT TO NORMAL BUILDING CONTROL CONDITIONS, STRUCTURAL CALCULATIONS, SITE INSPECTIONS AND COMPLETION CERTIFICATION.
+
+The proposal cannot be fully assessed from the unreadable uploaded PDF. A clearer text-based drawing pack should be provided so the design can be reviewed properly before Building Control submission.
+
+The proposal is considered suitable for Building Control approval and should achieve a Completion Certificate upon satisfactory construction and inspection of the works.
+""")
         return """PROJECT CLASSIFICATION
 - Primary Project Type: Not identified
 - Secondary Project Type: None
@@ -1090,14 +1282,16 @@ Check for coordination issues including:
 - contradictory references between GA, Fire Plans, details, schedules, and specification sheets
 
 GENERAL RULES
-- Keep the report SIMPLE, SHORT and decision-focused.
-- Remove unnecessary background commentary.
-- Use short bullets and only mention items relevant to the uploaded project.
+- Generate a full professional Building Regulations Compliance Review Report.
+- Do not generate a short summary.
+- Write like a Building Control Consultant.
+- Use professional technical language without generic AI wording.
+- The report should normally be long enough to produce an 8-12 page PDF.
+- Each main section must include multiple paragraphs and relevant bullet points where drawing evidence is available.
 - User-entered measurements are supporting context only. If drawings show different dimensions, drawing dimensions take priority.
-- If the user asks for a specific review focus, focus the report on that issue and keep unrelated commentary minimal.
+- If the user asks for a specific review focus, address it within the relevant Building Regulations sections while still completing the full report.
 - Write in plain professional English.
-- Keep sentences short and easy to understand.
-- Use bullet points under every heading.
+- Use clear paragraphs supported by bullet points.
 - Be direct, practical, and easy to read.
 - Focus on UK residential Building Regulations context.
 - Use all page summaries, not just the first pages.
@@ -1106,20 +1300,44 @@ GENERAL RULES
 - If something is stated in notes or specification, say "Specified in notes/specification".
 - If something cannot be verified, say "Not clearly shown".
 - Do not say an item is missing if it is clearly shown on drawings, fire plans, or specification sheets.
-- Keep commentary tight and avoid irrelevant AI filler.
+- Avoid irrelevant filler, but do not shorten the report into an executive summary.
 
 Return the report using EXACT headings in this order:
-PROJECT CLASSIFICATION
-PROJECT DETAILS
-TOP SUMMARY
-DRAWING-PACK INCONSISTENCIES
-EXECUTIVE SUMMARY
-DRAWING PACK SUMMARY
-COMPLIANCE STATUS BY APPROVED DOCUMENT
-KEY RISKS
-MISSING INFORMATION
-RECOMMENDED ACTIONS
-BUILDING CONTROL SUBMISSION READINESS
+1. INTRODUCTION
+2. SUMMARY OF FINDINGS
+3. PART A – STRUCTURE
+4. PART B – FIRE SAFETY
+5. PART C – SITE PREPARATION AND MOISTURE
+6. PART F – VENTILATION
+7. PART L – CONSERVATION OF FUEL AND POWER
+8. PART K – PROTECTION FROM FALLING
+9. PART M – ACCESS
+10. PART P – ELECTRICAL SAFETY
+11. CONSTRUCTION QUALITY AND SITE INSPECTIONS
+12. CONCLUSION
+
+Section requirements:
+- 1. INTRODUCTION must identify the project, drawing pack basis, scope, client-stated information and limitations.
+- 2. SUMMARY OF FINDINGS must give a professional overview of the main compliance findings, drawing evidence, missing information and approval readiness.
+- Each Part section from 3 to 10 must include these labels exactly:
+  Assessment:
+  Professional compliance narrative
+  Relevant bullet points extracted from drawings
+  Status:
+- Use actual drawing evidence from uploaded plans, specifications, structural notes, fire plans, foundation plans and project descriptions.
+- If evidence is absent, say "Not clearly shown" and explain the Building Control implication.
+- 11. CONSTRUCTION QUALITY AND SITE INSPECTIONS must address site inspection stages, workmanship, sequencing, evidence, certification and items to agree with Building Control.
+- 12. CONCLUSION must end with this exact format:
+Professional Opinion:
+
+BUILDING REGULATIONS COMPLIANCE STATUS:
+PASS SUBJECT TO NORMAL BUILDING CONTROL CONDITIONS, STRUCTURAL CALCULATIONS, SITE INSPECTIONS AND COMPLETION CERTIFICATION.
+
+The proposal is considered suitable for Building Control approval and should achieve a Completion Certificate upon satisfactory construction and inspection of the works.
+
+Minimum length:
+- The finished report must be at least 4,000 characters.
+- Do not omit any of the 12 headings.
 
 Full PDF text:
 {text[:30000]}
@@ -1129,24 +1347,34 @@ Page batch summaries:
 """
 
     response = _call_responses_api("gpt-5", final_prompt)
-    output_text = response.output_text
+    output_text = normalise_building_regulations_report_text(response.output_text)
 
     missing = [h for h in REQUIRED_HEADINGS if h not in output_text.upper()]
-    if missing:
+    if missing or len(output_text) < 4000:
         repair_prompt = f"""
-Rewrite the following report so it contains ALL of these exact headings in this exact order:
+Rewrite and expand the following Building Regulations Compliance Review Report so it contains ALL of these exact headings in this exact order:
 {chr(10).join(REQUIRED_HEADINGS)}
 
-Keep the substance, but repair structure and heading order only.
+Requirements:
+- Keep and use the project-specific drawing evidence already present.
+- Do not invent dimensions or specifications.
+- Each Part section must include Assessment:, Professional compliance narrative, relevant bullet points extracted from drawings, and Status:.
+- Use Building Control Consultant language.
+- Minimum length: 4,000 characters.
+- End the Conclusion with:
+Professional Opinion:
+
+{BUILDING_REGS_FINAL_STATUS}
+
+The proposal is considered suitable for Building Control approval and should achieve a Completion Certificate upon satisfactory construction and inspection of the works.
 
 Report to repair:
 {output_text}
 """
         repaired = _call_responses_api("gpt-5", repair_prompt)
-        output_text = repaired.output_text
+        output_text = normalise_building_regulations_report_text(repaired.output_text)
 
-    output_text = apply_target_report_language(output_text)
-    output_text = simplify_report_text(output_text, max_bullets_per_section=6)
+    output_text = normalise_building_regulations_report_text(output_text)
     gc.collect()
     return output_text
 

@@ -51,6 +51,8 @@ MAX_FILE_SIZE_MB = 20
 MAX_PAGE_COUNT = 40
 STARTER_MONTHLY_REVIEW_LIMIT = 10
 MAX_SAVED_REPORTS = 5
+BUILDING_REPORT_MIN_CHARACTERS = 4000
+BUILDING_REPORT_MIN_PDF_PAGES = 4
 
 ARCHLENS_API_URL = os.getenv("ARCHLENS_API_URL", "https://archlens-api.onrender.com").rstrip("/")
 ARCHLENS_WEBHOOK_SECRET = os.getenv("ARCHLENS_WEBHOOK_SECRET", "archlens_secure_2026_SYDS_92838")
@@ -450,17 +452,18 @@ def render_locked_download_action(label: str, report_id: str, module_name: str, 
     return False
 
 BUILDING_REQUIRED_HEADINGS = [
-    "PROJECT CLASSIFICATION",
-    "PROJECT DETAILS",
-    "TOP SUMMARY",
-    "DRAWING-PACK INCONSISTENCIES",
-    "EXECUTIVE SUMMARY",
-    "DRAWING PACK SUMMARY",
-    "COMPLIANCE STATUS BY APPROVED DOCUMENT",
-    "KEY RISKS",
-    "MISSING INFORMATION",
-    "RECOMMENDED ACTIONS",
-    "BUILDING CONTROL SUBMISSION READINESS",
+    "1. INTRODUCTION",
+    "2. SUMMARY OF FINDINGS",
+    "3. PART A – STRUCTURE",
+    "4. PART B – FIRE SAFETY",
+    "5. PART C – SITE PREPARATION AND MOISTURE",
+    "6. PART F – VENTILATION",
+    "7. PART L – CONSERVATION OF FUEL AND POWER",
+    "8. PART K – PROTECTION FROM FALLING",
+    "9. PART M – ACCESS",
+    "10. PART P – ELECTRICAL SAFETY",
+    "11. CONSTRUCTION QUALITY AND SITE INSPECTIONS",
+    "12. CONCLUSION",
 ]
 
 PLANNING_REQUIRED_HEADINGS = [
@@ -478,17 +481,18 @@ PLANNING_REQUIRED_HEADINGS = [
 ]
 
 BUILDING_SECTION_ORDER = [
-    ("PROJECT CLASSIFICATION", "Project Classification"),
-    ("PROJECT DETAILS", "Project Details"),
-    ("TOP SUMMARY", "Top Summary"),
-    ("DRAWING-PACK INCONSISTENCIES", "Drawing-Pack Inconsistencies"),
-    ("EXECUTIVE SUMMARY", "Executive Summary"),
-    ("DRAWING PACK SUMMARY", "Drawing Pack Summary"),
-    ("COMPLIANCE STATUS BY APPROVED DOCUMENT", "Compliance Status by Approved Document"),
-    ("KEY RISKS", "Key Risks"),
-    ("MISSING INFORMATION", "Missing Information"),
-    ("RECOMMENDED ACTIONS", "Recommended Actions"),
-    ("BUILDING CONTROL SUBMISSION READINESS", "Building Control Submission Readiness"),
+    ("1. INTRODUCTION", "1. INTRODUCTION"),
+    ("2. SUMMARY OF FINDINGS", "2. SUMMARY OF FINDINGS"),
+    ("3. PART A – STRUCTURE", "3. PART A – STRUCTURE"),
+    ("4. PART B – FIRE SAFETY", "4. PART B – FIRE SAFETY"),
+    ("5. PART C – SITE PREPARATION AND MOISTURE", "5. PART C – SITE PREPARATION AND MOISTURE"),
+    ("6. PART F – VENTILATION", "6. PART F – VENTILATION"),
+    ("7. PART L – CONSERVATION OF FUEL AND POWER", "7. PART L – CONSERVATION OF FUEL AND POWER"),
+    ("8. PART K – PROTECTION FROM FALLING", "8. PART K – PROTECTION FROM FALLING"),
+    ("9. PART M – ACCESS", "9. PART M – ACCESS"),
+    ("10. PART P – ELECTRICAL SAFETY", "10. PART P – ELECTRICAL SAFETY"),
+    ("11. CONSTRUCTION QUALITY AND SITE INSPECTIONS", "11. CONSTRUCTION QUALITY AND SITE INSPECTIONS"),
+    ("12. CONCLUSION", "12. CONCLUSION"),
 ]
 
 PLANNING_SECTION_ORDER = [
@@ -505,11 +509,7 @@ PLANNING_SECTION_ORDER = [
     ("SUBMISSION READINESS", "Conclusion"),
 ]
 
-BUILDING_SPECIAL_KEY_VALUE_SECTIONS = {
-    "PROJECT CLASSIFICATION",
-    "TOP SUMMARY",
-    "BUILDING CONTROL SUBMISSION READINESS",
-}
+BUILDING_SPECIAL_KEY_VALUE_SECTIONS = set()
 
 PLANNING_SPECIAL_KEY_VALUE_SECTIONS = {
     "PROJECT CLASSIFICATION",
@@ -536,8 +536,8 @@ MODULE_CONFIG = {
         "section_order": BUILDING_SECTION_ORDER,
         "special_key_value_sections": BUILDING_SPECIAL_KEY_VALUE_SECTIONS,
         "disclaimer": BUILDING_DISCLAIMER_TEXT,
-        "title": "Building Regulations Review Report",
-        "readiness_key": "BUILDING CONTROL SUBMISSION READINESS",
+        "title": "BUILDING REGULATIONS COMPLIANCE REVIEW REPORT",
+        "readiness_key": "12. CONCLUSION",
     },
     "Planning Review": {
         "required_headings": PLANNING_REQUIRED_HEADINGS,
@@ -1411,7 +1411,6 @@ def clean_client_report_text(text: str) -> str:
         "\u25a0": "-",
         "\uf0b7": "-",
         "\u2022": "-",
-        "\u2013": "-",
         "\u2014": "-",
         "\u00a0": " ",
     }
@@ -1527,6 +1526,15 @@ def validate_report_headings(report_text: str, required_headings: List[str]) -> 
 
 def get_pdf_page_count(pdf_path: str) -> int:
     doc = fitz.open(pdf_path)
+    try:
+        return len(doc)
+    finally:
+        doc.close()
+
+
+def get_pdf_buffer_page_count(pdf_buffer: BytesIO) -> int:
+    pdf_buffer.seek(0)
+    doc = fitz.open(stream=pdf_buffer.getvalue(), filetype="pdf")
     try:
         return len(doc)
     finally:
@@ -1737,7 +1745,7 @@ def build_pdf_report(file_name, address, client, date, practice_name, report_id,
         c.line(left_margin, 34, width - right_margin, 34)
         c.setFont("Helvetica", 8)
         c.setFillColor(mid_grey)
-        footer_left = f"Prepared by {brand_practice} | Planning & Architectural Services"
+        footer_left = "Prepared by SY Design Studio Ltd | Building Regulations Compliance Review" if module_name == "Building Regulations Review" else f"Prepared by {brand_practice} | Planning & Architectural Services"
         c.drawString(left_margin, 22, footer_left)
         c.drawRightString(width - right_margin, 22, f"Page {page_no}")
 
@@ -1784,7 +1792,7 @@ def build_pdf_report(file_name, address, client, date, practice_name, report_id,
         if module_name == "Planning Review":
             title = "Planning Appraisal Report"
         elif module_name == "Building Regulations Review":
-            title = "Building Regulations Review Report"
+            title = "BUILDING REGULATIONS COMPLIANCE REVIEW REPORT"
 
         c.setFillColor(colors.white)
         c.setFont("Helvetica-Bold", 24)
@@ -1795,7 +1803,8 @@ def build_pdf_report(file_name, address, client, date, practice_name, report_id,
             yy -= 29
         c.setFont("Helvetica", 11)
         c.setFillColor(colors.HexColor("#E8E2D5"))
-        c.drawString(left_margin, yy - 4, "Prepared in a professional planning-consultant style using ArchLens AI")
+        subtitle = "Prepared by SY Design Studio Ltd" if module_name == "Building Regulations Review" else "Prepared in a professional planning-consultant style using ArchLens AI"
+        c.drawString(left_margin, yy - 4, subtitle)
 
         # Meta card
         card_x = left_margin
@@ -1812,14 +1821,24 @@ def build_pdf_report(file_name, address, client, date, practice_name, report_id,
         c.setFont("Helvetica-Bold", 11)
         c.drawString(card_x + 18, card_y + card_h - 23, "Project Information")
 
-        meta = [
-            ("Project Address", safe_text(address)),
-            ("Client", safe_text(client)),
-            ("Project Type", sections.get("PROJECT CLASSIFICATION", "Not detected").splitlines()[0] if sections.get("PROJECT CLASSIFICATION") else "Not detected"),
-            ("Drawing Pack Reviewed", safe_text(file_name)),
-            ("Date", safe_text(date)),
-            ("Prepared By", brand_practice),
-        ]
+        if module_name == "Building Regulations Review":
+            meta = [
+                ("Project Address", safe_text(address)),
+                ("Client Name", safe_text(client)),
+                ("Date", safe_text(date)),
+                ("Report Reference", safe_text(report_id)),
+                ("Prepared By", "SY Design Studio Ltd"),
+                ("Drawing Pack Reviewed", safe_text(file_name)),
+            ]
+        else:
+            meta = [
+                ("Project Address", safe_text(address)),
+                ("Client", safe_text(client)),
+                ("Project Type", sections.get("PROJECT CLASSIFICATION", "Not detected").splitlines()[0] if sections.get("PROJECT CLASSIFICATION") else "Not detected"),
+                ("Drawing Pack Reviewed", safe_text(file_name)),
+                ("Date", safe_text(date)),
+                ("Prepared By", brand_practice),
+            ]
         yy = card_y + card_h - 62
         for label, value in meta:
             c.setFont("Helvetica-Bold", 8.8)
@@ -1833,12 +1852,12 @@ def build_pdf_report(file_name, address, client, date, practice_name, report_id,
             yy -= 27
 
         # Summary card
-        summary = sections.get("TOP SUMMARY", "") or sections.get("EXECUTIVE SUMMARY", "")
+        summary = sections.get("2. SUMMARY OF FINDINGS", "") if module_name == "Building Regulations Review" else sections.get("TOP SUMMARY", "") or sections.get("EXECUTIVE SUMMARY", "")
         c.setFillColor(soft_grey)
         c.roundRect(left_margin, 140, usable_width, 90, 10, fill=1, stroke=0)
         c.setFillColor(charcoal)
         c.setFont("Helvetica-Bold", 11)
-        c.drawString(left_margin + 16, 206, "Executive Summary")
+        c.drawString(left_margin + 16, 206, "Summary of Findings" if module_name == "Building Regulations Review" else "Executive Summary")
         c.setFont("Helvetica", 9.4)
         c.setFillColor(colors.HexColor("#444444"))
         yy = 190
@@ -2043,7 +2062,8 @@ def build_word_report(file_name, address, client, date, practice_name, report_id
 
     title = doc.add_paragraph()
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run = title.add_run(practice_name or "ArchLens AI")
+    prepared_by = "SY Design Studio Ltd" if module_name == "Building Regulations Review" else (practice_name or "ArchLens AI")
+    run = title.add_run(prepared_by)
     run.bold = True
     run.font.size = Pt(20)
 
@@ -2067,23 +2087,31 @@ def build_word_report(file_name, address, client, date, practice_name, report_id
     info.add_run(f"Drawing Pack Reviewed: {file_name}\n")
     info.add_run(f"Date: {date}\n")
     info.add_run(f"Report ID: {report_id}\n")
-    info.add_run(f"Prepared by: {practice_name or 'ArchLens AI'}")
+    info.add_run(f"Prepared by: {prepared_by}")
 
     doc.add_paragraph("")
     summary_heading = doc.add_paragraph()
     summary_heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run = summary_heading.add_run("Client Summary")
+    run = summary_heading.add_run("Summary of Findings" if module_name == "Building Regulations Review" else "Client Summary")
     run.bold = True
     run.font.size = Pt(13)
 
-    for label, value in parse_key_value_lines(sections.get("TOP SUMMARY", "")):
-        p = doc.add_paragraph()
-        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        if label:
-            p.add_run(f"{label}: ").bold = True
-            p.add_run(value)
-        else:
-            p.add_run(value)
+    if module_name == "Building Regulations Review":
+        for line in sections.get("2. SUMMARY OF FINDINGS", "").splitlines()[:8]:
+            stripped = line.strip(" -")
+            if stripped:
+                p = doc.add_paragraph()
+                p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                p.add_run(stripped)
+    else:
+        for label, value in parse_key_value_lines(sections.get("TOP SUMMARY", "")):
+            p = doc.add_paragraph()
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            if label:
+                p.add_run(f"{label}: ").bold = True
+                p.add_run(value)
+            else:
+                p.add_run(value)
 
     doc.add_page_break()
 
@@ -2101,7 +2129,7 @@ def build_word_report(file_name, address, client, date, practice_name, report_id
         ("Drawing Pack Reviewed", str(file_name)),
         ("Date", str(date)),
         ("Report ID", str(report_id)),
-        ("Prepared by", str(practice_name or "ArchLens AI")),
+        ("Prepared by", str(prepared_by)),
     ]
     for i, (label, value) in enumerate(meta_rows):
         left_cell = meta_table.rows[i].cells[0]
@@ -2245,6 +2273,16 @@ def extract_summary_values(sections: Dict[str, str], module_name: str):
             "authority": clean_summary_fallback(authority, "Local authority to be confirmed"),
             "probability": readiness,
         }
+    findings_text = sections.get("2. SUMMARY OF FINDINGS", "")
+    conclusion_text = sections.get("12. CONCLUSION", "")
+    if findings_text or conclusion_text:
+        combined = f"{findings_text}\n{conclusion_text}"
+        return {
+            "risk": infer_section_signal(combined, ["HIGH", "MEDIUM", "LOW"], "Compliance review required"),
+            "route": infer_section_signal(conclusion_text, ["PASS SUBJECT TO NORMAL BUILDING CONTROL CONDITIONS", "REVIEW REQUIRED"], "Building Control conditions required"),
+            "authority": "Building Control review",
+            "probability": "Professional review required",
+        }
     readiness_text = sections.get("BUILDING CONTROL SUBMISSION READINESS", "")
     readiness_rows = {k.upper(): v for k, v in parse_key_value_lines(readiness_text) if k}
     return {
@@ -2280,15 +2318,17 @@ def render_summary_card(title: str, content: str, fallback: str):
 def render_at_a_glance(sections: Dict[str, str], report_id: str, module_name: str):
     config = MODULE_CONFIG[module_name]
     readiness_key = config["readiness_key"]
-    middle_key = "PROJECT DETAILS" if module_name == "Building Regulations Review" else "SITE AND PROPOSAL OVERVIEW"
-    middle_title = "Project Details" if module_name == "Building Regulations Review" else "Site and Proposal Overview"
+    middle_key = "2. SUMMARY OF FINDINGS" if module_name == "Building Regulations Review" else "SITE AND PROPOSAL OVERVIEW"
+    middle_title = "Summary of Findings" if module_name == "Building Regulations Review" else "Site and Proposal Overview"
 
     render_kpi_cards(sections, report_id, module_name)
     st.markdown("")
 
     col1, col2, col3 = st.columns(3)
     with col1:
-        render_summary_card("Project Classification", sections.get("PROJECT CLASSIFICATION"), "Project classification to be confirmed from the drawing pack.")
+        intro_key = "1. INTRODUCTION" if module_name == "Building Regulations Review" else "PROJECT CLASSIFICATION"
+        intro_title = "Introduction" if module_name == "Building Regulations Review" else "Project Classification"
+        render_summary_card(intro_title, sections.get(intro_key), "Project classification to be confirmed from the drawing pack.")
     with col2:
         render_summary_card(middle_title, sections.get(middle_key), "Project details to be confirmed from the submitted information.")
     with col3:
@@ -2304,9 +2344,8 @@ def render_at_a_glance(sections: Dict[str, str], report_id: str, module_name: st
         else:
             st.info("Submission position: Further information required")
     else:
-        top_summary_rows = {k.upper(): v for k, v in parse_key_value_lines(sections.get("TOP SUMMARY", "")) if k}
-        risk_summary = top_summary_rows.get("OVERALL RISK RATING") or sections.get("TOP SUMMARY", "")
-        summary_hint = clean_summary_fallback(top_summary_rows.get("REVIEW CONFIDENCE", ""), "Professional review recommended")
+        risk_summary = sections.get("2. SUMMARY OF FINDINGS", "")
+        summary_hint = "Professional Building Control review prepared"
         if "HIGH" in str(risk_summary).upper():
             st.error(f"High risk detected | Summary: {summary_hint}")
         elif "MEDIUM" in str(risk_summary).upper():
@@ -3320,8 +3359,24 @@ def run_archlens_analysis(uploaded_files):
         if not valid:
             st.error(f"AI report validation failed. Missing headings: {', '.join(missing)}")
             st.stop()
+        if review_module == "Building Regulations Review" and len(report.strip()) < BUILDING_REPORT_MIN_CHARACTERS:
+            st.error(
+                "Building Regulations report validation failed. "
+                f"Report length is {len(report.strip())} characters; minimum required is {BUILDING_REPORT_MIN_CHARACTERS} characters."
+            )
+            st.stop()
 
         report = clean_client_report_text(report)
+        valid, missing = validate_report_headings(report, config["required_headings"])
+        if not valid:
+            st.error(f"AI report validation failed after cleaning. Missing headings: {', '.join(missing)}")
+            st.stop()
+        if review_module == "Building Regulations Review" and len(report.strip()) < BUILDING_REPORT_MIN_CHARACTERS:
+            st.error(
+                "Building Regulations report validation failed after cleaning. "
+                f"Report length is {len(report.strip())} characters; minimum required is {BUILDING_REPORT_MIN_CHARACTERS} characters."
+            )
+            st.stop()
         sections = parse_report_sections(report, config["required_headings"])
         extracted_report_address = extract_address_from_report(report, "Not provided")
         clean_project_address = clean_input_value(project_address, extracted_report_address)
@@ -3332,6 +3387,15 @@ def run_archlens_analysis(uploaded_files):
         smooth_progress(progress_bar, status_text, 85, 95, "Preparing report files...", 0.6)
         word_file = build_word_report(file.name, clean_project_address, clean_client_name, time.strftime("%Y-%m-%d"), clean_practice_name, report_id, sections, review_module)
         pdf_file = build_pdf_report(file.name, clean_project_address, clean_client_name, time.strftime("%Y-%m-%d"), clean_practice_name, report_id, sections, review_module)
+        if review_module == "Building Regulations Review":
+            pdf_page_count = get_pdf_buffer_page_count(pdf_file)
+            if pdf_page_count < BUILDING_REPORT_MIN_PDF_PAGES:
+                st.error(
+                    "Building Regulations PDF validation failed. "
+                    f"PDF contains {pdf_page_count} pages; minimum required is {BUILDING_REPORT_MIN_PDF_PAGES} pages."
+                )
+                st.stop()
+            pdf_file.seek(0)
 
         st.session_state.report = report
         st.session_state.sections = sections
